@@ -100,6 +100,34 @@ beyond means retyping the `List` template — every handle, and probably the wir
 This is a large net *saving*, not a cost: one process replaces five, each of which carried its own 25.7 MB
 hatchery inside a 334 MB `.data` image.
 
+### `damage-overflow-saturate` — stop huge hits landing for 1
+
+`roe_CalcDamage` returns `int`, but the damage pipeline under it works in **double**. The conversion is
+one call to `__ftol2_sse`, which returns the x86 *integer indefinite* `0x80000000` when the value doesn't
+fit an `int32`. That negative survives three modifiers and reaches the tail:
+
+```
+test eax, eax
+jg   ok
+mov  dword ptr [ebp-0x10], 1     <-- the biggest hit in the game lands for 1
+```
+
+**The clamp is not the bug and must not be touched** — that `1` is also the floor for legitimately
+non-positive damage (defence ≥ attack), so rewriting it to a maximum would make every weak hit maximal. By
+the clamp the magnitude is already gone, so the fix goes at the conversion.
+
+Both damage-producing conversions (`roe_CalcDamage` 0x506187, `roe_AttackPowerCalcDamage` 0x504A27) are
+redirected to a 36-byte stub in an appended executable section. It saturates on the indefinite result
+**only when the original double was positive** — `__ftol2_sse` also returns `0x80000000` for negative
+overflow and NaN, and saturating those would invent enormous damage from a broken calculation. The sign is
+taken with `FTST` before the call and stashed across it.
+
+Default `saturate_to` is `0x00FFFFFF` rather than `INT_MAX`, because modifiers run *after* the conversion
+and at least one multiplies — `0x7FFFFFFF` would just wrap again and land back on the clamp.
+
+The other 207 `__ftol2_sse` sites convert rates and stats (`roe_AC`, `roe_MinWC`, `roe_HitRate`, …) and are
+deliberately left alone.
+
 ## Status
 
 `mob-spawn-group-cap` **works**: boots clean at `groups=16384` under Wine, 91 maps loaded, and on an

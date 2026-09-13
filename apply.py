@@ -28,6 +28,7 @@ import sys
 SECTION_ALIGNMENT_FALLBACK = 0x1000
 IMAGE_SCN_CNT_INITIALIZED_DATA = 0x00000040
 IMAGE_SCN_CNT_UNINITIALIZED_DATA = 0x00000080
+IMAGE_SCN_MEM_EXECUTE = 0x20000000
 IMAGE_SCN_MEM_READ = 0x40000000
 IMAGE_SCN_MEM_WRITE = 0x80000000
 
@@ -74,7 +75,8 @@ class Pe:
                 return s["rawptr"] + delta
         return None
 
-    def append_bss_section(self, name: str, size: int, materialise: bool = False):
+    def append_bss_section(self, name: str, size: int, materialise: bool = False,
+                           execute: bool = False):
         """Append a section for a relocated static object, and return its virtual address.
 
         This is how a recipe moves a large object off a fixed static slot without needing a code cave or
@@ -108,8 +110,10 @@ class Pe:
             kind = IMAGE_SCN_CNT_INITIALIZED_DATA
         struct.pack_into("<8s", self.d, hdr_end, name.encode())
         struct.pack_into("<IIII", self.d, hdr_end + 8, vsize, rva, rawsize, rawptr)
-        struct.pack_into("<IIHHI", self.d, hdr_end + 24, 0, 0, 0, 0,
-                         kind | IMAGE_SCN_MEM_READ | IMAGE_SCN_MEM_WRITE)
+        flags = kind | IMAGE_SCN_MEM_READ | IMAGE_SCN_MEM_WRITE
+        if execute:
+            flags |= IMAGE_SCN_MEM_EXECUTE
+        struct.pack_into("<IIHHI", self.d, hdr_end + 24, 0, 0, 0, 0, flags)
         self.n_sections += 1
         struct.pack_into("<H", self.d, self.e_lfanew + 4 + 2, self.n_sections)
         self.size_of_image = rva + vsize
@@ -258,7 +262,8 @@ def main():
             print(f"section: {ns['name']} present at VA 0x{newbase:08X} "
                   f"({found[0]['vsize']:,} bytes virtual)")
         else:
-            newbase = pe.append_bss_section(ns["name"], size, bool(ns.get("materialise")))
+            newbase = pe.append_bss_section(ns["name"], size, bool(ns.get("materialise")),
+                                            bool(ns.get("execute")))
             print(f"section: +{ns['name']} at VA 0x{newbase:08X}, {align(size, pe.section_alignment):,} "
                   f"bytes virtual (0 on disk); SizeOfImage -> 0x{pe.size_of_image:08X}")
         env["@newbase"] = newbase
@@ -289,6 +294,29 @@ def main():
     for va, off, cur, write, why, _ in plan:
         print(f"  {why:<{width}}  VA 0x{va:08X}  0x{cur:08X} -> 0x{write:08X}")
 
+    # -- code blobs ---------------------------------------------------------------------------------
+    # A recipe sometimes needs to place INSTRUCTIONS, not just change a constant -- e.g. a saturating
+    # wrapper around a CRT helper. Each blob is literal hex plus computed fields, so the recipe stays
+    # readable and relative addresses are worked out at apply time instead of by hand.
+    blobs = []
+    for c in r.get("code", []):
+        at = evaluate(c["at"], env)
+        out = bytearray()
+        for piece in c["emit"]:
+            if isinstance(piece, str):
+                out += bytes.fromhex(piece.replace(" ", ""))
+            elif "u32" in piece:
+                out += struct.pack("<I", evaluate(piece["u32"], env) & 0xFFFFFFFF)
+            elif "rel32" in piece:
+                # x86 rel32 is relative to the address of the NEXT instruction, i.e. just past this field
+                out += struct.pack("<i", evaluate(piece["rel32"], env) - (at + len(out) + 4))
+            else:
+                raise SystemExit(f"unknown emit piece {piece!r}")
+        blobs.append((at, bytes(out), c["why"]))
+
+    for at, out, why in blobs:
+        print(f"  {why}\n    {len(out)} bytes at VA 0x{at:08X}: {out.hex()}")
+
     if a.verify:
         print(f"\nVERIFIED: all {len(plan)} sites hold their patched values, section present.")
         return
@@ -300,6 +328,13 @@ def main():
 
     for va, off, cur, write, why, _ in plan:
         struct.pack_into("<I", pe.d, off, write)
+
+    for at, out, why in blobs:
+        off = pe.offset_of(at)
+        if off is None:
+            raise SystemExit(f"code blob at 0x{at:08X} is not backed by file bytes -- the section it "
+                             f'lands in needs "materialise": true')
+        pe.d[off:off + len(out)] = out
 
     os.makedirs(os.path.dirname(os.path.abspath(a.out)), exist_ok=True)
     with open(a.out, "wb") as f:

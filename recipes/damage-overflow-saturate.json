@@ -1,0 +1,133 @@
+{
+  "name": "damage-overflow-saturate",
+  "summary": "Huge damage wraps to a negative and then clamps to 1. Saturate at a maximum instead.",
+  "status": "BUILT AND STATICALLY VERIFIED -- not yet run by a zone process.",
+  "target": {
+    "file": "Zone00/Zone.exe",
+    "sha256": "7ef3532da08194a377558322ca2bd06d1ce5bdb2813796e033173b72d9ff883d",
+    "size": 4673536
+  },
+  "params": {
+    "saturate_to": "0x00FFFFFF"
+  },
+  "consts": {
+    "ftol2_sse": "0x00657200",
+    "call_site_rel32": "0x00506188",
+    "old_rel32": "0x00151074",
+    "next_insn": "0x0050618C",
+    "call_site2_rel32": "0x00504A28",
+    "old_rel32_2": "0x001527D4",
+    "next_insn2": "0x00504A2C"
+  },
+  "why": [
+    "RulesOfEngagement::roe_CalcDamage (0x505C00) returns int, but the damage pipeline underneath it",
+    "(roe_Damage and friends) works in DOUBLE. The conversion is a single call:",
+    "",
+    "    0x506187   call __ftol2_sse      ; (int)damage",
+    "",
+    "__ftol2_sse returns the x86 'integer indefinite' 0x80000000 when the double does not fit in an",
+    "int32 -- that is the huge negative. It then survives three modifiers (two vtable calls and",
+    "roe_LevelGapDamageRevision, all of which keep it negative) and reaches the tail:",
+    "",
+    "    0x5061C9   test eax, eax",
+    "    0x5061CB   jg   ok",
+    "    0x5061CD   mov  dword ptr [ebp-0x10], 1     ; <-- the clamp to 1",
+    "",
+    "so the biggest hit in the game lands for 1.",
+    "",
+    "WHY NOT JUST CHANGE THE CLAMP. That '1' is also the floor for legitimately non-positive damage --",
+    "defence at or above attack. Rewriting it to a maximum would make every weak hit a maximum hit. By",
+    "the time execution reaches the clamp the magnitude is already gone; the fix has to be at the",
+    "conversion, which is the last place that knows the difference.",
+    "",
+    "WHAT THE WRAPPER DOES. The call is redirected to a 36-byte stub that converts as before, and on the",
+    "indefinite result substitutes the saturation value -- but only when the original double was",
+    "POSITIVE. __ftol2_sse returns 0x80000000 for negative overflow and for NaN as well, and saturating",
+    "those to +max would invent enormous damage out of a broken calculation. The sign is taken with FTST",
+    "before the conversion (C0 in the FPU status word) and stashed across the call:",
+    "",
+    "    fld st(0) / ftst / fnstsw ax / fstp st(0)   ; sign of the value, copy discarded",
+    "    and ax, 0x0100 / push eax                   ; C0 = 'value < 0', stashed",
+    "    call __ftol2_sse                            ; eax = (int)value",
+    "    pop ecx / cmp eax, 0x80000000 / jne done",
+    "    test ecx, ecx / jnz done                    ; negative or NaN -> leave it, old behaviour",
+    "    mov eax, saturate_to",
+    "  done: ret",
+    "",
+    "eax/ecx are volatile across this helper's own convention, so using ecx is safe; the FPU copy is",
+    "pushed and popped so the stack depth is unchanged.",
+    "",
+    "WHY NOT INT_MAX. Three modifiers run AFTER the conversion and at least one multiplies (the",
+    "job-change damage-up rate reaches 2.0x, and the level-gap revision scales too). Saturating at",
+    "0x7FFFFFFF would simply wrap again a few instructions later and land back on the clamp. 0x00FFFFFF",
+    "is ~16.7M: far above any real HP pool, and it survives an 8x downstream multiply inside int32.",
+    "Raise it with --set saturate_to=... if you want, but keep headroom for those multipliers.",
+    "",
+    "WIRE WIDTHS, for choosing a value: melee is 'damage u16 @6' in SWING_DAMAGE, so anything at or",
+    "above 65535 shows as the u16 maximum there; skill damage carries 'hpchange u32 @4' and has room",
+    "for the full value. (Measured layouts, docs/COMBAT_BIBLE.md in ik-fiesta-bots.)",
+    "",
+    "SIBLINGS. There are 209 __ftol2_sse call sites in the binary and most of them convert RATES and",
+    "STATS (roe_AC, roe_MinWC, roe_MaxWC, roe_HitRate, roe_CriticalRate, roe_TB, roe_MR). Saturating",
+    "those would be wrong -- they are small numbers and an indefinite there means a broken stat, not a",
+    "big hit. Only two sites convert a finished DAMAGE value into the int that gets returned, and both",
+    "have the same shape ('call __ftol2_sse' then 'mov [ebp-0x10], eax'):",
+    "    0x506187  roe_CalcDamage            (+0x587)",
+    "    0x504A27  roe_AttackPowerCalcDamage (+0x257)",
+    "Both are redirected here.",
+    "",
+    "DELIBERATELY NOT PATCHED: 0x5046D8 in roe_GetAttackPower, which converts attack POWER rather than",
+    "damage. It could overflow by the same mechanism, but saturating it changes an input to the damage",
+    "formula instead of the result, which is a wider behaviour change than was asked for. Worth revisiting",
+    "if huge attack power turns out to be a real case."
+  ],
+  "new_section": {
+    "name": ".dmgfix",
+    "size": "0x1000",
+    "materialise": true,
+    "execute": true,
+    "note": "Executable. Must be materialised: code cannot live in a zero-fill BSS tail."
+  },
+  "code": [
+    {
+      "why": "saturating __ftol2_sse wrapper",
+      "at": "@newbase",
+      "emit": [
+        "D9C0",
+        "D9E4",
+        "DFE0",
+        "DDD8",
+        "66250001",
+        "50",
+        "E8",
+        {
+          "rel32": "ftol2_sse"
+        },
+        "59",
+        "3D00000080",
+        "7509",
+        "85C9",
+        "7505",
+        "B8",
+        {
+          "u32": "saturate_to"
+        },
+        "C3"
+      ]
+    }
+  ],
+  "edits": [
+    {
+      "why": "roe_CalcDamage: redirect the double->int conversion at 0x506187 to the wrapper",
+      "at": "call_site_rel32",
+      "expect": "old_rel32",
+      "write": "@newbase - next_insn"
+    },
+    {
+      "why": "roe_AttackPowerCalcDamage: same conversion at 0x504A27 -> the same wrapper",
+      "at": "call_site2_rel32",
+      "expect": "old_rel32_2",
+      "write": "@newbase - next_insn2"
+    }
+  ]
+}
