@@ -1,0 +1,69 @@
+{
+  "name": "quest-count-cap",
+  "summary": "Zone.exe refuses to start with more than 3000 quests. Raise the startup guard.",
+  "status": "BUILT AND STATICALLY VERIFIED -- not yet run by a zone process.",
+
+  "target": {
+    "file": "Zone00/Zone.exe",
+    "sha256": "7ef3532da08194a377558322ca2bd06d1ce5bdb2813796e033173b72d9ff883d",
+    "size": 4673536
+  },
+
+  "params": {
+    "max_quests": 16384
+  },
+
+  "consts": {
+    "old_max": "0xBB8",
+    "site": "0x005AF13F"
+  },
+
+  "limits": {
+    "max_quests": {
+      "max": "65535",
+      "why": "QUEST_DATA_HEAD.NumOfQuest is an unsigned short, and the guard compares it 16-bit ('cmp di, ax'), so only the low word of this constant is used. A value above 65535 would silently truncate; 65535 is both the field's ceiling and the point at which the guard stops guarding."
+    }
+  },
+
+  "why": [
+    "ZoneServer_zs_start_sink checks the quest file's header at startup and kills the process:",
+    "",
+    "    0x5AF12E   mov   eax, [0x1328C0C0]        ; CQuestData::m_pDataHead",
+    "    0x5AF13A   movzx edi, word ptr [eax+2]    ; QUEST_DATA_HEAD.NumOfQuest (u16)",
+    "    0x5AF13E   mov   eax, 0xBB8               ; 3000",
+    "    0x5AF143   cmp   di, ax",
+    "    0x5AF146   jbe   ok",
+    "               ac_As(\"Too Many Quest - MAXQUEST\") ; then ShineExit -- the zone does not start",
+    "",
+    "THIS ONE IS A PURE SANITY GUARD. Unlike the MobHatchery spawn-group cap, nothing is sized by 3000:",
+    "",
+    "  - CQuestData::ReadModeRead allocates the quest body from __filelength, not from a constant",
+    "    (new(4) for the 4-byte head, then array-new of filesize-4 for everything else).",
+    "  - QuestData_HashDataIn reads NumOfQuest out of the head and fills STL hash_map / hash_multimap,",
+    "    both of which grow themselves.",
+    "  - GetQuestDataByIndex bounds the index against NumOfQuest from the head, not against 3000.",
+    "  - CQuest::InitQuestBF mallocs n*32 for the PLAYER's quest array, sized on demand.",
+    "  - A scan for 3000 and its derived sizes (375 = 3000 bits, 376, 3000*2, 3000*4, 2999, 3001) finds",
+    "    nothing at all inside quest-named functions.",
+    "",
+    "So raising the constant is the whole change: one 32-bit immediate, no relocation, no code, no",
+    "structure growth. That is why this recipe is 14 lines and the spawn-group one is 22 edits.",
+    "",
+    "WHY 16384 AND NOT 65535. The guard does still catch a corrupt or truncated header, which is worth",
+    "keeping -- a garbage NumOfQuest would otherwise drive allocations and index walks. 16384 is ~5x the",
+    "2026 content (3100+) with room to grow. Raise it with --set max_quests=... if the content does.",
+    "",
+    "NOT CHECKED HERE: the CLIENT. This lifts the server's refusal to boot; whether the client's own",
+    "quest handling and the per-character completed-quest state survive above 3000 is a separate",
+    "question, and worth testing before shipping content that relies on it."
+  ],
+
+  "edits": [
+    {
+      "why": "zs_start_sink: MAXQUEST startup guard",
+      "at": "site",
+      "expect": "old_max",
+      "write": "max_quests"
+    }
+  ]
+}

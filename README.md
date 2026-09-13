@@ -128,6 +128,29 @@ and at least one multiplies — `0x7FFFFFFF` would just wrap again and land back
 The other 207 `__ftol2_sse` sites convert rates and stats (`roe_AC`, `roe_MinWC`, `roe_HitRate`, …) and are
 deliberately left alone.
 
+### `quest-count-cap` — Zone.exe won't start above 3000 quests
+
+`ZoneServer_zs_start_sink` checks the quest file header at startup and kills the process:
+
+```
+movzx edi, word ptr [eax+2]    ; QUEST_DATA_HEAD.NumOfQuest (u16)
+mov   eax, 0xBB8               ; 3000
+cmp   di, ax
+jbe   ok
+      ac_As("Too Many Quest - MAXQUEST")  ->  ShineExit
+```
+
+**Unlike the spawn-group cap, nothing is sized by this number** — the quest body is allocated from
+`__filelength`, the lookups are STL hash maps, `GetQuestDataByIndex` bounds against `NumOfQuest` from the
+header, and the player's array is `malloc(n*32)` on demand. A scan for 3000 and its derived sizes (375 =
+3000 bits, 376, ×2, ×4, ±1) finds nothing in quest code at all. So it really is one 32-bit immediate — no
+relocation, no code, no structure growth. That contrast is the reason this recipe is one edit and
+`mob-spawn-group-cap` is twenty-two.
+
+Hard ceiling 65535: `NumOfQuest` is a `u16` and the guard compares 16-bit (`cmp di, ax`), so a larger
+constant would silently truncate. The runner refuses it. Default 16384 keeps the guard useful against a
+corrupt header while clearing 2026's 3100+.
+
 ## Status
 
 `mob-spawn-group-cap` **works**: boots clean at `groups=16384` under Wine, 91 maps loaded, and on an
