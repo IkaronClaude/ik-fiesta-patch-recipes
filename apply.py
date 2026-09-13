@@ -26,6 +26,7 @@ import struct
 import sys
 
 SECTION_ALIGNMENT_FALLBACK = 0x1000
+IMAGE_SCN_CNT_INITIALIZED_DATA = 0x00000040
 IMAGE_SCN_CNT_UNINITIALIZED_DATA = 0x00000080
 IMAGE_SCN_MEM_READ = 0x40000000
 IMAGE_SCN_MEM_WRITE = 0x80000000
@@ -73,12 +74,22 @@ class Pe:
                 return s["rawptr"] + delta
         return None
 
-    def append_bss_section(self, name: str, size: int):
-        """Append an uninitialised (BSS) section: virtual bytes the loader zero-fills, no file bytes.
+    def append_bss_section(self, name: str, size: int, materialise: bool = False):
+        """Append a section for a relocated static object, and return its virtual address.
 
-        Returns its virtual address. This is how the recipe gets a large object off a fixed static slot
-        without needing a code cave or an allocator -- the object's address is an immediate in exactly
-        three instructions, so it can simply be pointed somewhere with room."""
+        This is how a recipe moves a large object off a fixed static slot without needing a code cave or
+        an allocator -- the object's address is an immediate in a handful of instructions, so it can just
+        be pointed somewhere with room.
+
+        `materialise` decides whether the section carries real bytes on disk:
+
+          False -- uninitialised (BSS): SizeOfRawData = 0, the loader is expected to zero-fill. Compact,
+                   and what a compiler emits for .bss. NOT SAFE EVERYWHERE: measured 2026-09-13, a
+                   virtual-only section produced a deterministic fault on the first write into the
+                   relocated object under Wine (MobHatchery -> mh_Load -> l_AllocZ), while the same
+                   binary was fine on the paths that never touched it.
+          True  -- zero bytes written to the file, SizeOfRawData set. Costs file size (a 103MB object
+                   makes a 108MB exe) and buys a section the loader has no choice but to map."""
         if len(name.encode()) > 8:
             raise ValueError("section name must be 8 bytes or fewer")
         hdr_end = self.sec_table + 40 * self.n_sections
@@ -88,15 +99,23 @@ class Pe:
 
         rva = align(self.size_of_image, self.section_alignment)
         vsize = align(size, self.section_alignment)
+        rawsize, rawptr, kind = 0, 0, IMAGE_SCN_CNT_UNINITIALIZED_DATA
+        if materialise:
+            rawptr = align(len(self.d), self.file_alignment)
+            self.d.extend(bytes(rawptr - len(self.d)))     # pad to file alignment
+            rawsize = align(size, self.file_alignment)
+            self.d.extend(bytes(rawsize))
+            kind = IMAGE_SCN_CNT_INITIALIZED_DATA
         struct.pack_into("<8s", self.d, hdr_end, name.encode())
-        struct.pack_into("<IIII", self.d, hdr_end + 8, vsize, rva, 0, 0)
+        struct.pack_into("<IIII", self.d, hdr_end + 8, vsize, rva, rawsize, rawptr)
         struct.pack_into("<IIHHI", self.d, hdr_end + 24, 0, 0, 0, 0,
-                         IMAGE_SCN_CNT_UNINITIALIZED_DATA | IMAGE_SCN_MEM_READ | IMAGE_SCN_MEM_WRITE)
+                         kind | IMAGE_SCN_MEM_READ | IMAGE_SCN_MEM_WRITE)
         self.n_sections += 1
         struct.pack_into("<H", self.d, self.e_lfanew + 4 + 2, self.n_sections)
         self.size_of_image = rva + vsize
         struct.pack_into("<I", self.d, self.size_of_image_off, self.size_of_image)
-        self.sections.append(dict(name=name, off=hdr_end, vsize=vsize, va=rva, rawsize=0, rawptr=0))
+        self.sections.append(dict(name=name, off=hdr_end, vsize=vsize, va=rva,
+                                  rawsize=rawsize, rawptr=rawptr))
         return self.image_base + rva
 
 
@@ -212,9 +231,14 @@ def main():
         env[k] = evaluate(v, env) if isinstance(v, str) else v
 
     for name, limit in (r.get("limits") or {}).items():
-        cap = evaluate(limit["max"], env)
-        if env.get(name, 0) > cap:
-            raise SystemExit(f"REFUSING: {name}={env.get(name)} exceeds {cap} -- {limit['why']}")
+        val = env.get(name, 0)
+        if "max" in limit:
+            cap = evaluate(limit["max"], env)
+            if val > cap:
+                raise SystemExit(f"REFUSING: {name}={val} exceeds {cap} -- {limit['why']}")
+        if "multiple_of" in limit and val % limit["multiple_of"]:
+            raise SystemExit(f"REFUSING: {name}={val} is not a multiple of {limit['multiple_of']} "
+                             f"-- {limit['why']}")
 
     print(f"recipe : {r['name']}  -- {r.get('summary','')}")
     print(f"input  : {a.exe}  ({len(src):,} bytes, sha256 {digest[:16]}...)")
@@ -234,7 +258,7 @@ def main():
             print(f"section: {ns['name']} present at VA 0x{newbase:08X} "
                   f"({found[0]['vsize']:,} bytes virtual)")
         else:
-            newbase = pe.append_bss_section(ns["name"], size)
+            newbase = pe.append_bss_section(ns["name"], size, bool(ns.get("materialise")))
             print(f"section: +{ns['name']} at VA 0x{newbase:08X}, {align(size, pe.section_alignment):,} "
                   f"bytes virtual (0 on disk); SizeOfImage -> 0x{pe.size_of_image:08X}")
         env["@newbase"] = newbase

@@ -1,18 +1,15 @@
 {
   "name": "mob-spawn-group-cap",
   "summary": "Raise MobHatchery's spawn-group ceiling from 4096, so every map can run on one zone process.",
-
   "target": {
     "file": "Zone00/Zone.exe",
     "sha256": "7ef3532da08194a377558322ca2bd06d1ce5bdb2813796e033173b72d9ff883d",
     "size": 4673536,
     "note": "Identical in Z:/Server and Z:/ServerSource. Every address below was read out of THIS build."
   },
-
   "params": {
     "groups": 16384
   },
-
   "consts": {
     "elem_size": 6584,
     "hdr_size": 24,
@@ -20,7 +17,6 @@
     "old_array_bytes": "0x19B8000",
     "old_object_va": "0x13389A48"
   },
-
   "why": [
     "MobHatchery holds its spawn groups as an INLINE FIXED ARRAY, not a pointer: ??0MobHatchery",
     "(0x4B3FC0) runs the eh vector constructor iterator over 0x1000 elements of 0x19B8 bytes, then puts",
@@ -36,46 +32,196 @@
     "It CAN be relocated, and that is what this recipe does. All 14 call sites reach the object through",
     "the global pointer; only three instructions carry its raw address. So: append a BSS section with",
     "room, repoint those three immediates at it, and rewrite the two size constants the layout is built",
-    "from. No code cave and no allocator call, so there is no new runtime failure mode.",
+    "from. No code cave and no allocator call. (It does NOT follow that there is no new runtime failure mode -- see status/measured.)",
     "",
-    "CEILING: 65535. List<MobBreederGroup> is indexed by unsigned short throughout (l_MakeList, l_AllocA,",
+    "CEILING: 65534 (see limits). List<MobBreederGroup> is indexed by unsigned short throughout (l_MakeList, l_AllocA,",
     "l_Free all take G). Past that you are retyping the List template, which is a different job.",
     "",
     "SIZING: shipped content is 6038 MobRegenGroup records across 88 files (zone 0/1/2/3 = 1628/1962/",
     "1942/261), so one process needs >4096 today, before any 2026 content. 16384 is 2.7x current content",
     "at 103MB -- and one process replaces five, each of which carried its own 25.7MB hatchery inside a",
-    "334MB .data image, so consolidating is a large net saving, not a cost."
+    "334MB .data image, so consolidating is a large net saving, not a cost.",
+    "",
+    "THE OFFSETS ARE NOT ALL EXACTLY 0x19B8000. Seven sites reach a MEMBER of the List header, so",
+    "they bake base+0x4 / +0x8 / +0xC / +0xE (capacity, nodes, freehead, tail). An exact-value",
+    "search for 0x19B8000 finds 8 of 15 and the binary then crashes in l_AllocZ with a garbage",
+    "handle read from inside the group array. Search the RANGE [base, base+0x400] instead.",
+    "0x019B820F in MoveManager::mm_Step is a COINCIDENCE, not a hatchery offset -- do not patch it."
   ],
-
   "limits": {
     "groups": {
       "max": "65534",
-      "why": "List<MobBreederGroup> handles are unsigned short, and 0xFFFF is the INVALID-HANDLE sentinel the overflow guards test (mh_Load 0x4B6595: cmp ax,0xFFFF). l_MakeList (0x4B3B57) also refuses a capacity of 0xFFFF outright -- it nulls the array and returns an unusable list. So 0xFFFE is the last usable capacity, not 0xFFFF."
+      "why": "List<MobBreederGroup> handles are unsigned short, and 0xFFFF is the INVALID-HANDLE sentinel the overflow guards test (mh_Load 0x4B6595: cmp ax,0xFFFF). l_MakeList (0x4B3B57) also refuses a capacity of 0xFFFF outright -- it nulls the array and returns an unusable list. So 0xFFFE is the last usable capacity, not 0xFFFF. Also: the constructor's node-linking loop is UNROLLED FOUR WAYS (add edx,0x66E0 = 4*0x19B8; four 12-byte node writes per pass) and stores the TRIP COUNT, so groups must be a multiple of 4 or the tail elements are never linked.",
+      "multiple_of": 4
     }
   },
-
   "new_section": {
     "name": ".mobhat",
     "size": "groups*elem_size + hdr_size",
-    "note": "Uninitialised: virtual bytes only, zero-filled by the loader, nothing added to the file."
+    "materialise": true,
+    "note": "Real zero bytes on disk. A virtual-only (BSS) section faulted on first write under Wine on 2026-09-13 -- deterministic, in mh_Load -> l_AllocZ. Costs file size; buys a section the loader must map."
   },
-
   "edits": [
-    { "why": "ctor: vector-ctor element count",  "at": "0x004B3FF8", "expect": "old_groups",      "write": "groups" },
-    { "why": "ctor: l_MakeList capacity",        "at": "0x004B4010", "expect": "old_groups",      "write": "groups" },
-    { "why": "dtor: vector-dtor element count",  "at": "0x004B2306", "expect": "old_groups",      "write": "groups" },
-
-    { "why": "ctor: List header offset",         "at": "0x004B4009", "expect": "old_array_bytes", "write": "groups*elem_size" },
-    { "why": "dtor: List header offset",         "at": "0x004B22EB", "expect": "old_array_bytes", "write": "groups*elem_size" },
-    { "why": "mh_View: List header offset",      "at": "0x004B3ACD", "expect": "old_array_bytes", "write": "groups*elem_size" },
-    { "why": "mh_ScriptBreed: List hdr offset",  "at": "0x004B3EA6", "expect": "old_array_bytes", "write": "groups*elem_size" },
-    { "why": "erb_happen: List header offset",   "at": "0x004B570D", "expect": "old_array_bytes", "write": "groups*elem_size" },
-    { "why": "mh_Load: List header offset (1)",  "at": "0x004B658C", "expect": "old_array_bytes", "write": "groups*elem_size" },
-    { "why": "mh_Load: List header offset (2)",  "at": "0x004B66AD", "expect": "old_array_bytes", "write": "groups*elem_size" },
-    { "why": "mh_MobBreed: List hdr offset",     "at": "0x004B69CC", "expect": "old_array_bytes", "write": "groups*elem_size" },
-
-    { "why": "global pointer initialiser",       "at": "0x005AD98D", "expect": "old_object_va",   "write": "@newbase" },
-    { "why": "CRT init stub: ctor this",         "at": "0x0069B131", "expect": "old_object_va",   "write": "@newbase" },
-    { "why": "atexit thunk: dtor this",          "at": "0x006A0111", "expect": "old_object_va",   "write": "@newbase" }
+    {
+      "why": "ctor: vector-ctor element count",
+      "at": "0x004B3FF8",
+      "expect": "old_groups",
+      "write": "groups"
+    },
+    {
+      "why": "ctor: l_MakeList capacity",
+      "at": "0x004B4010",
+      "expect": "old_groups",
+      "write": "groups"
+    },
+    {
+      "why": "ctor: node-link loop trips (4-way unrolled)",
+      "at": "0x004B403D",
+      "expect": "old_groups/4",
+      "write": "groups/4"
+    },
+    {
+      "why": "dtor: vector-dtor element count",
+      "at": "0x004B2306",
+      "expect": "old_groups",
+      "write": "groups"
+    },
+    {
+      "why": "ctor: List header offset",
+      "at": "0x004B4009",
+      "expect": "old_array_bytes",
+      "write": "groups*elem_size"
+    },
+    {
+      "why": "dtor: List header offset",
+      "at": "0x004B22EB",
+      "expect": "old_array_bytes",
+      "write": "groups*elem_size"
+    },
+    {
+      "why": "mh_View: List header offset",
+      "at": "0x004B3ACD",
+      "expect": "old_array_bytes",
+      "write": "groups*elem_size"
+    },
+    {
+      "why": "mh_ScriptBreed: List hdr offset",
+      "at": "0x004B3EA6",
+      "expect": "old_array_bytes",
+      "write": "groups*elem_size"
+    },
+    {
+      "why": "erb_happen: List header offset",
+      "at": "0x004B570D",
+      "expect": "old_array_bytes",
+      "write": "groups*elem_size"
+    },
+    {
+      "why": "mh_Load: List header offset (1)",
+      "at": "0x004B658C",
+      "expect": "old_array_bytes",
+      "write": "groups*elem_size"
+    },
+    {
+      "why": "mh_Load: List header offset (2)",
+      "at": "0x004B66AD",
+      "expect": "old_array_bytes",
+      "write": "groups*elem_size"
+    },
+    {
+      "why": "mh_MobBreed: List hdr offset",
+      "at": "0x004B69CC",
+      "expect": "old_array_bytes",
+      "write": "groups*elem_size"
+    },
+    {
+      "why": "global pointer initialiser",
+      "at": "0x005AD98D",
+      "expect": "old_object_va",
+      "write": "@newbase"
+    },
+    {
+      "why": "CRT init stub: ctor this",
+      "at": "0x0069B131",
+      "expect": "old_object_va",
+      "write": "@newbase"
+    },
+    {
+      "why": "atexit thunk: dtor this",
+      "at": "0x006A0111",
+      "expect": "old_object_va",
+      "write": "@newbase"
+    },
+    {
+      "why": "dtor: List.head",
+      "at": "0x004B22E5",
+      "expect": "old_array_bytes + 0x8",
+      "write": "groups*elem_size + 0x8"
+    },
+    {
+      "why": "mg_FindBreedGroup: List.tail",
+      "at": "0x004B2342",
+      "expect": "old_array_bytes + 0xE",
+      "write": "groups*elem_size + 0xE"
+    },
+    {
+      "why": "mg_FindBreedGroup: List.nodes",
+      "at": "0x004B234C",
+      "expect": "old_array_bytes + 0x8",
+      "write": "groups*elem_size + 0x8"
+    },
+    {
+      "why": "mg_FindBreedGroup: List.capacity",
+      "at": "0x004B235F",
+      "expect": "old_array_bytes + 0x4",
+      "write": "groups*elem_size + 0x4"
+    },
+    {
+      "why": "mh_ScriptBreed: List.freehead",
+      "at": "0x004B3EA0",
+      "expect": "old_array_bytes + 0xC",
+      "write": "groups*elem_size + 0xC"
+    },
+    {
+      "why": "mh_Load: List.freehead",
+      "at": "0x004B6586",
+      "expect": "old_array_bytes + 0xC",
+      "write": "groups*elem_size + 0xC"
+    },
+    {
+      "why": "mh_MobBreed: List.freehead",
+      "at": "0x004B69C6",
+      "expect": "old_array_bytes + 0xC",
+      "write": "groups*elem_size + 0xC"
+    }
+  ],
+  "status": "WORKING -- boots clean at groups=16384. Verified under Wine 2026-09-13; see measured[].",
+  "measured": [
+    "Docker A/B in fiesta-docker-test (Wine). 'crashes' = EXCEPTION / 'Zone.exe exited' markers.",
+    "",
+    "  stock exe            + stock Field.txt (2186 groups)  -> CLEAN     (control, repeated)",
+    "  stock exe            + all-maps Field.txt (5845)      -> crash before [Message] fieldlist",
+    "  FINAL patch groups=16384 + stock Field.txt            -> CLEAN, 91 maps loaded",
+    "  FINAL patch groups=16384 + all-maps Field.txt (5845)  -> clears the group cap; stops later on",
+    "                                                           'AddInstanceDungeonCluster : Cannot Add[10]'",
+    "                                                           which is a DIFFERENT, unpatched limit.",
+    "",
+    "Getting there took two misses, both worth keeping:",
+    "",
+    "1. THE UNROLLED TRIP COUNT. The ctor's node-linking loop is unrolled FOUR WAYS (add edx,0x66E0 =",
+    "   4*0x19B8; four 12-byte node writes per pass; add edi,4; dec [ebp-0x10]) and bakes the ITERATION",
+    "   count 0x400 = 1024, not the element count. Searching for 0x1000 never sees it. Without this,",
+    "   only the first 4096 nodes get an element pointer and l_AllocZ hands back an unlinked node.",
+    "",
+    "2. THE OFFSET-INTO-HEADER SITES. Only 8 of 15 sites bake exactly 0x19B8000. Seven more bake",
+    "   base+0x4/+0x8/+0xC/+0xE to reach List members (capacity, nodes, freehead, tail). An exact-value",
+    "   search finds 8; the binary then reads a garbage free-list head from inside the group array and",
+    "   faults in l_AllocZ+0x1F. SEARCH THE RANGE [base, base+0x400], NOT THE VALUE.",
+    "",
+    "Diagnostic that isolated it: patch with groups=4096 (relocation only, count unchanged) -> CLEAN.",
+    "groups=4097 -> crash. That proved it was the COUNT, not the relocation, the section, or address space.",
+    "",
+    "Also note: the BSS-vs-materialised question was never actually settled -- the only virtual-only run",
+    "used a count that failed for other reasons. materialise=true is simply what has been tested."
   ]
 }

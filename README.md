@@ -100,13 +100,26 @@ hatchery inside a 334 MB `.data` image.
 
 ## Status
 
-The patched binary is produced and statically verified — 14 sites confirmed, PE re-parses, the constructor
-disassembles to `push 0x4000` / `lea esi,[ebx+0x66e0000]`, `.mobhat` present with zero file bytes.
+`mob-spawn-group-cap` **works**: boots clean at `groups=16384` under Wine, 91 maps loaded, and on an
+all-maps-on-one-zone layout (5,845 groups) it clears the spawn-group ceiling and stops on a different,
+unpatched limit — the instance-dungeon cluster cap, written up in
+`recipes/NOTES-instance-dungeon-cluster-cap.md`.
 
-**It has not been run.** Nothing here has been executed by a zone process, under Wine or otherwise. Two
-things to watch on first boot:
+Getting there took two failed rounds, and both failures generalise to any recipe in this repo:
 
-- A BSS section with `PointerToRawData = 0` is standard, but this build runs under Wine via SCM — worth
-  confirming the loader commits it rather than assuming.
-- `SizeOfImage` grows to 440 MB. The image is `LARGE_ADDRESS_AWARE`, so this is well within a 32-bit
-  process's reach, but it is reserved at load.
+**Search the offset RANGE, not the value.** Only 8 of 15 sites bake exactly `0x19B8000`; seven more bake
+`base+0x4/+0x8/+0xC/+0xE` to reach members of the structure that follows the array. An exact-value search
+finds the 8, and the binary then reads a garbage free-list head from inside the array and faults in
+`l_AllocZ+0x1F`. One nearby hit (`0x019B820F` in `MoveManager::mm_Step`) is coincidence — a range search
+needs a human to separate real offsets from collisions.
+
+**Look for unrolled loops.** The constructor's node-linking loop is unrolled four ways and bakes the
+*iteration* count (`0x400` = 1024), not the element count (4096). Nothing matching `0x1000` exists at that
+site. Without it, only the first 4096 nodes are linked and everything above hands back an unlinked node.
+
+The diagnostic that isolated both: build with `--set groups=4096` — relocation applied, count unchanged.
+That booted clean, while `groups=4097` crashed, which ruled out the section, the relocation, the image
+size and address space in one run, and pointed squarely at the count.
+
+Untested: whether a virtual-only (BSS) section works. The only virtual-only run used a count that failed
+for unrelated reasons, so `materialise: true` is simply the configuration that has been exercised.
