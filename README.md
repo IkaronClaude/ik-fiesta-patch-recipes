@@ -71,9 +71,11 @@ heap-allocated.) It cannot grow in place either: the array ends at `0x14D41A48` 
 starts at `0x14D41A60` — **24 bytes** of headroom.
 
 It *can* be relocated, and that's the whole trick. All 14 call sites reach the object through the global
-pointer; only three instructions carry its raw address. So the recipe appends a BSS section with room,
-repoints those three immediates, and rewrites the two size constants the layout is built from — **14
-edits, no code cave, no allocator call, no new runtime failure mode**.
+pointer; only three instructions carry its raw address. So the recipe appends a section with room, repoints
+those three immediates, and rewrites every constant the layout is built from — **22 edits, no code cave
+and no allocator call**. (An earlier draft said "and therefore no new runtime failure mode". That did not
+follow and was not true: relocating into a fresh section is itself a new failure mode, and the first two
+attempts crashed. See Status.)
 
 **The overflow guards need no patching.** `mh_Load` and `mh_ScriptBreed` don't compare against a literal;
 they test whether the List handed back the invalid-handle sentinel (`cmp ax, 0xFFFF` at `0x4B6595`). The
