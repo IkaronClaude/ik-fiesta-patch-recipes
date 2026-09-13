@@ -1,0 +1,81 @@
+{
+  "name": "mob-spawn-group-cap",
+  "summary": "Raise MobHatchery's spawn-group ceiling from 4096, so every map can run on one zone process.",
+
+  "target": {
+    "file": "Zone00/Zone.exe",
+    "sha256": "7ef3532da08194a377558322ca2bd06d1ce5bdb2813796e033173b72d9ff883d",
+    "size": 4673536,
+    "note": "Identical in Z:/Server and Z:/ServerSource. Every address below was read out of THIS build."
+  },
+
+  "params": {
+    "groups": 16384
+  },
+
+  "consts": {
+    "elem_size": 6584,
+    "hdr_size": 24,
+    "old_groups": 4096,
+    "old_array_bytes": "0x19B8000",
+    "old_object_va": "0x13389A48"
+  },
+
+  "why": [
+    "MobHatchery holds its spawn groups as an INLINE FIXED ARRAY, not a pointer: ??0MobHatchery",
+    "(0x4B3FC0) runs the eh vector constructor iterator over 0x1000 elements of 0x19B8 bytes, then puts",
+    "the List<MobBreederGroup> header at a baked +0x19B8000. That is 25.7MB embedded in the object.",
+    "",
+    "The object is static, not heap: 0x5AD987 stores the CONSTANT 0x13389A48 into the global pointer",
+    "?mobhatchery@@3PAVMobHatchery@@A, and a CRT init stub does 'mov ecx,0x13389A48; call ctor'. The",
+    "PAV in the symbol is a pointer VARIABLE aimed at a static, which is what makes it look heap-allocated.",
+    "",
+    "It cannot grow in place: the array ends at 0x14D41A48 and ?clockwatch@@3VClockWatch@@A begins at",
+    "0x14D41A60 -- 24 bytes of headroom.",
+    "",
+    "It CAN be relocated, and that is what this recipe does. All 14 call sites reach the object through",
+    "the global pointer; only three instructions carry its raw address. So: append a BSS section with",
+    "room, repoint those three immediates at it, and rewrite the two size constants the layout is built",
+    "from. No code cave and no allocator call, so there is no new runtime failure mode.",
+    "",
+    "CEILING: 65535. List<MobBreederGroup> is indexed by unsigned short throughout (l_MakeList, l_AllocA,",
+    "l_Free all take G). Past that you are retyping the List template, which is a different job.",
+    "",
+    "SIZING: shipped content is 6038 MobRegenGroup records across 88 files (zone 0/1/2/3 = 1628/1962/",
+    "1942/261), so one process needs >4096 today, before any 2026 content. 16384 is 2.7x current content",
+    "at 103MB -- and one process replaces five, each of which carried its own 25.7MB hatchery inside a",
+    "334MB .data image, so consolidating is a large net saving, not a cost."
+  ],
+
+  "limits": {
+    "groups": {
+      "max": "65534",
+      "why": "List<MobBreederGroup> handles are unsigned short, and 0xFFFF is the INVALID-HANDLE sentinel the overflow guards test (mh_Load 0x4B6595: cmp ax,0xFFFF). l_MakeList (0x4B3B57) also refuses a capacity of 0xFFFF outright -- it nulls the array and returns an unusable list. So 0xFFFE is the last usable capacity, not 0xFFFF."
+    }
+  },
+
+  "new_section": {
+    "name": ".mobhat",
+    "size": "groups*elem_size + hdr_size",
+    "note": "Uninitialised: virtual bytes only, zero-filled by the loader, nothing added to the file."
+  },
+
+  "edits": [
+    { "why": "ctor: vector-ctor element count",  "at": "0x004B3FF8", "expect": "old_groups",      "write": "groups" },
+    { "why": "ctor: l_MakeList capacity",        "at": "0x004B4010", "expect": "old_groups",      "write": "groups" },
+    { "why": "dtor: vector-dtor element count",  "at": "0x004B2306", "expect": "old_groups",      "write": "groups" },
+
+    { "why": "ctor: List header offset",         "at": "0x004B4009", "expect": "old_array_bytes", "write": "groups*elem_size" },
+    { "why": "dtor: List header offset",         "at": "0x004B22EB", "expect": "old_array_bytes", "write": "groups*elem_size" },
+    { "why": "mh_View: List header offset",      "at": "0x004B3ACD", "expect": "old_array_bytes", "write": "groups*elem_size" },
+    { "why": "mh_ScriptBreed: List hdr offset",  "at": "0x004B3EA6", "expect": "old_array_bytes", "write": "groups*elem_size" },
+    { "why": "erb_happen: List header offset",   "at": "0x004B570D", "expect": "old_array_bytes", "write": "groups*elem_size" },
+    { "why": "mh_Load: List header offset (1)",  "at": "0x004B658C", "expect": "old_array_bytes", "write": "groups*elem_size" },
+    { "why": "mh_Load: List header offset (2)",  "at": "0x004B66AD", "expect": "old_array_bytes", "write": "groups*elem_size" },
+    { "why": "mh_MobBreed: List hdr offset",     "at": "0x004B69CC", "expect": "old_array_bytes", "write": "groups*elem_size" },
+
+    { "why": "global pointer initialiser",       "at": "0x005AD98D", "expect": "old_object_va",   "write": "@newbase" },
+    { "why": "CRT init stub: ctor this",         "at": "0x0069B131", "expect": "old_object_va",   "write": "@newbase" },
+    { "why": "atexit thunk: dtor this",          "at": "0x006A0111", "expect": "old_object_va",   "write": "@newbase" }
+  ]
+}
