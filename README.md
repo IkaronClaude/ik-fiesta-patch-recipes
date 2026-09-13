@@ -151,6 +151,37 @@ Hard ceiling 65535: `NumOfQuest` is a `u16` and the guard compares 16-bit (`cmp 
 constant would silently truncate. The runner refuses it. Default 16384 keeps the guard useful against a
 corrupt header while clearing 2026's 3100+.
 
+### `block-distribute-map-cap`, `block-info-cap`, `instance-cluster-cap` — the per-process map limits
+
+Three caps bind when one zone process hosts many maps; `recipes/NOTES-map-caps.md` has the full reading.
+
+| recipe | stock cap | assert | what moves |
+|---|---|---|---|
+| `block-distribute-map-cap` | 64 distinct maps (`bdm_Array[64]`, a 1 KB static) | `bdm_Find` ShineExits | the array to `.bdmarr`; 3 `this` immediates + 6 counts (9 edits) |
+| `block-info-cap` | 256 block infos (`mbib_array[256]` + count, 741 KB static) | `mbib_Load: Too many block info[256]` | the box to `.mbibox`; 4 addresses, 2 vector counts, the bound, 6 count-member offsets (12 edits) |
+| `instance-cluster-cap` | 10 instance clusters (`Clusters[10]` mid-object) + List capacity 14 | `AddInstanceDungeonCluster: Cannot Add[10]` | only the array, to `.clusarr`: three `lea reg,[this+0x28068]` become `mov reg, imm32; nop`, two imm8 bounds, the dtor trip count, the `push 0xe` (13 edits) |
+
+Two things these needed that earlier recipes did not:
+
+- **Byte-width edits.** imm8 operands (`cmp esi, 0x40`, `push 0xe`) and the opcode / padding bytes of the
+  lea->mov rewrite are single bytes inside instructions whose other bytes must stay. `"width": 1` (or 2)
+  on an edit reads, expects and writes just that many bytes; the default stays 4.
+- **Range scans.** `tools/xref_range.py --range lo-hi` lists every instruction whose imm32 / absolute
+  disp32 lands inside a static object, and `--disp lo-hi` every register-relative member access — the
+  form a mid-object array takes. This is how the three `lea` sites and the five `mbib_Number` accesses
+  were found, and how "no absolute reference to a slot" was established rather than assumed.
+
+Limits are imm8-shaped: 124 maps (multiple of 4 for the unrolled destructor), 123 clusters; block infos
+are imm32 everywhere (1024 by default). Chained on top of `mob-spawn-group-cap` + `quest-count-cap`:
+
+```bash
+python apply.py recipes/block-distribute-map-cap.json --exe build/Zone.quest.exe --out build/Zone.maps1.exe --allow-hash-mismatch
+python apply.py recipes/block-info-cap.json           --exe build/Zone.maps1.exe --out build/Zone.maps2.exe --allow-hash-mismatch
+python apply.py recipes/instance-cluster-cap.json     --exe build/Zone.maps2.exe --out build/Zone.maps.exe  --allow-hash-mismatch
+# every recipe verifies against the final image:
+python apply.py recipes/<any>.json --exe Z:/ServerSource/Zone00/Zone.exe --verify build/Zone.maps.exe
+```
+
 ## Status
 
 `mob-spawn-group-cap` **works**: boots clean at `groups=16384` under Wine, 91 maps loaded, and on an
