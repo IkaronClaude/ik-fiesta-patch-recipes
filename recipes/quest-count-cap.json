@@ -1,7 +1,7 @@
 {
   "name": "quest-count-cap",
   "summary": "Zone.exe refuses to start with more than 3000 quests. Raise the startup guard.",
-  "status": "BUILT AND STATICALLY VERIFIED -- not yet run by a zone process.",
+  "status": "BUILT, STATICALLY VERIFIED, AND RUN: 2026-09-13 a zone loaded 3121 quests on top of mob-spawn-group-cap (build/Zone.quest.exe) and characters joined (Fiesta2026on2016 smoke stack).",
 
   "target": {
     "file": "Zone00/Zone.exe",
