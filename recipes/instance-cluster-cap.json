@@ -1,0 +1,82 @@
+{
+  "name": "instance-cluster-cap",
+  "summary": "Zone.exe keeps at most 10 instance-dungeon clusters per process (ClusterManager::Clusters[10]). Move the array out of the object and raise the bounds.",
+  "status": "BUILT AND STATICALLY VERIFIED 2026-09-14; see NOTES-map-caps.md for the live run.",
+
+  "target": {
+    "file": "Zone00/Zone.exe",
+    "sha256": "7ef3532da08194a377558322ca2bd06d1ce5bdb2813796e033173b72d9ff883d",
+    "size": 4673536,
+    "note": "Chained builds need --allow-hash-mismatch; no other recipe touches these sites."
+  },
+
+  "params": {
+    "clusters": 32
+  },
+
+  "consts": {
+    "old_clusters": 10,
+    "old_list_capacity": 14,
+    "list_headroom": 4,
+    "old_array_disp": "0x28068",
+    "op_lea": "0x8D",
+    "op_mov_ecx": "0xB9",
+    "op_mov_ebx": "0xBB",
+    "op_nop": "0x90"
+  },
+
+  "limits": {
+    "clusters": {
+      "max": "123",
+      "why": "Both search-loop bounds are `cmp eax, imm8` and the List<MapCluster> capacity is `push imm8`; sign-extended imm8 tops out at 127, and the capacity is clusters + 4 (the 2016 headroom over 10: 14 nodes for 10 slots)."
+    }
+  },
+
+  "why": [
+    "MapClusterManager::ClusterManager (?mapclustermanager@@3V..., static at 0xD742B30, 0x28098 bytes) holds",
+    "MapCluster* Clusters[10] at +0x28068 in the MIDDLE of the object (a Metronome follows at +0x28090).",
+    "AddInstanceDungeonCluster (0x484850) scans it for a null slot and returns false past 10 -> the caller",
+    "asserts 'Cannot Add[10]' at startup when Field.txt puts more than 10 InstanceDungeon rows on the zone.",
+    "",
+    "Users of the array (tools/xref_range.py --disp 0x28068-0x28098 and --range 0xD742B30-0xD76ABC8):",
+    "  ctor 0x4A0F00           ten unrolled `mov [esi+0x28068..0x2808C], edi` (zeroing)",
+    "  AddInstanceDungeonCluster  lea ecx,[esi+0x28068] ; ... cmp eax, 0xa",
+    "  cm_AddTutorialMapCluster   lea ecx,[edi+0x28068] ; ... cmp eax, 0xa",
+    "  ~ClusterManager            lea ebx,[esi+0x28068] ; mov [ebp-0x10], 0xa  (trip count)",
+    "Nothing addresses a slot absolutely (0xD76AB98..0xD76ABC0 has no reference).",
+    "",
+    "Growing the array in place would shift the Metronome and every reference to it; relocating the whole",
+    "object would mean rewriting ~45 `mov ecx, 0xD742B30` immediates. Instead the array alone moves: each",
+    "`lea reg, [this + 0x28068]` (6 bytes: 8D /r disp32) becomes `mov reg, imm32` (B8+r imm32, 5 bytes)",
+    "followed by a nop - three edits per site: the opcode byte, the 32-bit address, the padding byte. The",
+    "ctor's ten stores keep zeroing the now-unused in-object array, which is harmless; the new array starts",
+    "zero because the section does. This is the only recipe that rewrites instruction bytes rather than",
+    "operands, which is why the opcodes are named constants and every one is expected before it is written.",
+    "",
+    "A new cluster's slot index is also its node index in the List<MapCluster> base",
+    "(AddInstanceDungeonCluster+0x9C..0xC5 indexes [this+8] by the slot), whose capacity the ctor sets",
+    "with `push 0xe` - raised to clusters + 4 to keep the 2016 headroom."
+  ],
+
+  "new_section": {
+    "name": ".clusarr",
+    "size": "clusters * 4",
+    "materialise": true
+  },
+
+  "edits": [
+    { "why": "AddInstanceDungeonCluster: lea -> mov ecx (opcode)",   "at": "0x00484879", "expect": "op_lea",         "write": "op_mov_ecx", "width": 1 },
+    { "why": "AddInstanceDungeonCluster: array address",             "at": "0x0048487A", "expect": "0x0280688E",     "write": "@newbase" },
+    { "why": "AddInstanceDungeonCluster: pad byte -> nop",           "at": "0x0048487E", "expect": "0x00",           "write": "op_nop",     "width": 1 },
+    { "why": "AddInstanceDungeonCluster: slot bound (imm8)",         "at": "0x0048488B", "expect": "old_clusters",   "write": "clusters",   "width": 1 },
+    { "why": "cm_AddTutorialMapCluster: lea -> mov ecx (opcode)",    "at": "0x004A09B3", "expect": "op_lea",         "write": "op_mov_ecx", "width": 1 },
+    { "why": "cm_AddTutorialMapCluster: array address",              "at": "0x004A09B4", "expect": "0x0280688F",     "write": "@newbase" },
+    { "why": "cm_AddTutorialMapCluster: pad byte -> nop",            "at": "0x004A09B8", "expect": "0x00",           "write": "op_nop",     "width": 1 },
+    { "why": "cm_AddTutorialMapCluster: slot bound (imm8)",          "at": "0x004A09CA", "expect": "old_clusters",   "write": "clusters",   "width": 1 },
+    { "why": "~ClusterManager: lea -> mov ebx (opcode)",             "at": "0x004A034A", "expect": "op_lea",         "write": "op_mov_ebx", "width": 1 },
+    { "why": "~ClusterManager: array address",                       "at": "0x004A034B", "expect": "0x0280689E",     "write": "@newbase" },
+    { "why": "~ClusterManager: pad byte -> nop",                     "at": "0x004A034F", "expect": "0x00",           "write": "op_nop",     "width": 1 },
+    { "why": "~ClusterManager: delete-loop trip count",              "at": "0x004A0353", "expect": "old_clusters",   "write": "clusters" },
+    { "why": "ctor: List<MapCluster> capacity (imm8)",               "at": "0x004A0F2E", "expect": "old_list_capacity", "write": "clusters + list_headroom", "width": 1 }
+  ]
+}

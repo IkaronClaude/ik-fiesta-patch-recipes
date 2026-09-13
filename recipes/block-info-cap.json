@@ -1,0 +1,73 @@
+{
+  "name": "block-info-cap",
+  "summary": "Zone.exe loads at most 256 map block infos per process (MapBlockInformationBox::mbib_array[256]). Relocate the box and raise the bound.",
+  "status": "BUILT AND STATICALLY VERIFIED 2026-09-14; see NOTES-map-caps.md for the live run.",
+
+  "target": {
+    "file": "Zone00/Zone.exe",
+    "sha256": "7ef3532da08194a377558322ca2bd06d1ce5bdb2813796e033173b72d9ff883d",
+    "size": 4673536,
+    "note": "Chained builds need --allow-hash-mismatch; no other recipe touches these sites."
+  },
+
+  "params": {
+    "infos": 1024
+  },
+
+  "consts": {
+    "old_infos": 256,
+    "elem_size": "0xB50",
+    "old_object_va": "0x0D68AB10",
+    "old_count_off": "0xB5000"
+  },
+
+  "limits": {
+    "infos": {
+      "max": "65536",
+      "why": "Every operand is imm32/disp32; the ceiling is only memory (0xB50 = 2896 bytes per entry, 1024 entries = 2.97 MB). 65536 would be 190 MB of image - far beyond any use."
+    }
+  },
+
+  "why": [
+    "MapBlockInformationBox (?blockinfobox@@3V..., a static at 0xD68AB10, 741,380 bytes) is",
+    "mbib_array[256] of 0xB50 bytes {Name3 mapid; xsize; ysize; MapBlockInformation} followed by",
+    "int mbib_Number at +0xB5000. mbib_Load (0x49E940) finds a map's entry by name or appends one at",
+    "mbib_Number; `cmp eax, 0x100` guards the append and ac_Asserts 'Too many block info[256]'. A zone with",
+    "many field maps (every FieldMap instance loads one, instance copies included) hits it.",
+    "",
+    "References (tools/xref_range.py --range 0xD68AB10-0xD73FB14 --disp 0xB5000-0xB5004):",
+    "  fm_Init+0x19D        mov ecx, 0xD68AB10                 (this for mbib_Load)",
+    "  CRT ctor stub 0x696800: push 0x100; push 0xB50; push 0xD68AB10; call eh vector ctor;",
+    "                          mov dword [0xD73FB10], 0        (mbib_Number = 0)",
+    "  atexit stub 0x69D890:   push 0x100; push 0xB50; push 0xD68AB10; call eh vector dtor",
+    "  mbib_Load:              five [esi + 0xB5000] accesses to mbib_Number",
+    "No data-section pointer. The box has no constructor symbol: the CRT stub IS the constructor, so the",
+    "element count lives in the two stubs and nowhere else.",
+    "",
+    "Relocating moves the whole object (array + count) to a section of infos*0xB50 + 4 bytes: four object",
+    "addresses, two vector counts, the bound, and six count-member offsets (register-relative disp32 in",
+    "mbib_Load, absolute in the stub) become infos*0xB50. Materialised so the vector ctor and the count",
+    "store find real memory under this loader."
+  ],
+
+  "new_section": {
+    "name": ".mbibox",
+    "size": "infos * elem_size + 4",
+    "materialise": true
+  },
+
+  "edits": [
+    { "why": "fm_Init: this for mbib_Load",                       "at": "0x00464D5E", "expect": "old_object_va",                "write": "@newbase" },
+    { "why": "CRT ctor stub: vector ctor element count",          "at": "0x0069680B", "expect": "old_infos",                    "write": "infos" },
+    { "why": "CRT ctor stub: vector ctor object address",         "at": "0x00696815", "expect": "old_object_va",                "write": "@newbase" },
+    { "why": "CRT ctor stub: mbib_Number = 0 (absolute store)",   "at": "0x00696825", "expect": "old_object_va + old_count_off","write": "@newbase + infos * elem_size" },
+    { "why": "atexit stub: vector dtor element count",            "at": "0x0069D896", "expect": "old_infos",                    "write": "infos" },
+    { "why": "atexit stub: vector dtor object address",           "at": "0x0069D8A0", "expect": "old_object_va",                "write": "@newbase" },
+    { "why": "mbib_Load: 'Too many block info' bound",            "at": "0x0049E98D", "expect": "old_infos",                    "write": "infos" },
+    { "why": "mbib_Load: mbib_Number offset (cmp, +0xD)",         "at": "0x0049E94F", "expect": "old_count_off",                "write": "infos * elem_size" },
+    { "why": "mbib_Load: mbib_Number offset (cmp, +0x3E)",        "at": "0x0049E980", "expect": "old_count_off",                "write": "infos * elem_size" },
+    { "why": "mbib_Load: mbib_Number offset (load, +0x46)",       "at": "0x0049E988", "expect": "old_count_off",                "write": "infos * elem_size" },
+    { "why": "mbib_Load: mbib_Number offset (load, +0x74)",       "at": "0x0049E9B6", "expect": "old_count_off",                "write": "infos * elem_size" },
+    { "why": "mbib_Load: mbib_Number offset (store, +0x83)",      "at": "0x0049E9C5", "expect": "old_count_off",                "write": "infos * elem_size" }
+  ]
+}

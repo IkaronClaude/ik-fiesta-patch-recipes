@@ -1,0 +1,71 @@
+{
+  "name": "block-distribute-map-cap",
+  "summary": "Zone.exe hosts at most 64 DISTINCT maps per process (BlockDistributeManager::bdm_Array[64]). Relocate the array and raise every count.",
+  "status": "BUILT AND STATICALLY VERIFIED 2026-09-14; see NOTES-map-caps.md for the live run.",
+
+  "target": {
+    "file": "Zone00/Zone.exe",
+    "sha256": "7ef3532da08194a377558322ca2bd06d1ce5bdb2813796e033173b72d9ff883d",
+    "size": 4673536,
+    "note": "Chained builds (on top of mob-spawn-group-cap / quest-count-cap output) need --allow-hash-mismatch; none of those recipes touch these sites."
+  },
+
+  "params": {
+    "maps": 124
+  },
+
+  "consts": {
+    "old_maps": 64,
+    "elem_size": 16,
+    "old_object_va": "0x008B7018"
+  },
+
+  "limits": {
+    "maps": {
+      "max": "124",
+      "why": "The ctor's eh-vector count (push 0x40), the dtor's vector count and both bdm_Find bounds (cmp esi, imm8) are sign-extended imm8 operands: 127 is the ceiling. The dtor's unlink loop is unrolled 4 entries per iteration with a trip count of maps/4, so maps must be a multiple of 4 -> 124."
+    },
+    "maps": {
+      "max": "124",
+      "multiple_of": 4,
+      "why": "imm8 bounds cap it at 127; the destructor walks 4 entries per iteration (add eax, 0x40) with trip count maps/4."
+    }
+  },
+
+  "why": [
+    "BlockDistributeManager (?blockdistmanager@@3V..., a static at 0x8B7018) is exactly bdm_Array[64] of",
+    "{Name3 mapid; BlockingDistribute* block} - 1024 bytes. bdm_Find (0x438F70) searches it by map name and",
+    "takes the first free slot; when all 64 are used it ac_Asserts and ShineExits: one slot per distinct map",
+    "name loaded by the process, which is the 64-maps-per-zone limit.",
+    "",
+    "The object is referenced by address in exactly three places (tools/xref_range.py --range",
+    "0x8B7018-0x8B7418, no data-section pointer): mbi_Load's call to bdm_Find, the CRT ctor stub and the",
+    "atexit dtor stub - all `mov ecx, imm32`. So it relocates to a fresh section with three immediates.",
+    "",
+    "Everything else that knows the size is a count, never an end pointer:",
+    "  ctor 0x438AC0:   push 0x40 (eh vector ctor, imm8)   mov edi, 0x40 (name init loop, imm32)",
+    "  dtor 0x438B20:   mov esi, 0x10 (= 64/4, loop unrolled x4, imm32)   push 0x40 (vector dtor, imm8)",
+    "  bdm_Find:        cmp esi, 0x40 (loop bound, imm8)   cmp esi, 0x40 (the 'full' test, imm8)",
+    "",
+    "The section is materialised (real zero bytes on disk) because the ctor is what initialises it and a",
+    "BSS section has not been proven under this loader (mob-spawn-group-cap notes)."
+  ],
+
+  "new_section": {
+    "name": ".bdmarr",
+    "size": "maps * elem_size",
+    "materialise": true
+  },
+
+  "edits": [
+    { "why": "mbi_Load: this for bdm_Find",                    "at": "0x0049E8CA", "expect": "old_object_va", "write": "@newbase" },
+    { "why": "CRT init stub: this for the ctor",               "at": "0x00695161", "expect": "old_object_va", "write": "@newbase" },
+    { "why": "atexit stub: this for the dtor",                 "at": "0x0069C661", "expect": "old_object_va", "write": "@newbase" },
+    { "why": "ctor: eh vector ctor element count (imm8)",      "at": "0x00438AD2", "expect": "old_maps",      "write": "maps",     "width": 1 },
+    { "why": "ctor: name-init loop count",                     "at": "0x00438AE4", "expect": "old_maps",      "write": "maps" },
+    { "why": "dtor: unlink loop trip count (entries / 4)",     "at": "0x00438B26", "expect": "old_maps / 4",  "write": "maps / 4" },
+    { "why": "dtor: eh vector dtor element count (imm8)",      "at": "0x00438B63", "expect": "old_maps",      "write": "maps",     "width": 1 },
+    { "why": "bdm_Find: search loop bound (imm8)",             "at": "0x00438FCA", "expect": "old_maps",      "write": "maps",     "width": 1 },
+    { "why": "bdm_Find: 'array full' test (imm8)",             "at": "0x00438FCF", "expect": "old_maps",      "write": "maps",     "width": 1 }
+  ]
+}

@@ -277,22 +277,30 @@ def main():
         if off is None:
             problems.append(f"  0x{va:08X}: not backed by file bytes")
             continue
-        cur = struct.unpack_from("<I", reader.d, off)[0]
-        expect = evaluate(e["expect"], env)
+        # "width": 4 (default) | 2 | 1 -- imm8/imm16 operands and single opcode bytes are edited at their own
+        # width, so a recipe never has to spell out the neighbouring bytes of an instruction it does not touch
+        width_ = int(e.get("width", 4))
+        fmt = {1: "<B", 2: "<H", 4: "<I"}[width_]
+        mask = (1 << (8 * width_)) - 1
+        cur = struct.unpack_from(fmt, reader.d, off)[0]
+        expect = evaluate(e["expect"], env) & mask
         write = evaluate(e["write"], env)
+        if write < 0 or write > mask:
+            problems.append(f"  0x{va:08X}: value 0x{write:X} does not fit in {width_} byte(s)  [{e['why']}]")
+            continue
         target = write if a.verify else expect
         ok = cur == target
         if not ok:
-            problems.append(f"  0x{va:08X}: found 0x{cur:08X}, expected 0x{target:08X}  [{e['why']}]")
-        plan.append((va, off, cur, write, e["why"], ok))
+            problems.append(f"  0x{va:08X}: found 0x{cur:0{2*width_}X}, expected 0x{target:0{2*width_}X}  [{e['why']}]")
+        plan.append((va, off, cur, write, e["why"], ok, fmt))
 
     if problems:
         head = "VERIFY FAILED" if a.verify else "REFUSING TO PATCH"
         raise SystemExit(f"{head}: {len(problems)} site(s) did not match:\n" + "\n".join(problems))
 
     width = max(len(e["why"]) for e in r["edits"])
-    for va, off, cur, write, why, _ in plan:
-        print(f"  {why:<{width}}  VA 0x{va:08X}  0x{cur:08X} -> 0x{write:08X}")
+    for va, off, cur, write, why, _, fmt in plan:
+        print(f"  {why:<{width}}  VA 0x{va:08X}  0x{cur:08X} -> 0x{write:08X}  ({struct.calcsize(fmt)} B)")
 
     # -- code blobs ---------------------------------------------------------------------------------
     # A recipe sometimes needs to place INSTRUCTIONS, not just change a constant -- e.g. a saturating
@@ -326,8 +334,8 @@ def main():
     if not a.out:
         raise SystemExit("--out is required unless --dry-run or --verify")
 
-    for va, off, cur, write, why, _ in plan:
-        struct.pack_into("<I", pe.d, off, write)
+    for va, off, cur, write, why, _, fmt in plan:
+        struct.pack_into(fmt, pe.d, off, write)
 
     for at, out, why in blobs:
         off = pe.offset_of(at)
