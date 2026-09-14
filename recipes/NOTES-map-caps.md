@@ -115,6 +115,35 @@ Fiesta2026on2016/tickets.md.)
 FieldList row on a running zone (zone 3's 38 maps on zone 4). All four READY, zero cap asserts, zero
 `Too many mob`; zone 1 at 75 maps / 215 block infos / 22 clusters, zone 4 at 30 / 209, bot joined.
 
+## 4. The WorldManager side (read 2026-09-14, no recipe yet - 17 of 32 used)
+
+The WM does not read Field.txt. Each zone, on its S2S connection ack (`wms_NC_MISC_S2SCONNECTION_ACK` ->
+`FieldContainer::fc_IndunMapRegist`, 0x462AF0), sends NC_INSTANCE_DUNGEON_MAP_REGIST_CMD with EVERY
+InstanceDungeon row of its Field.txt (`{MapIDClient[12]; ModeIDLv u8}`, 13 B each, count u16) - not just its
+own zone's rows. The WM handler (`CParserZone::fc_NC_INSTANCE_DUNGEON_MAP_REGIST_CMD`, 0x428870):
+
+- refuses a packet with more than **0x20 = 32** entries (`cmp word [esi], 0x20; ja` at 0x4288C1, imm8);
+- keeps only the FIRST registration (`cmp [m_NumOfIndunMap], 0; jg skip`), so every zone must send the
+  complete list - which they do;
+- copies into `CWMZoneSessionManager::m_IndunMapList[416]` = **32 entries** of 13 B at 0x557D14 (count
+  `m_NumOfIndunMap` at 0x557D10, object static at 0x557CEC, size 0x41D0), then echoes the list to the zones
+  (opcode 0xA41A, built in a 0x2014-byte stack buffer).
+
+References to the list (`xref_range --exe WorldManager.exe --range 0x557D00-0x557EB8`): only that handler -
+four `mov reg, imm32` base constants (0x557D0A/0E/12/16 = list - 0xA + field offset, the copy loop is
+strength-reduced) and the count. Nothing else in the WM reads the array, so a recipe is small: relocate the
+array (4 imm32 edits, keep the count where it is), raise the 0x20 guard (imm8, max 127), and the echo buffer
+already holds 630 entries. Live: `m_NumOfIndunMap = 17` with the 17 rows in order, matching zone 1's table.
+
+**Merge rule found on the way:** the zone stores InstanceDungeon rows in a pointer array INDEXED BY IDNo
+(`fc_Load`: `[FieldContainer+0x54078][IDNo]`) and `fc_IndunMapRegist` walks slots 0..rowcount-1, so IDNo
+must be contiguous from 0 - a row with IDNo >= rowcount is never registered with the WM (and a gap leaves
+a null slot the loop skips).
+
+So the current ceiling for instance dungeons is **32 (map, level) rows in total across the world** (WM
+array + packet guard), 17 in use; the zone-side caps are 36 clusters per zone process (raise with
+`--set clusters=`, up to 123).
+
 ## Tooling
 
 `apply.py` edits were 32-bit only; imm8 sites and the opcode/nop bytes of the lea->mov rewrite need
