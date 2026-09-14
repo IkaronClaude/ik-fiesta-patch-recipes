@@ -64,6 +64,16 @@ range 0xD742B30..): the ctor's ten unrolled zero stores, and three walkers that 
 
 Nothing addresses a slot absolutely (0xD76AB98..0xD76ABC0 has no reference; 0xD76ABC0/4 are the Metronome).
 
+**What actually binds (read from fc_Load, 0x4655F0+0x2FA, and measured live 2026-09-14).** fc_Load walks the
+InstanceDungeon rows and, for every row whose ZoneNumber equals this zone (`zs_worlddata()->+0x10`), calls
+`AddInstanceDungeonCluster(MapIDClient, IDNo)`. Inside, the 10-slot scan only checks that a null slot exists
+(the slot pointer is dropped right after), then the cluster is allocated through the `List<MapCluster>` base
+(`l_AllocA` -> node array at `this+8`, stride 12) and `mov [node], cluster` is the registration. The failure
+path is the LIST being full - the ctor's `push 0xe` capacity - and the assert prints the row's IDNo, so
+`Cannot Add[10]` meant "row with IDNo 10 did not fit", not "cap = 10". Nothing populates `Clusters[]` at
+startup (a zone with 17 rows shows all 32 relocated slots null and the list at 22/36 nodes), so the imm8
+bounds are belt-and-braces; the edit that matters is the list capacity. Both are raised together.
+
 Design chosen: **leave the object where it is and move only the array** into a zero-filled section. Each
 `lea reg, [this+disp32]` (6 bytes: `8D /r disp32`) becomes `mov reg, imm32` (5 bytes: `B8+r imm32`) plus a
 `nop`: one byte of opcode, four of address, one of padding - three edits per site. The ctor's ten stores
@@ -76,6 +86,25 @@ ctor at 0x4A0F2E (imm8) - raise it to N + 4 (the 2016 headroom over 10).
 
 Limits: `cmp eax, imm8` and `push imm8` -> **N + 4 <= 127**. Field.txt has 17 InstanceDungeon rows in total
 (13 distinct maps), so 32 covers every layout.
+
+## Live run (fiesta-docker smoke stack, 2026-09-14)
+
+`build/Zone.maps.exe` = mob-spawn-group-cap + quest-count-cap + the three recipes above, on zones 0,1,2,4 with
+every InstanceDungeon row (17) and its map on zone 1 plus the new maps and most of the moved 2016 maps
+(`make_stack.py --instances-zone 1`). All four zones reached `IOCP WORKTHREAD #12 RUNNING`; a bot joined through
+login / WM into a zone. Read out of the running processes (`Fiesta2026on2016/tools/zone_mapcaps_probe.pl`
+via `docker exec --privileged`, /proc/pid/mem):
+
+| zone | BlockDistribute used | block infos | MapCluster nodes |
+|---|---|---|---|
+| 1 | **75**/124 (stock 64) | 215/1024 | **22**/36 (stock 14) |
+| 0 | 31/124 | 93/1024 | - |
+| 2 | 36/124 | 163/1024 | - |
+| 4 | 10/124 | 10/1024 | - |
+
+The stock in-object arrays stayed all-zero (the ctors' writes land in the old locations, nothing reads them).
+Block infos are one per loaded map INSTANCE (numbered copies such as Tower0207 are distinct names), so the
+256 bound is exercised by folding zone 0's maps into zone 1 as well (see the run log below).
 
 ## Tooling
 
