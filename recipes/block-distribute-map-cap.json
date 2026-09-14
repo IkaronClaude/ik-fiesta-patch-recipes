@@ -1,7 +1,7 @@
 {
   "name": "block-distribute-map-cap",
   "summary": "Zone.exe hosts at most 64 DISTINCT maps per process (BlockDistributeManager::bdm_Array[64]). Relocate the array and raise every count.",
-  "status": "BUILT AND STATICALLY VERIFIED 2026-09-14; see NOTES-map-caps.md for the live run.",
+  "status": "WORKING 2026-09-14: chained in build/Zone.maps.exe, a zone booted READY with BlockDistribute 105/124, block infos 307/1024, MapCluster nodes 22/36 (all above stock) and a bot joined; see NOTES-map-caps.md.",
 
   "target": {
     "file": "Zone00/Zone.exe",

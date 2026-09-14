@@ -104,7 +104,12 @@ via `docker exec --privileged`, /proc/pid/mem):
 
 The stock in-object arrays stayed all-zero (the ctors' writes land in the old locations, nothing reads them).
 Block infos are one per loaded map INSTANCE (numbered copies such as Tower0207 are distinct names), so the
-256 bound is exercised by folding zone 0's maps into zone 1 as well (see the run log below).
+256 bound was exercised in a second run that folded zone 0's 36 maps into zone 1 as well (`--zones 1,2,4
+--zone1-maps <zone-0 list>`): zone 1 reached READY with **BlockDistribute 105/124, block infos 307/1024
+(stock 256), MapCluster nodes 22/36 (stock 14)** - every one of the three caps above its stock value in one
+live process, no assert, no exit. (That layout carries ~13,000 regen mobs, so the separate ~8100 mob object
+pool overflowed with 4,358 non-fatal `Too many mob` lines - the next cap to lift, tracked in
+Fiesta2026on2016/tickets.md.)
 
 ## Tooling
 
