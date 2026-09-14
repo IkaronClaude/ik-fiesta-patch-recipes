@@ -1,0 +1,66 @@
+{
+ "name": "npc-object-pool-cap",
+ "summary": "Zone.exe pre-sizes the NPC object pool at 256 per process. A zone hosting many maps runs out and every further NPC is dropped with 'NPCManager::nm_SetNPC : Too many npc'. Raise the pool size.",
+ "status": "DOES NOT WORK - DO NOT APPLY. Built and statically verified 2026-09-15 (npcs=2048), but the zone got WORSE: zone01 went from 35 'Too many npc' asserts and READY, to 545 asserts and never reaching IOCP WORKTHREAD #12 RUNNING in 8 minutes. Reverted. The pool's slot table is self-contained (ShineObjectPool::Create heap-allocates (count+1)*0xC and vtable+8 bounds-checks against [this+4]), so something ELSE is sized by the 256 - most likely the NPC HANDLE range, which is a u16 shared with mobs and players (nm_SetNPC does 'add eax, 0x21' / 'push 0x21' around the handle). Find what else consumes that 256 before trying again.",
+ "target": {
+  "file": "Zone00/Zone.exe",
+  "sha256": "7ef3532da08194a377558322ca2bd06d1ce5bdb2813796e033173b72d9ff883d",
+  "size": 4673536,
+  "note": "Chained builds need --allow-hash-mismatch; no other recipe touches this site."
+ },
+ "params": {
+  "npcs": 2048
+ },
+ "consts": {
+  "old_npcs": "0x100",
+  "site": "0x0055765D"
+ },
+ "limits": {
+  "npcs": {
+   "max": "65534",
+   "why": "ShineObjectPool::Create reads its count as a WORD ('mov ax, word ptr [ebp+8]', stored to [this+4]) and treats 0xFFFF as the 'no pool' sentinel, so 65534 is the last usable value. Cost is only memory: the pool allocates (count+1) * 0xC bytes for its slot table, so 2048 is 24 KB against the stock 3 KB."
+  }
+ },
+ "why": [
+  "NPCs are allocated from a typed object factory, not from a fixed array, so the assert is an ALLOCATION",
+  "FAILURE rather than a bounds check - there is no 'cmp' to relax:",
+  "",
+  "    NPCManager::nm_SetNPC",
+  "      0x004C6645   push 4                      ; object type 4 = NPC",
+  "      0x004C664A   push ecx                    ; &out handle",
+  "      0x004C664B   mov  ecx, 0x132826B8        ; the object manager singleton",
+  "      0x004C6650   call 0x0054FE20             ; factory Alloc",
+  "      0x004C6659   cmp  edi, esi               ; NULL?",
+  "      0x004C6663   push 0x006C5AD0             ; \"NPCManager::nm_SetNPC : Too many npc\"",
+  "",
+  "    the factory switches on the type id and each type has its own sub-pool:",
+  "      0x0054FE8A   cmp  eax, 0xC / jmp [eax*4 + 0x550070]",
+  "      case 4 ->  0x0054FEDF   lea ecx, [esi + 0xCC] ; call 0x004025D0   (pool Alloc)",
+  "",
+  "    the manager's constructor sizes every sub-pool in turn, and +0xCC is the NPC one:",
+  "      0x00557622   push 0x5DC  ; lea ecx,[esi+0xAC]   (1500)",
+  "      0x0055765C   push 0x100  ; lea ecx,[esi+0xCC]   (256)  <-- THIS ONE",
+  "      0x00557696   push 0x3E8  ; lea ecx,[esi+0xEC]   (1000)",
+  "      0x005576D0   push 0x1F40 ; lea ecx,[esi+0x10C]  (8000, the mob pool)",
+  "",
+  "ShineObjectPool::Create (0x005546F0) then heap-allocates the slot table:",
+  "      movzx eax, ax / inc eax / mov edx, 0xC / mul edx / push ecx / call 0x00654F0B",
+  "so nothing else is sized by the 256 and no relocation is needed - the single imm32 is the whole patch.",
+  "",
+  "Zone-wide, not per map: every map's NPCs share the one pool, which is why splitting maps across zones",
+  "postpones the problem instead of fixing it."
+ ],
+ "edits": [
+  {
+   "why": "ShineObjectManager ctor: NPC sub-pool (+0xCC) element count",
+   "at": "site",
+   "expect": "old_npcs",
+   "write": "npcs"
+  }
+ ],
+ "measured": [
+  "2026-09-15 Fiesta2026on2016 smoke stack, zone01 (SD_Vale00 + VoidDn + Roumen/Elderine maps):",
+  "  stock Zone.maps.exe : READY, 35 x 'NPCManager::nm_SetNPC : Too many npc' in one boot",
+  "  npcs=2048           : 545 asserts, never READY after 8 min -> reverted"
+ ]
+}
