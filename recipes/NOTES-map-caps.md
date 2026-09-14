@@ -111,6 +111,10 @@ live process, no assert, no exit. (That layout carries ~13,000 regen mobs, so th
 pool overflowed with 4,358 non-fatal `Too many mob` lines - the next cap to lift, tracked in
 Fiesta2026on2016/tickets.md.)
 
+**Final layout (2026-09-14 02:30):** `make_stack.py --zones 0,1,2,4 --instances-zone 1 --remap 3=4` - every
+FieldList row on a running zone (zone 3's 38 maps on zone 4). All four READY, zero cap asserts, zero
+`Too many mob`; zone 1 at 75 maps / 215 block infos / 22 clusters, zone 4 at 30 / 209, bot joined.
+
 ## Tooling
 
 `apply.py` edits were 32-bit only; imm8 sites and the opcode/nop bytes of the lea->mov rewrite need
