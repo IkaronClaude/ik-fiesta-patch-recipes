@@ -1,7 +1,7 @@
 {
  "name": "npc-object-pool-cap",
  "summary": "Zone.exe pre-sizes the NPC object pool at 256 per process and gives kind 4 exactly 256 handles. A zone hosting many maps runs out and every further NPC is dropped with 'NPCManager::nm_SetNPC : Too many npc'. Raise the pool AND move kind 4's handle range above the rest of the handle space.",
- "status": "WORKING 2026-09-15 at npcs=1024: zone01 of the Fiesta2026on2016 smoke stack boots READY with 216 maps, ZERO 'Too many npc' asserts (35 on stock) and no crash. A live probe shows the pool at 1024 slots with all 1024 carrying an object. THREE earlier attempts failed - see history[]; the cap is FOUR constants, not one.",
+ "status": "WORKING 2026-09-15 at npcs=1024: zone01 of the Fiesta2026on2016 smoke stack boots READY with 216 maps, ZERO 'Too many npc' asserts (35 on stock), no crash, and the NPCs past slot 256 get REAL handles (the puzzle-game AI scripts run clean). FOUR earlier attempts fell short - see history[]; the cap is SIX constants plus the handle range.",
  "target": {
   "file": "Zone00/Zone.exe",
   "sha256": "7ef3532da08194a377558322ca2bd06d1ce5bdb2813796e033173b72d9ff883d",
@@ -29,7 +29,9 @@
   "arr_count": "0x0055C6D9",
   "arr_cookie": "0x0055C6E8",
   "fill_bound": "0x0055C7AE",
-  "old_fill": "0xC00"
+  "old_fill": "0xC00",
+  "make_a_span": "0x00548F27",
+  "make_b_span": "0x00557C81"
  },
  "limits": {
   "npcs": {
@@ -93,7 +95,16 @@
   "    0x0055C7AD  cmp eax, 0xC00    ; 0xC00 = 256 * 12 -> exactly 256 attached",
   "    (the pool above it uses cmp eax, 0x4650 = 1500 * 12, the same shape)",
   "A slot whose object is NULL is handed out by the factory and nm_SetNPC asserts on it, which is why",
-  "raising anything else alone made the assert count go UP rather than down."
+  "raising anything else alone made the assert count go UP rather than down.",
+  "",
+  "AND EACH HANDLE MAKER RANGE-CHECKS THE INDEX against the kind's span before composing the handle:",
+  "    0x00548F26  mov edx, 0x100 ; cmp dx, ax ; ja compose ; mov eax, 0xFFFF ; ret     (maker A)",
+  "    0x00557C80  mov ecx, 0x100 ; cmp cx, ax ; ja compose ; mov esi, 0xFFFF ; ...     (maker B)",
+  "With the pool at 1024 but the checks at 256, NPC number 257 and up are CREATED (no assert) but carry handle",
+  "0xFFFF, the invalid handle. Nothing looks them up successfully: cIsObjectDead(0xFFFF) reports dead, and the",
+  "puzzle-game AI scripts (Xiaoming/Oluming/Toryming on Eld) took their dead branch, which indexes a nil global",
+  "and raised 'lss_Routine : function call error' 40 times a second. Seen by wrapping the routine in pcall and",
+  "logging the error through the cAssertLog binding: handle=65535 dead=1 ... attempt to index global 'PuzzleMemory'."
  ],
  "history": [
   "attempt 1 (pool only): the 257th NPC took handle 0x43BC, which sohu_HandleSplit resolves to KIND 8, so",
@@ -103,6 +114,7 @@
   "  Fiesta2026on2016) showed 1024 slots but only 256 with an object - the loop that ATTACHES objects to slots",
   "  ends on its own slot-byte bound, cmp eax, 0xC00 (= 256 * 12).",
   "The lesson: a 'cap' in this exe can be several independent constants that must all move together, and the",
+  "attempt 4 (five constants + handles): READY and 0 asserts, but the puzzle NPCs' AI errored every tick. Their\n  handle was 0xFFFF: both handle makers still checked index < 0x100 and returned the invalid handle above it.",
   "way to find the rest is to read the live structure out of the running process, not more disassembly."
  ],
  "edits": [
@@ -165,6 +177,18 @@
    "at": "make_b",
    "expect": "old_base",
    "write": "handle_base"
+  },
+  {
+   "why": "NPC handle maker A: index < span check (returns 0xFFFF, the invalid handle, above it)",
+   "at": "make_a_span",
+   "expect": "old_npcs",
+   "write": "npcs"
+  },
+  {
+   "why": "NPC handle maker B: index < span check (returns 0xFFFF above it)",
+   "at": "make_b_span",
+   "expect": "old_npcs",
+   "write": "npcs"
   }
  ],
  "measured": [
@@ -174,12 +198,12 @@
   "  pool only (512)           : never READY, 268 asserts, 2 crashes",
   "  pool+array+handles (1024) : never READY, 545 asserts - the FILL LOOP still stopped at 256",
   "  all four + handles (1024) : READY, 0 asserts, 0 crashes, pool 1024/1024 with an object   <-- this recipe",
-  "  handles only (256)        : READY, 35 asserts - proves the handle move is harmless on its own"
+  "  handles only (256)        : READY, 35 asserts - proves the handle move is harmless on its own",
+  "  six constants + handles (1024): READY, 0 asserts, 0 lss_Routine errors (was ~40/s), puzzle NPCs have real handles"
  ],
  "side_effects": [
   "NPCs that the stock zone silently DROPPED now spawn, which can expose content defects that were masked.",
-  "Measured here: the puzzle-game AI NPCs (Xiaoming/Oluming/Toryming) now run and their Lua Routine fails every",
-  "tick ('LuaScriptScenario::lss_Routine : function call error'), ~40/s. Their scripts and common.lua are",
-  "identical to the 2016 reference, so this is a data/content gap, not a patch defect - but it is noisy."
+  "(The earlier note here blaming the puzzle-game scripts was wrong: their lss_Routine errors were THIS recipe's",
+  "missing maker-span edits, fixed in the same commit that added them.)"
  ]
 }
