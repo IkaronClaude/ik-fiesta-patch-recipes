@@ -1,7 +1,7 @@
 {
   "name": "quest-count-cap",
   "summary": "Zone.exe refuses to start with more than 3000 quests. Raise the startup guard.",
-  "status": "BUILT, STATICALLY VERIFIED, AND RUN: 2026-09-13 a zone loaded 3121 quests on top of mob-spawn-group-cap (build/Zone.quest.exe) and characters joined (Fiesta2026on2016 smoke stack).",
+  "status": "BUILT, STATICALLY VERIFIED, AND RUN. 2026-09-13: one zone loaded 3121 quests on top of mob-spawn-group-cap (build/Zone.quest.exe) and characters joined. 2026-09-16: FIVE zones of the Fiesta2026on2016 smoke stack booted READY with 3126 quests each on Zone.maps.npc.dmg.exe, which chains this recipe with six others - well past the stock cap of 3000, no MAXQUEST assert on any zone.",
 
   "target": {
     "file": "Zone00/Zone.exe",
