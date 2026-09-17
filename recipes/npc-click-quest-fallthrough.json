@@ -1,0 +1,99 @@
+{
+  "name": "npc-click-quest-fallthrough",
+  "summary": "An NPC whose applicable quest script is EMPTY ignores every click. Fall through to the NPC's own role (menu / shop / flavour text) when the quest click ran nothing.",
+  "status": "PROVEN on a live zone 2026-09-17 with a scripted client (Fiesta2026on2016 tools/shim_client_test.py --click-mob). Same character, same quest row (20143 at status 6, DOING and END both empty), same click on Healer Ellen: stock sends nothing, patched sends 0x201C {2E 28}. Regression clicks on three NPCs with real quest scripts still draw their 0x4401 page. No crash file. The FIRST build of this recipe crashed the zone - read the cave notes.",
+  "target": {
+    "file": "Zone00/Zone.exe",
+    "sha256": "7ef3532da08194a377558322ca2bd06d1ce5bdb2813796e033173b72d9ff883d",
+    "size": 4673536
+  },
+  "params": {},
+  "consts": {
+    "npc_click":        "0x005C0250",
+    "call_site_rel32":  "0x004C48B4",
+    "next_insn":        "0x004C48B8",
+    "old_rel32":        "0x000FB998",
+    "role_path":        "0x004C4805"
+  },
+  "why": [
+    "ShinePlayer::InteractWithNPC (0x4C4660) decides what a click does BEFORE running anything:",
+    "",
+    "    r = CQuestZone::QuestPlayer_NPCClickCheck(npc)        ; 0x5BA250",
+    "    r == 1  ->  QuestPlayer_NPCClick(npc)                  ; 0x5C0250 - RETURN VALUE DISCARDED",
+    "    r == 2  ->  nothing (that quest's script is already running with this NPC)",
+    "    r == 0  ->  the NPC's role: send 0x201C NPCMENUOPEN if NPCMenu, else call the role directly",
+    "",
+    "NPCClickCheck answers 1 for any quest GetQuestStatusWithNPC picks whose status is 4..8 or 20. It never",
+    "looks at the script. NPCClick then runs QuestScriptRun, which picks START (4, 5, 20), DOING (6, 7) or END",
+    "(8), and each of those begins with CQuestParserScript::ParserStart -> CToken::OpenFromMemory, which",
+    "returns 0 for a zero-length script. So for an empty script the whole chain returns 0 - correctly",
+    "reporting that nothing ran - and InteractWithNPC throws that answer away. The server sends nothing and",
+    "the NPC is dead to that player for as long as the quest sits in that state.",
+    "",
+    "Empty scripts are ordinary data, not a conversion artefact: the 2016 originals have 245 empty DOING and",
+    "83 empty END scripts, the 2026 set 262 and 91. It was found on Healer Ellen and the Mysterious Merchant",
+    "(TevaL), both merchants, both silent while a quest of theirs sat at status 6 on an empty DOING. That",
+    "particular trigger was a converter bug (fixed in Fiesta2026on2016 bc6cc39), but the mechanism is stock",
+    "2016 and any merchant, storage keeper or gate with such a quest goes the same way.",
+    "",
+    "THE PATCH: the call at 0x4C48B3 goes through a 24-byte cave instead.",
+    "",
+    "    cave:  push dword [esp+4]      ; the NPC id AGAIN - see below",
+    "           call QuestPlayer_NPCClick",
+    "           test eax, eax",
+    "           jz   fall",
+    "           ret  4                  ; something ran (1) or is running (2): back to 0x4C48B8, arg popped",
+    "    fall:  add  esp, 8             ; drop the cave's return address and the original argument",
+    "           jmp  0x4C4805           ; the r == 0 path: the NPC's own role",
+    "",
+    "THE ARGUMENT HAS TO BE PUSHED AGAIN. QuestPlayer_NPCClick is __thiscall with one stack argument and",
+    "cleans it with `ret 4`. Reaching it through a `call` from the cave puts a second return address on the",
+    "stack, so a bare `call` makes the callee read 0x4C48B8 as its NPC id. The first build of this recipe",
+    "did exactly that: GetQuestStatusWithNPC found no quest for NPC 0x48B8, and NPCClick - which assumes",
+    "NPCClickCheck already vouched for one - dereferenced the null at 0x5C0378. One click took zone 4 down",
+    "(2026-09-17 11:45:56, callstack 005C0378 <- 1BECA005 <- 004C4D5F). ecx, the `this`, survives a push.",
+    "",
+    "0x4C4805 is where InteractWithNPC goes when NPCClickCheck says 0, reached from the same point as the",
+    "call site with the same stack depth (both follow NPCClickCheck's `ret 4`). It reads esi (the player) and",
+    "ebx (pushed for the role call); QuestPlayer_NPCClick saves and restores ebx, esi and edi, so they are",
+    "intact. The only state the failed quest click leaves behind is the session's current NPC (+0x904), which",
+    "the role path does not read, and current quest = 0xFFFF, which is its idle value.",
+    "",
+    "A 0 from NPCClick can also mean a script that fails to PARSE. Falling through to the role is right for",
+    "that too - it is what the player would get from that NPC with no quest at all.",
+    "",
+    "HOW TO PROVE IT: give a character a quest at status 6 whose DOING script is empty and whose NPC has",
+    "NPCMenu 1 (tools/quest_wipe.py in Fiesta2026on2016 restores a saved row), click the NPC, and look for",
+    "S->C 0x201C {mob id}. Stock: no reply at all. Patched: the menu opens."
+  ],
+  "new_section": {
+    "name": ".qfall",
+    "size": "0x1000",
+    "materialise": true,
+    "execute": true,
+    "note": "Executable. Must be materialised: code cannot live in a zero-fill BSS tail."
+  },
+  "code": [
+    {
+      "why": "quest click, falling through to the NPC's role when it ran nothing",
+      "at": "@newbase",
+      "emit": [
+        "FF742404",
+        "E8", { "rel32": "npc_click" },
+        "85C0",
+        "7403",
+        "C20400",
+        "83C408",
+        "E9", { "rel32": "role_path" }
+      ]
+    }
+  ],
+  "edits": [
+    {
+      "why": "InteractWithNPC: call the cave instead of QuestPlayer_NPCClick directly",
+      "at": "call_site_rel32",
+      "expect": "old_rel32",
+      "write": "@newbase - next_insn"
+    }
+  ]
+}

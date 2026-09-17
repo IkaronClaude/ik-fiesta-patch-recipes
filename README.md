@@ -182,6 +182,17 @@ python apply.py recipes/instance-cluster-cap.json     --exe build/Zone.maps2.exe
 python apply.py recipes/<any>.json --exe Z:/ServerSource/Zone00/Zone.exe --verify build/Zone.maps.exe
 ```
 
+### `npc-click-quest-fallthrough` — an NPC with an EMPTY quest script ignores every click
+
+`ShinePlayer::InteractWithNPC` decides between "quest" and "the NPC's own role" *before* running anything,
+then discards the quest click's result. A quest sitting on an empty DOING or END script (245 + 83 in the 2016
+data, 262 + 91 in the 2026 set) therefore runs nothing, sends nothing, and never reaches the menu or shop: the
+NPC is dead to that player. A 24-byte cave makes a quest click that ran nothing fall through to the role.
+
+Proven live with a scripted client. The cave has to **push the stack argument again** - `call`ing a
+`__thiscall` with a stack argument from a cave puts a second return address in front of it, and the first
+build of this recipe crashed the zone on one click because of exactly that. The recipe carries the callstack.
+
 ### `client-2026-npc-dialog-self-close` — the first CLIENT recipe: let the 2026 quest dialog close itself
 
 The runner does not care which executable it is pointed at, so client patches live here too. This one
