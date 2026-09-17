@@ -1,0 +1,380 @@
+{
+  "name": "handle-layout-2026",
+  "summary": "Give every Zone.exe object kind the handle range the 2026 client expects, so the client files players, drops, NPCs, doors and the rest under the right kind.",
+  "status": "Built and verified 2026-09-17; see the README entry for what has been seen live.",
+  "target": {
+    "file": "Zone00/Zone.exe",
+    "sha256": "7ef3532da08194a377558322ca2bd06d1ce5bdb2813796e033173b72d9ff883d",
+    "size": 4673536
+  },
+  "params": {},
+  "consts": {},
+  "why": [
+    "THE 2026 CLIENT DECIDES WHAT AN OBJECT IS FROM ITS HANDLE ALONE. Fiesta.exe 0x903BC0 splits a u16 handle",
+    "into (kind, index) with a chain of literal ranges, and code such as the NC_MAP_LOGOUT_CMD handler",
+    "(0x5A0E10) routes on the kind: kind 1 goes to the dropped-item manager, and so on.",
+    "",
+    "The 2016 zone hands handles out in a different layout. 2026 grew the mob range from 8000 to 12000 and",
+    "the NPC range from 256 to 1024, which moved every range after them:",
+    "",
+    "    kind            2016 zone          2026 client",
+    "    5  mobs         0x0000-0x1F40      0x0000-0x2EE0",
+    "    2  players      0x1F40-0x251C      0x2EE0-0x34BC",
+    "    3  mini houses  0x251C-0x2904      0x34BC-0x38A4",
+    "    1  drops        0x2904-0x34BC      0x38A4-0x445C",
+    "    0  axial flags  0x34BC-0x42BC      0x445C-0x525C",
+    "    4  NPCs         0x42BC-0x43BC      0x525C-0x565C   (npc-object-pool-cap, handle_base 0x525C)",
+    "    8  bandits      0x43BC-0x4BBC      0x565C-0x5E5C",
+    "    9  effects      0x4BBC-0x4FA4      0x5E5C-0x6244",
+    "    6  magic fields 0x4FA4-0x509E      0x6244-0x633E",
+    "    7  doors        0x509E-0x5486      0x633E-0x6726",
+    "    10 servants     0x5486-0x567A      0x6726-0x691A",
+    "    11 movers       0x567A-0x5A62      0x691A-0x6D02",
+    "    12 pets         0x5C56-0x6232      0x6EF6-0x74D2",
+    "",
+    "So a 2016 player (0x1F4F) and a 2016 drop (0x2908) are both mobs to the 2026 client. Found on a drop:",
+    "picking up Void MuruMuru's Energy left it lying on the ground - NC_MAP_LOGOUT_CMD for its handle went to",
+    "the mob manager - until a second click drew PICK_ACK error 0x34B, whose handler removes by handle",
+    "directly. The same mismatch can misroute anything the client decides by kind.",
+    "",
+    "THE PATCH moves each kind to its 2026 base and keeps its 2016 capacity; every span except the mobs'",
+    "is the same on both sides. Mobs stay where they are: their 2016 range already lies inside the 2026 one.",
+    "Handle bases live in exactly three kinds of place, found by searching the code section for every base",
+    "as an imm32 and as an imm16 (none) - sohu_HandleSplit (0x633650), each kind's sohu_Set<Kind>Handle and",
+    "its Shine<Kind>::so_RemakeHandle. sohu_HandleSplit tests both bounds in every block, so blocks move",
+    "independently; the players' block tests only its upper bound, and a handle between the old and new",
+    "player base now splits to an index past the pool and is refused by som_GetObject, as any stale handle is.",
+    "",
+    "Every subtract written here equals the one in the 2026 client's own table (checked when this file was",
+    "generated), and every upper equals the client's.",
+    "",
+    "NEEDS npc-object-pool-cap with --set handle_base=0x525C in the same build: kind 0's range now ends at",
+    "0x525C and kind 8 begins at 0x565C. build_zone.py does this."
+  ],
+  "edits": [
+    {
+      "why": "kind 2 players (ShinePlayer): split upper bound (span 1500 unchanged)",
+      "at": "0x0063366D",
+      "expect": "0x251C",
+      "write": "0x34BC"
+    },
+    {
+      "why": "kind 2 players (ShinePlayer): split handle -> index subtract",
+      "at": "0x0063367A",
+      "expect": "0xFFFFE0C0",
+      "write": "0xFFFFD120"
+    },
+    {
+      "why": "kind 2 players (ShinePlayer): handle maker sohu_Set*Handle",
+      "at": "0x00548E4A",
+      "expect": "0x1F40",
+      "write": "0x2EE0"
+    },
+    {
+      "why": "kind 2 players (ShinePlayer): handle maker so_RemakeHandle",
+      "at": "0x00559D72",
+      "expect": "0x1F40",
+      "write": "0x2EE0"
+    },
+    {
+      "why": "kind 3 mini houses (ShineMiniHouse): split lower bound",
+      "at": "0x00633688",
+      "expect": "0x251C",
+      "write": "0x34BC"
+    },
+    {
+      "why": "kind 3 mini houses (ShineMiniHouse): split upper bound (span 1000 unchanged)",
+      "at": "0x00633692",
+      "expect": "0x2904",
+      "write": "0x38A4"
+    },
+    {
+      "why": "kind 3 mini houses (ShineMiniHouse): split handle -> index subtract",
+      "at": "0x0063369F",
+      "expect": "0xFFFFDAE4",
+      "write": "0xFFFFCB44"
+    },
+    {
+      "why": "kind 3 mini houses (ShineMiniHouse): handle maker sohu_Set*Handle",
+      "at": "0x00548E7A",
+      "expect": "0x251C",
+      "write": "0x34BC"
+    },
+    {
+      "why": "kind 3 mini houses (ShineMiniHouse): handle maker so_RemakeHandle",
+      "at": "0x00555E92",
+      "expect": "0x251C",
+      "write": "0x34BC"
+    },
+    {
+      "why": "kind 1 dropped items (ShineDropItem): split lower bound",
+      "at": "0x006336AD",
+      "expect": "0x2904",
+      "write": "0x38A4"
+    },
+    {
+      "why": "kind 1 dropped items (ShineDropItem): split upper bound (span 3000 unchanged)",
+      "at": "0x006336B7",
+      "expect": "0x34BC",
+      "write": "0x445C"
+    },
+    {
+      "why": "kind 1 dropped items (ShineDropItem): split handle -> index subtract",
+      "at": "0x006336C4",
+      "expect": "0xFFFFD6FC",
+      "write": "0xFFFFC75C"
+    },
+    {
+      "why": "kind 1 dropped items (ShineDropItem): handle maker sohu_Set*Handle",
+      "at": "0x00548EAA",
+      "expect": "0x2904",
+      "write": "0x38A4"
+    },
+    {
+      "why": "kind 1 dropped items (ShineDropItem): handle maker so_RemakeHandle",
+      "at": "0x005552F2",
+      "expect": "0x2904",
+      "write": "0x38A4"
+    },
+    {
+      "why": "kind 0 axial flags (ShineAxialFlag): split lower bound",
+      "at": "0x006336D2",
+      "expect": "0x34BC",
+      "write": "0x445C"
+    },
+    {
+      "why": "kind 0 axial flags (ShineAxialFlag): split upper bound (span 3584 unchanged)",
+      "at": "0x006336DC",
+      "expect": "0x42BC",
+      "write": "0x525C"
+    },
+    {
+      "why": "kind 0 axial flags (ShineAxialFlag): split handle -> index subtract",
+      "at": "0x006336E9",
+      "expect": "0xFFFFCB44",
+      "write": "0xFFFFBBA4"
+    },
+    {
+      "why": "kind 0 axial flags (ShineAxialFlag): handle maker sohu_Set*Handle",
+      "at": "0x00548EDA",
+      "expect": "0x34BC",
+      "write": "0x445C"
+    },
+    {
+      "why": "kind 0 axial flags (ShineAxialFlag): handle maker so_RemakeHandle",
+      "at": "0x005562F2",
+      "expect": "0x34BC",
+      "write": "0x445C"
+    },
+    {
+      "why": "kind 8 bandits (ShineBandit): split lower bound",
+      "at": "0x0063371C",
+      "expect": "0x43BC",
+      "write": "0x565C"
+    },
+    {
+      "why": "kind 8 bandits (ShineBandit): split upper bound (span 2048 unchanged)",
+      "at": "0x00633726",
+      "expect": "0x4BBC",
+      "write": "0x5E5C"
+    },
+    {
+      "why": "kind 8 bandits (ShineBandit): split handle -> index subtract",
+      "at": "0x00633733",
+      "expect": "0xFFFFBC44",
+      "write": "0xFFFFA9A4"
+    },
+    {
+      "why": "kind 8 bandits (ShineBandit): handle maker sohu_Set*Handle",
+      "at": "0x00548F0A",
+      "expect": "0x43BC",
+      "write": "0x565C"
+    },
+    {
+      "why": "kind 8 bandits (ShineBandit): handle maker so_RemakeHandle",
+      "at": "0x00556F02",
+      "expect": "0x43BC",
+      "write": "0x565C"
+    },
+    {
+      "why": "kind 9 effects (ShineEffectObject): split lower bound",
+      "at": "0x00633741",
+      "expect": "0x4BBC",
+      "write": "0x5E5C"
+    },
+    {
+      "why": "kind 9 effects (ShineEffectObject): split upper bound (span 1000 unchanged)",
+      "at": "0x0063374B",
+      "expect": "0x4FA4",
+      "write": "0x6244"
+    },
+    {
+      "why": "kind 9 effects (ShineEffectObject): split handle -> index subtract",
+      "at": "0x00633758",
+      "expect": "0xFFFFB444",
+      "write": "0xFFFFA1A4"
+    },
+    {
+      "why": "kind 9 effects (ShineEffectObject): handle maker sohu_Set*Handle",
+      "at": "0x00548F6A",
+      "expect": "0x4BBC",
+      "write": "0x5E5C"
+    },
+    {
+      "why": "kind 9 effects (ShineEffectObject): handle maker so_RemakeHandle",
+      "at": "0x00555482",
+      "expect": "0x4BBC",
+      "write": "0x5E5C"
+    },
+    {
+      "why": "kind 6 magic fields (ShineMagicField): split lower bound",
+      "at": "0x00633766",
+      "expect": "0x4FA4",
+      "write": "0x6244"
+    },
+    {
+      "why": "kind 6 magic fields (ShineMagicField): split upper bound (span 250 unchanged)",
+      "at": "0x00633770",
+      "expect": "0x509E",
+      "write": "0x633E"
+    },
+    {
+      "why": "kind 6 magic fields (ShineMagicField): split handle -> index subtract",
+      "at": "0x0063377D",
+      "expect": "0xFFFFB05C",
+      "write": "0xFFFF9DBC"
+    },
+    {
+      "why": "kind 6 magic fields (ShineMagicField): handle maker sohu_Set*Handle",
+      "at": "0x00548F9A",
+      "expect": "0x4FA4",
+      "write": "0x6244"
+    },
+    {
+      "why": "kind 6 magic fields (ShineMagicField): handle maker so_RemakeHandle",
+      "at": "0x00555CD2",
+      "expect": "0x4FA4",
+      "write": "0x6244"
+    },
+    {
+      "why": "kind 7 doors (ShineDoor): split lower bound",
+      "at": "0x0063378B",
+      "expect": "0x509E",
+      "write": "0x633E"
+    },
+    {
+      "why": "kind 7 doors (ShineDoor): split upper bound (span 1000 unchanged)",
+      "at": "0x00633795",
+      "expect": "0x5486",
+      "write": "0x6726"
+    },
+    {
+      "why": "kind 7 doors (ShineDoor): split handle -> index subtract",
+      "at": "0x006337A2",
+      "expect": "0xFFFFAF62",
+      "write": "0xFFFF9CC2"
+    },
+    {
+      "why": "kind 7 doors (ShineDoor): handle maker sohu_Set*Handle",
+      "at": "0x00548FCA",
+      "expect": "0x509E",
+      "write": "0x633E"
+    },
+    {
+      "why": "kind 7 doors (ShineDoor): handle maker so_RemakeHandle",
+      "at": "0x00555BD2",
+      "expect": "0x509E",
+      "write": "0x633E"
+    },
+    {
+      "why": "kind 10 servants (ShineServant): split lower bound",
+      "at": "0x006337B0",
+      "expect": "0x5486",
+      "write": "0x6726"
+    },
+    {
+      "why": "kind 10 servants (ShineServant): split upper bound (span 500 unchanged)",
+      "at": "0x006337BA",
+      "expect": "0x567A",
+      "write": "0x691A"
+    },
+    {
+      "why": "kind 10 servants (ShineServant): split handle -> index subtract",
+      "at": "0x006337C7",
+      "expect": "0xFFFFAB7A",
+      "write": "0xFFFF98DA"
+    },
+    {
+      "why": "kind 10 servants (ShineServant): handle maker sohu_Set*Handle",
+      "at": "0x00548FFA",
+      "expect": "0x5486",
+      "write": "0x6726"
+    },
+    {
+      "why": "kind 10 servants (ShineServant): handle maker so_RemakeHandle",
+      "at": "0x00557072",
+      "expect": "0x5486",
+      "write": "0x6726"
+    },
+    {
+      "why": "kind 11 movers (ShineMover): split lower bound",
+      "at": "0x006337D5",
+      "expect": "0x567A",
+      "write": "0x691A"
+    },
+    {
+      "why": "kind 11 movers (ShineMover): split upper bound (span 1000 unchanged)",
+      "at": "0x006337DF",
+      "expect": "0x5A62",
+      "write": "0x6D02"
+    },
+    {
+      "why": "kind 11 movers (ShineMover): split handle -> index subtract",
+      "at": "0x006337EC",
+      "expect": "0xFFFFA986",
+      "write": "0xFFFF96E6"
+    },
+    {
+      "why": "kind 11 movers (ShineMover): handle maker sohu_Set*Handle",
+      "at": "0x0054902A",
+      "expect": "0x567A",
+      "write": "0x691A"
+    },
+    {
+      "why": "kind 11 movers (ShineMover): handle maker so_RemakeHandle",
+      "at": "0x0055EE22",
+      "expect": "0x567A",
+      "write": "0x691A"
+    },
+    {
+      "why": "kind 12 pets (ShinePet): split lower bound",
+      "at": "0x006337FA",
+      "expect": "0x5C56",
+      "write": "0x6EF6"
+    },
+    {
+      "why": "kind 12 pets (ShinePet): split upper bound (span 1500 unchanged)",
+      "at": "0x00633804",
+      "expect": "0x6232",
+      "write": "0x74D2"
+    },
+    {
+      "why": "kind 12 pets (ShinePet): split handle -> index subtract",
+      "at": "0x00633811",
+      "expect": "0xFFFFA3AA",
+      "write": "0xFFFF910A"
+    },
+    {
+      "why": "kind 12 pets (ShinePet): handle maker sohu_Set*Handle",
+      "at": "0x0054905A",
+      "expect": "0x5C56",
+      "write": "0x6EF6"
+    },
+    {
+      "why": "kind 12 pets (ShinePet): handle maker so_RemakeHandle",
+      "at": "0x00557342",
+      "expect": "0x5C56",
+      "write": "0x6EF6"
+    }
+  ]
+}

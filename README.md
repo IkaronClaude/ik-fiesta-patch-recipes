@@ -182,6 +182,19 @@ python apply.py recipes/instance-cluster-cap.json     --exe build/Zone.maps2.exe
 python apply.py recipes/<any>.json --exe Z:/ServerSource/Zone00/Zone.exe --verify build/Zone.maps.exe
 ```
 
+### `handle-layout-2026` — every object kind in the handle range the 2026 client expects
+
+The 2026 client decides what an object IS from its handle alone (`Fiesta.exe 0x903BC0`), and the 2016 zone
+allocates in a different layout: 2026 grew the mob range to 12000 and the NPC range to 1024, which moved every
+other kind. A 2016 player (`0x1F4F`) and a 2016 drop (`0x2908`) are both mobs to the 2026 client; a picked-up
+drop stayed on the ground because its removal went to the mob manager. 54 edits move each kind to its 2026
+base, capacities unchanged: `sohu_HandleSplit` plus each kind's two handle makers, the only places the bases
+occur (searched as imm32 and imm16). Needs `npc-object-pool-cap --set handle_base=0x525C`.
+
+**Build the zone with `build_zone.py`**, which applies all ten recipes in order from the stock exe and
+verifies each on the result. `--legacy --upto damage-overflow-saturate` reproduces the older
+`Zone.maps.npc.dmg.exe` byte for byte, which is how the chain order was recovered.
+
 ### `npc-click-quest-fallthrough` — an NPC with an EMPTY quest script ignores every click
 
 `ShinePlayer::InteractWithNPC` decides between "quest" and "the NPC's own role" *before* running anything,

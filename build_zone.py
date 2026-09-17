@@ -1,0 +1,107 @@
+"""Build the 2026on2016 Zone.exe from the stock one, every recipe in order, and verify each on the result.
+
+    python build_zone.py --exe Z:/ServerSource/Zone00/Zone.exe --out build/Zone.2026.exe
+    python build_zone.py --exe ... --out ... --upto damage-overflow-saturate    # a shorter chain
+
+The chain used to be applied by hand, one apply.py call at a time. The ORDER matters: recipes that add a
+section place it after whatever is already there, so the same recipes in another order give a different
+(still working) binary, and nobody could say which order a given build/ file came from. This file is that
+order, and the parameters each recipe was built with.
+
+Stacking needs --allow-hash-mismatch for every recipe after the first (each pins the stock sha256); that
+is safe because every site still declares the bytes it expects, and every recipe is --verify'd on the
+final binary before this reports success.
+"""
+import argparse
+import os
+import shutil
+import subprocess
+import sys
+import tempfile
+
+HERE = os.path.dirname(os.path.abspath(__file__))
+
+# (recipe, --set overrides). Order is load order.
+CHAIN = [
+    ('mob-spawn-group-cap', []),
+    ('quest-count-cap', []),
+    ('block-distribute-map-cap', []),
+    ('block-info-cap', []),
+    ('instance-cluster-cap', []),
+    # NPC handles at 0x525C, where the 2026 client expects them (handle-layout-2026 moves every other kind).
+    ('npc-object-pool-cap', ['handle_base=0x525C']),
+    ('damage-overflow-saturate', []),
+    ('npc-click-quest-fallthrough', []),
+    ('quest-script-end-notify', []),
+    ('handle-layout-2026', []),
+]
+
+# The chain as it was before handle-layout-2026, for reproducing build/Zone.maps.npc.dmg.exe exactly.
+LEGACY = {'npc-object-pool-cap': []}
+
+
+def apply(recipe, sets, src, dst, first):
+    cmd = [sys.executable, os.path.join(HERE, 'apply.py'), os.path.join(HERE, 'recipes', recipe + '.json'),
+           '--exe', src, '--out', dst]
+    if not first:
+        cmd.append('--allow-hash-mismatch')
+    for s in sets:
+        cmd += ['--set', s]
+    r = subprocess.run(cmd, capture_output=True, text=True)
+    if r.returncode != 0:
+        raise SystemExit('%s FAILED:\n%s%s' % (recipe, r.stdout, r.stderr))
+
+
+def verify(recipe, sets, stock, built):
+    # --verify checks the patched values at every site; the input only supplies the layout reference
+    cmd = [sys.executable, os.path.join(HERE, 'apply.py'), os.path.join(HERE, 'recipes', recipe + '.json'),
+           '--exe', stock, '--verify', built, '--allow-hash-mismatch']
+    for s in sets:
+        cmd += ['--set', s]
+    r = subprocess.run(cmd, capture_output=True, text=True)
+    return r.returncode == 0, (r.stdout + r.stderr).strip().splitlines()[-1:] or ['']
+
+
+def main():
+    ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    ap.add_argument('--exe', required=True, help='the STOCK Zone.exe; opened read-only')
+    ap.add_argument('--out', required=True)
+    ap.add_argument('--upto', help='stop after this recipe')
+    ap.add_argument('--legacy', action='store_true', help='NPC handles at the old 0xA000 (reproduces older builds)')
+    a = ap.parse_args()
+
+    chain = []
+    for name, sets in CHAIN:
+        chain.append((name, LEGACY.get(name, sets) if a.legacy else sets))
+        if name == a.upto:
+            break
+    if a.legacy and not a.upto:
+        chain = [c for c in chain if c[0] != 'handle-layout-2026']
+
+    work = tempfile.mkdtemp(prefix='zonebuild-')
+    try:
+        cur = a.exe
+        for i, (name, sets) in enumerate(chain):
+            nxt = os.path.join(work, '%02d-%s.exe' % (i, name))
+            apply(name, sets, cur, nxt, first=(i == 0))
+            print('  applied  %-30s %s' % (name, ' '.join(sets)))
+            cur = nxt
+        # Each recipe is verified against its own input, not the stock exe: sections added earlier move the
+        # addresses a later recipe's @newbase resolves to.
+        prev = a.exe
+        bad = 0
+        for i, (name, sets) in enumerate(chain):
+            ok, tail = verify(name, sets, prev if i == 0 else os.path.join(work, '%02d-%s.exe' % (i - 1, chain[i - 1][0])), cur)
+            print('  verify   %-30s %s' % (name, 'ok' if ok else 'FAILED: ' + tail[0]))
+            bad += not ok
+        if bad:
+            raise SystemExit('%d recipe(s) do not hold on the result; nothing written' % bad)
+        os.makedirs(os.path.dirname(os.path.abspath(a.out)), exist_ok=True)
+        shutil.copyfile(cur, a.out)
+        print('wrote %s' % a.out)
+    finally:
+        shutil.rmtree(work, ignore_errors=True)
+
+
+if __name__ == '__main__':
+    main()
