@@ -1,0 +1,102 @@
+{
+  "name": "quest-script-end-notify",
+  "summary": "Tell the client when a quest script reaches END, so a client that does not close its own dialog (2026) closes it on the LAST page only - no close/reopen between pages.",
+  "status": "PROVEN ON THE WIRE 2026-09-17 with a scripted client (Fiesta2026on2016 tools/shim_client_test.py --click-mob --ack-pages). Skillmaster Mora, one-page DOING script: stock sends the page and then nothing; patched sends the page, takes the ack, and sends 0x4401 {20135, command 1}. Healer Ellen, nine-page START script: pages 110401 -> 110402 -> 110403 with NO END between them. No crash file. NOT yet seen through a real 2026 client - that it closes the window on this packet is read from its handler, not observed.",
+  "target": {
+    "file": "Zone00/Zone.exe",
+    "sha256": "7ef3532da08194a377558322ca2bd06d1ce5bdb2813796e033173b72d9ff883d",
+    "size": 4673536
+  },
+  "params": {},
+  "consts": {
+    "quest_close":      "0x005B9E50",
+    "send_script_cmd":  "0x005BA960",
+    "call_site_rel32":  "0x005BE1FB",
+    "next_insn":        "0x005BE1FF",
+    "old_rel32":        "0xFFFFBC51"
+  },
+  "why": [
+    "THE ZONE ALREADY HAS THE SEND AND BOTH CLIENTS ALREADY HAVE THE HANDLER; one early exit keeps them apart.",
+    "",
+    "CQuestZone::QuestNext (0x5BDEF0) walks a quest script token by token. Its switch has a case for QSC_END",
+    "(command 1, jump table 0x5BF020 slot 0 -> 0x5BE0D9) that calls Send_NC_QUEST_SCRIPT_CMD_REQ - a 0x4401",
+    "carrying command 1. On the client, On_NC_QUEST_SCRIPT_CMD_REQ case 1 is CloseWin(NpcDialogWin), in the",
+    "2016 build (0x4BAB1A) and the 2026 one (Fiesta.exe 0x5B4645) alike.",
+    "",
+    "That case is dead code. The loop tests for END before it ever reaches the switch:",
+    "",
+    "    005BDFD1  call ParserNext",
+    "    005BDFDC  cmp  dword [esi+0x7D0], 1        ; token type == QSC_END ?",
+    "    005BDFE3  je   0x5BE1F8                    ; -> QuestClose + sp_EndOfTrade, nothing sent",
+    "",
+    "and again at the bottom of each pass (0x5BE1EB). So no capture of a 2016 server has ever shown a 0x4401",
+    "with command 1, and the live bridge log agrees (29 x command 02, 1 x 06, none of 01).",
+    "",
+    "The 2016 client never noticed: its dialog closes ITSELF on every button click and the next SAY reopens it.",
+    "The 2026 client does not - it holds the window open until it is told (NpcDialogWin::DirectMessage gates the",
+    "self-close on a flag only 0x442E sets; see client-2026-npc-dialog-self-close). Against a 2016 zone that",
+    "leaves the last page of every script stuck open. Both existing answers - that client recipe, and",
+    "Bridge2026 sending 0x442E after every page ack - close the window on EVERY click, which flickers between",
+    "pages. Only the server knows which page is the last one, and this is the server saying so.",
+    "",
+    "THE PATCH: the `call QuestClose` at the END exit (0x5BE1FA) goes through a cave.",
+    "",
+    "    cave:  cmp   dword [esi+0x7D0], 1      ; END itself, not EOF (0x23) or a parse stop (0)",
+    "           jne   close",
+    "           mov   eax, [ebx+0x8FC]          ; the token ParserNext just returned",
+    "           test  eax, eax",
+    "           jz    close",
+    "           movzx edx, word [ebx+0x906]     ; the running quest - QuestClose is about to clear it",
+    "           push  eax",
+    "           push  edx",
+    "           mov   ecx, ebx",
+    "           call  Send_NC_QUEST_SCRIPT_CMD_REQ   ; __thiscall(questId, STRUCT_QSC*), ret 8",
+    "    close: mov   ecx, ebx",
+    "           jmp   QuestClose                ; tail call: returns to 0x5BE1FF as the original did",
+    "",
+    "Same argument order as the dead case at 0x5BE0D9. QuestClose takes no stack argument, so reaching it by",
+    "jmp from a cave that was itself `call`ed leaves the stack exactly as the original call did - the",
+    "double-return-address trap that crashed the first npc-click-quest-fallthrough build does not arise. esi is",
+    "the parser (ebx+0xB8) on all three ways into 0x5BE1F8, and ebx / esi / edi survive the send.",
+    "",
+    "A 2016 client gets a CloseWin for a window it has already closed. Harmless.",
+    "",
+    "WITH THIS IN, Bridge2026 should stop sending 0x442E per ack (BRIDGE2026_CLOSE_DIALOG=0 / run-bridge",
+    "-NoDialogClose): the relayed 0x4401{END} closes the 2026 dialog by the client's own END case."
+  ],
+  "new_section": {
+    "name": ".qend",
+    "size": "0x1000",
+    "materialise": true,
+    "execute": true,
+    "note": "Executable. Must be materialised: code cannot live in a zero-fill BSS tail."
+  },
+  "code": [
+    {
+      "why": "send 0x4401{QSC_END} before QuestClose when the script reached END",
+      "at": "@newbase",
+      "emit": [
+        "83BED007000001",
+        "751A",
+        "8B83FC080000",
+        "85C0",
+        "7410",
+        "0FB79306090000",
+        "50",
+        "52",
+        "8BCB",
+        "E8", { "rel32": "send_script_cmd" },
+        "8BCB",
+        "E9", { "rel32": "quest_close" }
+      ]
+    }
+  ],
+  "edits": [
+    {
+      "why": "QuestNext END exit: call the cave instead of QuestClose directly",
+      "at": "call_site_rel32",
+      "expect": "old_rel32",
+      "write": "@newbase - next_insn"
+    }
+  ]
+}

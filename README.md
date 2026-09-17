@@ -193,6 +193,20 @@ Proven live with a scripted client. The cave has to **push the stack argument ag
 `__thiscall` with a stack argument from a cave puts a second return address in front of it, and the first
 build of this recipe crashed the zone on one click because of exactly that. The recipe carries the callstack.
 
+### `quest-script-end-notify` — tell the client when a quest script ends
+
+The zone already has the send and both clients already have the handler; one early exit keeps them apart.
+`CQuestZone::QuestNext` has a switch case for `QSC_END` that sends a `0x4401` carrying command 1, and
+`On_NC_QUEST_SCRIPT_CMD_REQ` case 1 on the client is `CloseWin(NpcDialogWin)` in the 2016 and the 2026 build
+alike - but the loop tests for END *before* the switch and leaves, so the case is dead code and no 2016
+server has ever put a command-1 `0x4401` on the wire.
+
+A 2016 client never noticed, because its dialog closes itself on every click. A 2026 client holds the
+window open until told, so against a 2016 zone the last page of every script sticks. The two other
+answers (`client-2026-npc-dialog-self-close`, or Bridge2026 sending `0x442E` per ack) close on *every*
+click, which flickers between pages. Only the server knows which page is last; a 42-byte cave at the END
+exit makes it say so. Bridge2026 notices the first END a zone sends and stops its per-ack close for it.
+
 ### `client-2026-npc-dialog-self-close` — the first CLIENT recipe: let the 2026 quest dialog close itself
 
 The runner does not care which executable it is pointed at, so client patches live here too. This one
