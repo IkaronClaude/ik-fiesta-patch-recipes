@@ -1,0 +1,79 @@
+{
+  "name": "client-2026-npc-dialog-self-close",
+  "summary": "2026 client: let the NPC quest dialog close itself on a button click again, as the 2016 client does, instead of waiting for a 0x442E no 2016 server sends.",
+  "status": "UNTESTED in a live client as of 2026-09-17. Both edits validate against the original and the byte patterns are disassembled below; the behaviour is argued from the two binaries, not yet observed.",
+  "target": {
+    "file": "Fiesta.exe",
+    "sha256": "79762e9a7f7bdf1a66f2b7826fa70945a1debe5b016ec5c9e8d600eb7357a730",
+    "size": 9264128
+  },
+  "params": {},
+  "consts": {
+    "je_rel8": "0x0072B036",
+    "gate_cmp": "0x0072B03B"
+  },
+  "why": [
+    "THE TARGET IS Fiesta.exe (2026-09-15, 9,264,128 B), NOT the Fiesta.bin beside it. That .bin is a stale",
+    "2026-08-19 build with no 0x442E handler and no 0x441F sender; the two are easy to confuse because both",
+    "contain 'quest_ack' and 'NpcDialogWin'.",
+    "",
+    "WHAT THE TWO CLIENTS DO. A button in the quest speech bubble runs SpeechBubbleDlgWin::OnCommand, whose",
+    "common tail (2016 0x5FA38A) broadcasts window message 0x24 to the parent, NpcDialogWin::DirectMessage:",
+    "",
+    "    2016  0x5F5730:   if (keepOpen) keepOpen = 0;  else CloseWin(this);",
+    "    2026  0x72B000:   if (keepOpen) keepOpen = 0;  if (g_C319D5 == 1) CloseWin(this);",
+    "",
+    "So a 2016 client closes its quest dialog on EVERY click and lets the server's next QSC_SAY reopen it",
+    "(On_NC_QUEST_SCRIPT_CMD_REQ case 2 -> OpenNpcQuestDialog + ShowWin). keepOpen (+0x70 on the messenger",
+    "sub-object, +0x158 on the window) is set only by OpenNpcNormalDialog, never for a quest page.",
+    "",
+    "2026 put a global in front of the close. g_C319D5 is cleared by OpenNpcQuestDialog (0x72A160) and",
+    "OpenUserQuestDialog (0x72AB80) on every page, and set by one quest packet only: 0x442E, handler",
+    "0x5B4BE0, which never reads its payload, sets the flag and calls NpcDialogWin close (0x72B1B0) on the",
+    "spot. A 2016 server has no such packet, so against one the flag is never 1 and the window never closes",
+    "by itself: Next and Complete Quest 'do nothing' on the last page of a script, Esc closes it (OnEscape",
+    "goes through CloseDialog, a different path), and the quest turns out to have progressed anyway.",
+    "",
+    "THE PATCH restores the 2016 branch exactly, in three bytes:",
+    "",
+    "    0072B031  80 7E 70 00           cmp  byte [esi+0x70], 0",
+    "    0072B035  74 04  ->  74 0D      je   0x72B044        ; keepOpen clear -> straight to CloseWin",
+    "    0072B037  C6 46 70 00           mov  byte [esi+0x70], 0",
+    "    0072B03B  80 3D  ->  EB 25      jmp  0x72B062        ; keepOpen was set: consumed, skip the close",
+    "    0072B03D  D5 19 C3 00 01 75 1E  (dead: the rest of the old cmp and its jne)",
+    "    0072B044  ...                   CloseWin(this)",
+    "",
+    "0x72B062 is the shared tail the old jne went to, so the fall-out path is the original one. There is a",
+    "base relocation at 0x72B03D (the flag's address operand). It is deliberately left in place: those four",
+    "bytes are now dead, so a rebase adjusts bytes nothing executes.",
+    "",
+    "WHAT THIS DOES NOT DO: remove the close-and-reopen between pages. That is native 2016 behaviour, not an",
+    "artefact - the 2016 client has always shut the window on a click and reopened it when the next SAY",
+    "arrived. The patch makes the close local and instant, which is how 2016 looks. Keeping the window up",
+    "between pages the way the official 2026 server does needs someone to know a page is the LAST one, and",
+    "only the server knows that.",
+    "",
+    "The flag keeps its other reader (0x729E80) and all its writers, so the client still behaves normally",
+    "against a server that does send 0x442E: that handler closes the window itself.",
+    "",
+    "ALTERNATIVE WITHOUT A CLIENT PATCH: fiesta-proxy Bridge2026 670816d sends 0x442E after every client",
+    "NC_QUEST_SCRIPT_CMD_ACK and swallows the ENDOFTRADE the 2026 close path emits. Same visible behaviour,",
+    "unmodified client. Use one or the other; with both, the bridge's 442E just closes an already-closed window."
+  ],
+  "edits": [
+    {
+      "why": "keepOpen clear: je straight to CloseWin (0x72B044) instead of to the g_C319D5 gate",
+      "at": "je_rel8",
+      "width": 1,
+      "expect": "0x04",
+      "write": "0x0D"
+    },
+    {
+      "why": "keepOpen was set and is now consumed: jmp 0x72B062 over the close, replacing the gate's cmp",
+      "at": "gate_cmp",
+      "width": 2,
+      "expect": "0x3D80",
+      "write": "0x25EB"
+    }
+  ]
+}
