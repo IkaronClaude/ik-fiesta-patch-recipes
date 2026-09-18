@@ -14,17 +14,24 @@
 // the zone's own threads exist; installing into code another thread is executing is how you get a crash
 // that reproduces once a week.
 #pragma once
-#include <stdint.h>
 #include <windows.h>
+#include "nocrt.h"
+
+// No CRT (see nocrt.h), so the fixed-width names come from here rather than <stdint.h>.
+typedef unsigned char uint8_t;
+typedef signed int int32_t;
+typedef unsigned int uint32_t;
+typedef unsigned int uintptr_t;
 
 namespace zone {
 
 // ---- addresses ------------------------------------------------------------------------------------
 
 // The module's actual base, resolved once. GetModuleHandle(NULL) is the exe no matter how we got loaded.
+// NOT a function-local static: that needs the CRT's __Init_thread_header/footer, which do not exist
+// here (see nocrt.h). Resolved on every call - GetModuleHandleW(NULL) is a cheap PEB read.
 inline uintptr_t module_base() {
-    static uintptr_t b = (uintptr_t)GetModuleHandleW(NULL);
-    return b;
+    return (uintptr_t)GetModuleHandleW(NULL);
 }
 
 // A PDB VA (based at kImageBase) -> the live address in this process.

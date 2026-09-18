@@ -1,5 +1,4 @@
 #include "hook.h"
-#include <stdio.h>
 #include <stdarg.h>
 
 namespace zone {
@@ -8,32 +7,63 @@ namespace zone {
 
 static HANDLE g_log = INVALID_HANDLE_VALUE;
 
+// STACK AT DllMain TIME IS TIGHT. Measured 2026-09-19 under Wine: a MAX_PATH wide buffer plus a 1 KB
+// format buffer overflowed the main thread's stack by 824 bytes before the zone's entry point had run
+// ("stack overflow ... addr <inside zonehook.text>"), so the DLL died in DllMain and wrote nothing. These
+// are static instead: DllMain is single-threaded by contract, and the hooks that run later are the only
+// concurrent callers of log(), which is guarded below.
+static wchar_t g_path[MAX_PATH];
+static char g_buf[1024];
+static CRITICAL_SECTION g_log_lock;
+static bool g_log_lock_ready = false;
+
 void log_init(const wchar_t* filename) {
-    wchar_t path[MAX_PATH];
+    InitializeCriticalSection(&g_log_lock);
+    g_log_lock_ready = true;
+    wchar_t* path = g_path;
     DWORD n = GetModuleFileNameW(GetModuleHandleW(NULL), path, MAX_PATH);
-    if (!n || n == MAX_PATH) return;
-    wchar_t* slash = wcsrchr(path, L'\\');
-    if (slash) *(slash + 1) = 0;
-    wcsncat_s(path, MAX_PATH, filename, _TRUNCATE);
-    g_log = CreateFileW(path, FILE_APPEND_DATA, FILE_SHARE_READ | FILE_SHARE_WRITE, NULL,
-                        OPEN_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL);
+    if (n && n < MAX_PATH) {
+        wchar_t* slash = 0;
+    for (wchar_t* q = path; *q; q++) if (*q == L'\\') slash = q;
+        if (slash) *(slash + 1) = 0;
+        lstrcatW(path, filename);
+        g_log = CreateFileW(path, FILE_APPEND_DATA, FILE_SHARE_READ | FILE_SHARE_WRITE, NULL,
+                            OPEN_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL);
+    }
+    // Fall back to the working directory. Measured 2026-09-19: a probe DLL writing a RELATIVE name landed
+    // in the server folder while the absolute path built from GetModuleFileNameW produced nothing, so do
+    // not make the log depend on that call succeeding - a hook that cannot report is a hook you cannot
+    // debug, and this is the one thing that has to work before anything else can be diagnosed.
+    if (g_log == INVALID_HANDLE_VALUE) {
+        g_log = CreateFileW(filename, FILE_APPEND_DATA, FILE_SHARE_READ | FILE_SHARE_WRITE, NULL,
+                            OPEN_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL);
+    }
 }
 
 void log(const char* fmt, ...) {
-    char buf[1024];
+    if (g_log_lock_ready) EnterCriticalSection(&g_log_lock);
+    char* buf = g_buf;                       // static: see the note above log_init
     va_list ap;
     va_start(ap, fmt);
-    int n = _vsnprintf_s(buf, sizeof(buf) - 2, _TRUNCATE, fmt, ap);
+    int n = zh::format(buf, sizeof(g_buf) - 2, fmt, ap);
     va_end(ap);
-    if (n < 0) n = (int)strlen(buf);
+    if (n < 0) n = (int)zh::str_len(buf);
     buf[n] = '\n';
     buf[n + 1] = 0;
+#ifndef ZH_NO_ODS
+    // Wine implements OutputDebugString by RAISING AN EXCEPTION (DBG_PRINTEXCEPTION_C). Setting one up
+    // costs a CONTEXT record on the stack, and at DllMain time - before the exe's entry point, with the
+    // main thread's stack barely committed - that was enough to overflow it: measured 2026-09-19, the
+    // zone died with "virtual_setup_exception stack overflow 824 bytes" inside zonehook's .text and wrote
+    // nothing. Compile with ZH_NO_ODS where the debugger channel is not worth that risk.
     OutputDebugStringA(buf);
+#endif
     if (g_log != INVALID_HANDLE_VALUE) {
         DWORD written = 0;
         WriteFile(g_log, buf, (DWORD)(n + 1), &written, NULL);
         FlushFileBuffers(g_log);
     }
+    if (g_log_lock_ready) LeaveCriticalSection(&g_log_lock);
 }
 
 // ---- instruction length ---------------------------------------------------------------------------
@@ -103,14 +133,14 @@ static uint8_t* alloc_near(size_t n) {
 
 bool detour(void* target, void* replacement, Detour* out) {
     if (!target || !replacement || !out) return false;
-    memset(out, 0, sizeof(*out));
+    zh::mem_set(out, 0, sizeof(*out));
     uint8_t* t = (uint8_t*)target;
 
     size_t len = 0;
     while (len < kJmpLen) {
         size_t n = insn_len(t + len);
         if (!n || len + n > sizeof(out->saved)) {
-            log("[hook] REFUSED %p: cannot decode the prologue at +%u (byte %02X)", target,
+            log("[hook] REFUSED %x: cannot decode the prologue at +%u (byte %02X)", target,
                 (unsigned)len, t[len]);
             return false;
         }
@@ -118,10 +148,10 @@ bool detour(void* target, void* replacement, Detour* out) {
     }
 
     uint8_t* tramp = alloc_near(len + kJmpLen);
-    if (!tramp) { log("[hook] REFUSED %p: no memory for a trampoline", target); return false; }
+    if (!tramp) { log("[hook] REFUSED %x: no memory for a trampoline", target); return false; }
 
     // the displaced bytes, then a jump back to the rest of the function
-    memcpy(tramp, t, len);
+    zh::mem_copy(tramp, t, len);
     // a displaced rel32 call/jmp would point at the wrong place from its new home: fix the one case that
     // can appear this early, and refuse the rest rather than relocate blind
     for (size_t k = 0; k < len; ) {
@@ -131,7 +161,7 @@ bool detour(void* target, void* replacement, Detour* out) {
             int32_t adj = (int32_t)((t + k) - (tramp + k));
             *(int32_t*)(tramp + k + 1) = rel + adj;
         } else if (t[k] == 0xEB) {
-            log("[hook] REFUSED %p: a short jump in the first %u bytes", target, (unsigned)len);
+            log("[hook] REFUSED %x: a short jump in the first %u bytes", target, (unsigned)len);
             VirtualFree(tramp, 0, MEM_RELEASE);
             return false;
         }
@@ -142,11 +172,11 @@ bool detour(void* target, void* replacement, Detour* out) {
 
     Unprotect up(t, len);
     if (!up.ok()) {
-        log("[hook] REFUSED %p: VirtualProtect failed (%lu)", target, GetLastError());
+        log("[hook] REFUSED %x: VirtualProtect failed (%lu)", target, GetLastError());
         VirtualFree(tramp, 0, MEM_RELEASE);
         return false;
     }
-    memcpy(out->saved, t, len);
+    zh::mem_copy(out->saved, t, len);
     out->saved_len = len;
     t[0] = 0xE9;
     *(int32_t*)(t + 1) = (int32_t)((uint8_t*)replacement - (t + kJmpLen));
@@ -162,7 +192,7 @@ bool undetour(Detour* d) {
     if (!d || !d->installed) return false;
     Unprotect up(d->target, d->saved_len);
     if (!up.ok()) return false;
-    memcpy(d->target, d->saved, d->saved_len);
+    zh::mem_copy(d->target, d->saved, d->saved_len);
     d->installed = false;
     VirtualFree(d->trampoline, 0, MEM_RELEASE);
     d->trampoline = NULL;

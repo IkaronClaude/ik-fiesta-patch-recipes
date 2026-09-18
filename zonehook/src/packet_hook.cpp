@@ -1,6 +1,5 @@
 #include "packet_hook.h"
-#include <string.h>
-#include <stdio.h>
+#include "nocrt.h"
 
 namespace zone {
 
@@ -10,14 +9,15 @@ static int g_count = 0;
 void* handler_address(const char* name) {
     if (!name) return NULL;
     const char* want = name;
-    if (strncmp(want, "sp_", 3) != 0) {
+    if (!(want[0] == 's' && want[1] == 'p' && want[2] == '_')) {
         // allow the bare packet name: "NC_ITEM_RELOC_REQ" -> "sp_NC_ITEM_RELOC_REQ"
         static char buf[128];
-        _snprintf_s(buf, sizeof(buf), _TRUNCATE, "sp_%s", name);
+        zh::str_copy(buf, sizeof(buf), "sp_");
+        zh::str_copy(buf + 3, sizeof(buf) - 3, name);
         want = buf;
     }
     for (int i = 0; i < kHandlerCount; i++) {
-        if (strcmp(kHandlers[i].name, want) == 0) return rebase(kHandlers[i].va);
+        if (zh::str_cmp(kHandlers[i].name, want) == 0) return rebase(kHandlers[i].va);
     }
     return NULL;
 }
@@ -29,11 +29,11 @@ bool hook_packet(const char* name, void* replacement, Detour* out) {
         return false;
     }
     if (!detour(at, replacement, out)) {
-        log("[hook] %s at %p: detour refused", name, at);
+        log("[hook] %s at %x: detour refused", name, at);
         return false;
     }
     if (g_count < (int)(sizeof(g_installed) / sizeof(g_installed[0]))) g_installed[g_count++] = out;
-    log("[hook] %s at %p -> %p (trampoline %p, %u bytes displaced)", name, at, replacement,
+    log("[hook] %s at %x -> %x (trampoline %x, %u bytes displaced)", name, at, replacement,
         out->trampoline, (unsigned)out->saved_len);
     return true;
 }

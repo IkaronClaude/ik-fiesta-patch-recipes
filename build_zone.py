@@ -40,7 +40,11 @@ CHAIN = [
 
 # Built and verified but NOT yet booted on a live zone: applied only with --experimental, so nobody gets an untested
 # binary by running the default chain. Move an entry up into CHAIN once it has run.
-EXPERIMENTAL = []
+EXPERIMENTAL = [
+    # Adds an import for zonehook.dll so features can be written in C++ (see zonehook/README.md). Structurally
+    # verified with pefile and the hook library passes its own self-test, but no zone has booted with it yet.
+    ('dll-loader', []),
+]
 
 # The chain as it was before handle-layout-2026, for reproducing build/Zone.maps.npc.dmg.exe exactly.
 LEGACY = {'npc-object-pool-cap': []}
