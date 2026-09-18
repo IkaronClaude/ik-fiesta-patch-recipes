@@ -36,6 +36,13 @@ CHAIN = [
     ('handle-layout-2026', []),
 ]
 
+# Built and verified but NOT yet booted on a live zone: applied only with --experimental, so nobody gets an untested
+# binary by running the default chain. Move an entry up into CHAIN once it has run.
+EXPERIMENTAL = [
+    # NPC.txt rows: 1024 -> 4096 (the whole NPCManager global moves to a new section; 111 sites)
+    ('npc-table-cap', []),
+]
+
 # The chain as it was before handle-layout-2026, for reproducing build/Zone.maps.npc.dmg.exe exactly.
 LEGACY = {'npc-object-pool-cap': []}
 
@@ -67,6 +74,7 @@ def main():
     ap.add_argument('--exe', required=True, help='the STOCK Zone.exe; opened read-only')
     ap.add_argument('--out', required=True)
     ap.add_argument('--upto', help='stop after this recipe')
+    ap.add_argument('--experimental', action='store_true', help='also apply the recipes that have not been booted yet')
     ap.add_argument('--legacy', action='store_true', help='NPC handles at the old 0xA000 (reproduces older builds)')
     a = ap.parse_args()
 
@@ -77,6 +85,8 @@ def main():
             break
     if a.legacy and not a.upto:
         chain = [c for c in chain if c[0] != 'handle-layout-2026']
+    if a.experimental and not a.upto and not a.legacy:
+        chain += EXPERIMENTAL
 
     work = tempfile.mkdtemp(prefix='zonebuild-')
     try:

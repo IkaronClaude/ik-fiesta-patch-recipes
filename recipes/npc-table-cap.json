@@ -1,0 +1,719 @@
+{
+  "name": "npc-table-cap",
+  "summary": "Lift the 1024-row limit of NPC.txt: NPCManager keeps the whole table in a fixed array inside a global, and row 1025 overwrites its own row count.",
+  "status": "GENERATED 2026-09-18 and verified to apply on the stock exe and on top of the full chain. NOT yet booted - see the README entry.",
+  "target": {
+    "file": "Zone00/Zone.exe",
+    "sha256": "7ef3532da08194a377558322ca2bd06d1ce5bdb2813796e033173b72d9ff883d",
+    "size": 4673536
+  },
+  "params": {
+    "rows": 4096
+  },
+  "consts": {},
+  "why": [
+    "NPCManager (global ?npcmanager at 0x0DA29A60, 0x13858 bytes) is laid out as",
+    "",
+    "    +0x0000  NPCIndexArray rows[1024]   12 bytes each: NPCInformTemplete*, NPCRole*, u16 handle (0xFFFF = none)",
+    "    +0x3000  u32 row count",
+    "    +0x3004  OptionReader reader        0x10854 bytes (the parsed NPC.txt)",
+    "",
+    "nm_Load appends one row per ShineNPC record of NPC.txt - the WHOLE file, whatever maps the zone hosts - and",
+    "never tests the count. Row 1025 lands on +0x3000, i.e. on the count itself: the loader then sees zero NPCs,",
+    "asserts \"NPCManager::nm_Load : Empty NPC inform\" and ShineExits. Every zone of the cluster goes down at",
+    "startup. Found 2026-09-18 when the first full capture harvest took NPC.txt from 895 rows to 1043.",
+    "",
+    "The array cannot grow in place (the next global follows at 0x0DA3D2B8), so the whole object moves to a new",
+    "zero-filled section sized for `rows` rows, and three kinds of site move with it, all found by decoding the",
+    "stock exe (tools/mk_npc_table_cap.py - rerun it to reproduce this file):",
+    "",
+    "  - every [this + 0x3000] and [this + 0x3004] inside the ten NPCManager methods  -> rows*12, rows*12 + 4",
+    "  - every `0x400` the methods compare the count or a loop index against           -> rows",
+    "    (nm_Load clears the array with it, nm_DynamicRegenerateNPC / nm_DynamicReleaseNPC scan it for a free",
+    "    or matching handle, the destructor walks it)",
+    "  - every `mov ecx, offset npcmanager` (22) and `offset npcmanager.reader` (3)     -> the new section",
+    "",
+    "The old 80 KB of .data are simply no longer referenced. No other section holds the address (checked).",
+    "`[esi + 0x3000]` also occurs in one unrelated class (0x004152D6, a run of consecutive fields); sites",
+    "outside the ten methods are left alone and listed by the generator.",
+    "",
+    "This is the TABLE cap. The per-zone NPC OBJECT pool and handle range are npc-object-pool-cap (1024 per zone,",
+    "0x525C..0x565C with handle-layout-2026): a zone still cannot host more than 1024 NPCs, but NPC.txt as a",
+    "whole - every map of every zone - can now hold `rows`.",
+    "After deploying it, raise NPC_ROW_CAP in Fiesta2026on2016 tools/merge_harvest.py to match."
+  ],
+  "new_section": {
+    "name": ".npct",
+    "size": "rows * 12 + 4 + 0x10854",
+    "materialise": false,
+    "note": "Zero-filled data, exactly as the original lives in the BSS tail of .data."
+  },
+  "edits": [
+    {
+      "why": "nm_FindNPCFunc: row count  (mov eax, dword ptr [esi + 0x3000])",
+      "at": "0x00418F20",
+      "expect": "0x3000",
+      "write": "rows * 12"
+    },
+    {
+      "why": "nm_FindNPCFunc: row count  (mov ecx, dword ptr [esi + 0x3000])",
+      "at": "0x00418F43",
+      "expect": "0x3000",
+      "write": "rows * 12"
+    },
+    {
+      "why": "nm_FindNPCFunc: the row bound  (cmp ecx, 0x400)",
+      "at": "0x00418F49",
+      "expect": "0x400",
+      "write": "rows"
+    },
+    {
+      "why": "nm_FindNPCFunc: the row bound  (cmp ecx, 0x400)",
+      "at": "0x00418F61",
+      "expect": "0x400",
+      "write": "rows"
+    },
+    {
+      "why": "&npcmanager  (mov ecx, 0xda29a60 at 0x0041B489)",
+      "at": "0x0041B48A",
+      "expect": "0xDA29A60",
+      "write": "@newbase"
+    },
+    {
+      "why": "&npcmanager  (mov ecx, 0xda29a60 at 0x00421F72)",
+      "at": "0x00421F73",
+      "expect": "0xDA29A60",
+      "write": "@newbase"
+    },
+    {
+      "why": "&npcmanager  (mov ecx, 0xda29a60 at 0x004296B7)",
+      "at": "0x004296B8",
+      "expect": "0xDA29A60",
+      "write": "@newbase"
+    },
+    {
+      "why": "&npcmanager  (mov ecx, 0xda29a60 at 0x004855D5)",
+      "at": "0x004855D6",
+      "expect": "0xDA29A60",
+      "write": "@newbase"
+    },
+    {
+      "why": "&npcmanager  (mov ecx, 0xda29a60 at 0x004858FF)",
+      "at": "0x00485900",
+      "expect": "0xDA29A60",
+      "write": "@newbase"
+    },
+    {
+      "why": "&npcmanager  (mov ecx, 0xda29a60 at 0x00485C40)",
+      "at": "0x00485C41",
+      "expect": "0xDA29A60",
+      "write": "@newbase"
+    },
+    {
+      "why": "&npcmanager  (mov ecx, 0xda29a60 at 0x00485D46)",
+      "at": "0x00485D47",
+      "expect": "0xDA29A60",
+      "write": "@newbase"
+    },
+    {
+      "why": "&npcmanager  (mov ecx, 0xda29a60 at 0x0048768A)",
+      "at": "0x0048768B",
+      "expect": "0xDA29A60",
+      "write": "@newbase"
+    },
+    {
+      "why": "&npcmanager  (mov ecx, 0xda29a60 at 0x004C4782)",
+      "at": "0x004C4783",
+      "expect": "0xDA29A60",
+      "write": "@newbase"
+    },
+    {
+      "why": "operator OptionReader*: OptionReader member  (lea eax, [ecx + 0x3004])",
+      "at": "0x004C52E2",
+      "expect": "0x3004",
+      "write": "rows * 12 + 4"
+    },
+    {
+      "why": "nm_DynamicReleaseNPC: row count  (mov eax, dword ptr [ecx + 0x3000])",
+      "at": "0x004C5315",
+      "expect": "0x3000",
+      "write": "rows * 12"
+    },
+    {
+      "why": "nm_DynamicReleaseNPC: the row bound  (cmp eax, 0x400)",
+      "at": "0x004C531A",
+      "expect": "0x400",
+      "write": "rows"
+    },
+    {
+      "why": "nm_DynamicReleaseNPC: the row bound  (cmp eax, 0x400)",
+      "at": "0x004C533A",
+      "expect": "0x400",
+      "write": "rows"
+    },
+    {
+      "why": "&npcmanager.reader  (mov ecx, 0xda2ca64 at 0x004C544F)",
+      "at": "0x004C5450",
+      "expect": "0xDA2CA64",
+      "write": "@newbase + rows * 12 + 4"
+    },
+    {
+      "why": "nm_Load: OptionReader member  (lea ecx, [esi + 0x3004])",
+      "at": "0x004C5972",
+      "expect": "0x3004",
+      "write": "rows * 12 + 4"
+    },
+    {
+      "why": "nm_Load: OptionReader member  (lea ecx, [esi + 0x3004])",
+      "at": "0x004C5986",
+      "expect": "0x3004",
+      "write": "rows * 12 + 4"
+    },
+    {
+      "why": "nm_Load: OptionReader member  (lea ecx, [esi + 0x3004])",
+      "at": "0x004C5991",
+      "expect": "0x3004",
+      "write": "rows * 12 + 4"
+    },
+    {
+      "why": "nm_Load: row count  (mov dword ptr [esi + 0x3000], ebx)",
+      "at": "0x004C59C6",
+      "expect": "0x3000",
+      "write": "rows * 12"
+    },
+    {
+      "why": "nm_Load: the row bound  (mov ecx, 0x400)",
+      "at": "0x004C59CB",
+      "expect": "0x400",
+      "write": "rows"
+    },
+    {
+      "why": "nm_Load: row count  (mov eax, dword ptr [esi + 0x3000])",
+      "at": "0x004C59D6",
+      "expect": "0x3000",
+      "write": "rows * 12"
+    },
+    {
+      "why": "nm_Load: row count  (mov eax, dword ptr [esi + 0x3000])",
+      "at": "0x004C59E2",
+      "expect": "0x3000",
+      "write": "rows * 12"
+    },
+    {
+      "why": "nm_Load: row count  (mov eax, dword ptr [esi + 0x3000])",
+      "at": "0x004C59EF",
+      "expect": "0x3000",
+      "write": "rows * 12"
+    },
+    {
+      "why": "nm_Load: row count  (add dword ptr [esi + 0x3000], edi)",
+      "at": "0x004C5A02",
+      "expect": "0x3000",
+      "write": "rows * 12"
+    },
+    {
+      "why": "nm_Load: row count  (cmp dword ptr [esi + 0x3000], ecx)",
+      "at": "0x004C5A08",
+      "expect": "0x3000",
+      "write": "rows * 12"
+    },
+    {
+      "why": "nm_Load: row count  (mov dword ptr [esi + 0x3000], ebx)",
+      "at": "0x004C5A10",
+      "expect": "0x3000",
+      "write": "rows * 12"
+    },
+    {
+      "why": "nm_Load: row count  (mov ecx, dword ptr [esi + 0x3000])",
+      "at": "0x004C5A16",
+      "expect": "0x3000",
+      "write": "rows * 12"
+    },
+    {
+      "why": "nm_Load: OptionReader member  (lea ecx, [esi + 0x3004])",
+      "at": "0x004C5A46",
+      "expect": "0x3004",
+      "write": "rows * 12 + 4"
+    },
+    {
+      "why": "nm_Load: row count  (mov ecx, dword ptr [esi + 0x3000])",
+      "at": "0x004C5A51",
+      "expect": "0x3000",
+      "write": "rows * 12"
+    },
+    {
+      "why": "nm_Load: row count  (mov eax, dword ptr [esi + 0x3000])",
+      "at": "0x004C5A5D",
+      "expect": "0x3000",
+      "write": "rows * 12"
+    },
+    {
+      "why": "nm_Load: row count  (mov eax, dword ptr [esi + 0x3000])",
+      "at": "0x004C5B3A",
+      "expect": "0x3000",
+      "write": "rows * 12"
+    },
+    {
+      "why": "nm_Load: row count  (mov eax, dword ptr [esi + 0x3000])",
+      "at": "0x004C5BDC",
+      "expect": "0x3000",
+      "write": "rows * 12"
+    },
+    {
+      "why": "nm_Load: row count  (mov eax, dword ptr [esi + 0x3000])",
+      "at": "0x004C5C1A",
+      "expect": "0x3000",
+      "write": "rows * 12"
+    },
+    {
+      "why": "nm_Load: row count  (add dword ptr [esi + 0x3000], edi)",
+      "at": "0x004C5C78",
+      "expect": "0x3000",
+      "write": "rows * 12"
+    },
+    {
+      "why": "nm_Load: row count  (mov eax, dword ptr [esi + 0x3000])",
+      "at": "0x004C5D1F",
+      "expect": "0x3000",
+      "write": "rows * 12"
+    },
+    {
+      "why": "nm_Load: row count  (mov eax, dword ptr [esi + 0x3000])",
+      "at": "0x004C5DBD",
+      "expect": "0x3000",
+      "write": "rows * 12"
+    },
+    {
+      "why": "nm_Load: row count  (add dword ptr [esi + 0x3000], edi)",
+      "at": "0x004C5DCF",
+      "expect": "0x3000",
+      "write": "rows * 12"
+    },
+    {
+      "why": "nm_Load: row count  (mov eax, dword ptr [esi + 0x3000])",
+      "at": "0x004C5E75",
+      "expect": "0x3000",
+      "write": "rows * 12"
+    },
+    {
+      "why": "nm_Load: row count  (mov eax, dword ptr [esi + 0x3000])",
+      "at": "0x004C5EB6",
+      "expect": "0x3000",
+      "write": "rows * 12"
+    },
+    {
+      "why": "nm_Load: row count  (add dword ptr [esi + 0x3000], edi)",
+      "at": "0x004C5EC8",
+      "expect": "0x3000",
+      "write": "rows * 12"
+    },
+    {
+      "why": "nm_Load: row count  (mov eax, dword ptr [esi + 0x3000])",
+      "at": "0x004C5F5F",
+      "expect": "0x3000",
+      "write": "rows * 12"
+    },
+    {
+      "why": "nm_Load: row count  (mov eax, dword ptr [esi + 0x3000])",
+      "at": "0x004C5F79",
+      "expect": "0x3000",
+      "write": "rows * 12"
+    },
+    {
+      "why": "nm_Load: row count  (add dword ptr [esi + 0x3000], edi)",
+      "at": "0x004C5F8B",
+      "expect": "0x3000",
+      "write": "rows * 12"
+    },
+    {
+      "why": "nm_Load: row count  (mov eax, dword ptr [esi + 0x3000])",
+      "at": "0x004C6022",
+      "expect": "0x3000",
+      "write": "rows * 12"
+    },
+    {
+      "why": "nm_Load: row count  (mov eax, dword ptr [esi + 0x3000])",
+      "at": "0x004C603C",
+      "expect": "0x3000",
+      "write": "rows * 12"
+    },
+    {
+      "why": "nm_Load: row count  (add dword ptr [esi + 0x3000], edi)",
+      "at": "0x004C604E",
+      "expect": "0x3000",
+      "write": "rows * 12"
+    },
+    {
+      "why": "nm_Load: row count  (mov eax, dword ptr [esi + 0x3000])",
+      "at": "0x004C60E9",
+      "expect": "0x3000",
+      "write": "rows * 12"
+    },
+    {
+      "why": "nm_Load: row count  (mov eax, dword ptr [esi + 0x3000])",
+      "at": "0x004C6103",
+      "expect": "0x3000",
+      "write": "rows * 12"
+    },
+    {
+      "why": "nm_Load: row count  (add dword ptr [esi + 0x3000], edi)",
+      "at": "0x004C6115",
+      "expect": "0x3000",
+      "write": "rows * 12"
+    },
+    {
+      "why": "nm_Load: row count  (mov eax, dword ptr [esi + 0x3000])",
+      "at": "0x004C6120",
+      "expect": "0x3000",
+      "write": "rows * 12"
+    },
+    {
+      "why": "nm_Load: row count  (add dword ptr [esi + 0x3000], edi)",
+      "at": "0x004C6134",
+      "expect": "0x3000",
+      "write": "rows * 12"
+    },
+    {
+      "why": "nm_Load: row count  (mov eax, dword ptr [esi + 0x3000])",
+      "at": "0x004C61CF",
+      "expect": "0x3000",
+      "write": "rows * 12"
+    },
+    {
+      "why": "nm_Load: row count  (mov eax, dword ptr [esi + 0x3000])",
+      "at": "0x004C61E9",
+      "expect": "0x3000",
+      "write": "rows * 12"
+    },
+    {
+      "why": "nm_Load: row count  (add dword ptr [esi + 0x3000], edi)",
+      "at": "0x004C61FB",
+      "expect": "0x3000",
+      "write": "rows * 12"
+    },
+    {
+      "why": "nm_Load: row count  (mov eax, dword ptr [esi + 0x3000])",
+      "at": "0x004C6206",
+      "expect": "0x3000",
+      "write": "rows * 12"
+    },
+    {
+      "why": "nm_Load: row count  (add dword ptr [esi + 0x3000], edi)",
+      "at": "0x004C621A",
+      "expect": "0x3000",
+      "write": "rows * 12"
+    },
+    {
+      "why": "nm_Load: row count  (mov eax, dword ptr [esi + 0x3000])",
+      "at": "0x004C627F",
+      "expect": "0x3000",
+      "write": "rows * 12"
+    },
+    {
+      "why": "nm_Load: row count  (mov eax, dword ptr [esi + 0x3000])",
+      "at": "0x004C6299",
+      "expect": "0x3000",
+      "write": "rows * 12"
+    },
+    {
+      "why": "nm_Load: row count  (add dword ptr [esi + 0x3000], edi)",
+      "at": "0x004C62AB",
+      "expect": "0x3000",
+      "write": "rows * 12"
+    },
+    {
+      "why": "nm_Load: row count  (mov eax, dword ptr [esi + 0x3000])",
+      "at": "0x004C62B6",
+      "expect": "0x3000",
+      "write": "rows * 12"
+    },
+    {
+      "why": "nm_Load: row count  (add dword ptr [esi + 0x3000], edi)",
+      "at": "0x004C62CA",
+      "expect": "0x3000",
+      "write": "rows * 12"
+    },
+    {
+      "why": "nm_Load: row count  (mov edx, dword ptr [esi + 0x3000])",
+      "at": "0x004C6334",
+      "expect": "0x3000",
+      "write": "rows * 12"
+    },
+    {
+      "why": "nm_Load: row count  (mov ecx, dword ptr [esi + 0x3000])",
+      "at": "0x004C6348",
+      "expect": "0x3000",
+      "write": "rows * 12"
+    },
+    {
+      "why": "nm_Load: row count  (add dword ptr [esi + 0x3000], edi)",
+      "at": "0x004C635A",
+      "expect": "0x3000",
+      "write": "rows * 12"
+    },
+    {
+      "why": "nm_Load: row count  (mov edx, dword ptr [esi + 0x3000])",
+      "at": "0x004C63A0",
+      "expect": "0x3000",
+      "write": "rows * 12"
+    },
+    {
+      "why": "nm_Load: row count  (mov ecx, dword ptr [esi + 0x3000])",
+      "at": "0x004C63B4",
+      "expect": "0x3000",
+      "write": "rows * 12"
+    },
+    {
+      "why": "nm_Load: row count  (add dword ptr [esi + 0x3000], edi)",
+      "at": "0x004C63C6",
+      "expect": "0x3000",
+      "write": "rows * 12"
+    },
+    {
+      "why": "nm_Load: row count  (mov edx, dword ptr [esi + 0x3000])",
+      "at": "0x004C6408",
+      "expect": "0x3000",
+      "write": "rows * 12"
+    },
+    {
+      "why": "nm_Load: row count  (mov ecx, dword ptr [esi + 0x3000])",
+      "at": "0x004C641C",
+      "expect": "0x3000",
+      "write": "rows * 12"
+    },
+    {
+      "why": "nm_Load: row count  (add dword ptr [esi + 0x3000], edi)",
+      "at": "0x004C642E",
+      "expect": "0x3000",
+      "write": "rows * 12"
+    },
+    {
+      "why": "nm_Load: row count  (mov ecx, dword ptr [esi + 0x3000])",
+      "at": "0x004C6439",
+      "expect": "0x3000",
+      "write": "rows * 12"
+    },
+    {
+      "why": "nm_Load: row count  (add dword ptr [esi + 0x3000], edi)",
+      "at": "0x004C644D",
+      "expect": "0x3000",
+      "write": "rows * 12"
+    },
+    {
+      "why": "nm_Load: row count  (add dword ptr [esi + 0x3000], edi)",
+      "at": "0x004C647A",
+      "expect": "0x3000",
+      "write": "rows * 12"
+    },
+    {
+      "why": "nm_Load: row count  (cmp dword ptr [esi + 0x3000], ebx)",
+      "at": "0x004C6487",
+      "expect": "0x3000",
+      "write": "rows * 12"
+    },
+    {
+      "why": "&npcmanager.reader  (mov ecx, 0xda2ca64 at 0x004C64DB)",
+      "at": "0x004C64DC",
+      "expect": "0xDA2CA64",
+      "write": "@newbase + rows * 12 + 4"
+    },
+    {
+      "why": "nm_SetNPC: row count  (cmp dword ptr [edi + 0x3000], esi)",
+      "at": "0x004C65D0",
+      "expect": "0x3000",
+      "write": "rows * 12"
+    },
+    {
+      "why": "nm_SetNPC: row count  (cmp eax, dword ptr [edi + 0x3000])",
+      "at": "0x004C6815",
+      "expect": "0x3000",
+      "write": "rows * 12"
+    },
+    {
+      "why": "nm_SetNPC: row count  (mov ecx, dword ptr [edi + 0x3000])",
+      "at": "0x004C6821",
+      "expect": "0x3000",
+      "write": "rows * 12"
+    },
+    {
+      "why": "nm_MarkingNPC: row count  (cmp dword ptr [edi + 0x3000], ebx)",
+      "at": "0x004C68E0",
+      "expect": "0x3000",
+      "write": "rows * 12"
+    },
+    {
+      "why": "nm_MarkingNPC: row count  (cmp eax, dword ptr [ecx + 0x3000])",
+      "at": "0x004C6A6E",
+      "expect": "0x3000",
+      "write": "rows * 12"
+    },
+    {
+      "why": "nm_UnmarkNPC: row count  (cmp dword ptr [edi + 0x3000], esi)",
+      "at": "0x004C6B40",
+      "expect": "0x3000",
+      "write": "rows * 12"
+    },
+    {
+      "why": "nm_UnmarkNPC: row count  (cmp eax, dword ptr [ecx + 0x3000])",
+      "at": "0x004C6C7C",
+      "expect": "0x3000",
+      "write": "rows * 12"
+    },
+    {
+      "why": "nm_DynamicRegenerateNPC: row count  (mov eax, dword ptr [edi + 0x3000])",
+      "at": "0x004C6E03",
+      "expect": "0x3000",
+      "write": "rows * 12"
+    },
+    {
+      "why": "nm_DynamicRegenerateNPC: row count  (mov eax, dword ptr [edx + 0x3000])",
+      "at": "0x004C6F9D",
+      "expect": "0x3000",
+      "write": "rows * 12"
+    },
+    {
+      "why": "nm_DynamicRegenerateNPC: the row bound  (cmp eax, 0x400)",
+      "at": "0x004C6FA2",
+      "expect": "0x400",
+      "write": "rows"
+    },
+    {
+      "why": "nm_DynamicRegenerateNPC: the row bound  (cmp eax, 0x400)",
+      "at": "0x004C6FBF",
+      "expect": "0x400",
+      "write": "rows"
+    },
+    {
+      "why": "nm_DynamicRegenerateNPC: the row bound  (cmp eax, 0x400)",
+      "at": "0x004C6FC6",
+      "expect": "0x400",
+      "write": "rows"
+    },
+    {
+      "why": "~NPCManager: row count  (mov dword ptr [esi + 0x3000], 0)",
+      "at": "0x004C7CC5",
+      "expect": "0x3000",
+      "write": "rows * 12"
+    },
+    {
+      "why": "~NPCManager: row count  (mov eax, dword ptr [esi + 0x3000])",
+      "at": "0x004C7CD2",
+      "expect": "0x3000",
+      "write": "rows * 12"
+    },
+    {
+      "why": "~NPCManager: row count  (inc dword ptr [esi + 0x3000])",
+      "at": "0x004C7CF2",
+      "expect": "0x3000",
+      "write": "rows * 12"
+    },
+    {
+      "why": "~NPCManager: row count  (cmp dword ptr [esi + 0x3000], 0x400)",
+      "at": "0x004C7CF8",
+      "expect": "0x3000",
+      "write": "rows * 12"
+    },
+    {
+      "why": "~NPCManager: the row bound  (cmp dword ptr [esi + 0x3000], 0x400)",
+      "at": "0x004C7CFC",
+      "expect": "0x400",
+      "write": "rows"
+    },
+    {
+      "why": "~NPCManager: OptionReader member  (lea ecx, [esi + 0x3004])",
+      "at": "0x004C7D04",
+      "expect": "0x3004",
+      "write": "rows * 12 + 4"
+    },
+    {
+      "why": "nm_FindNPCInfo: row count  (mov edx, dword ptr [ecx + 0x3000])",
+      "at": "0x005600F8",
+      "expect": "0x3000",
+      "write": "rows * 12"
+    },
+    {
+      "why": "&npcmanager  (mov ecx, 0xda29a60 at 0x00562508)",
+      "at": "0x00562509",
+      "expect": "0xDA29A60",
+      "write": "@newbase"
+    },
+    {
+      "why": "&npcmanager  (mov ecx, 0xda29a60 at 0x0056256C)",
+      "at": "0x0056256D",
+      "expect": "0xDA29A60",
+      "write": "@newbase"
+    },
+    {
+      "why": "&npcmanager  (mov ecx, 0xda29a60 at 0x0056AB62)",
+      "at": "0x0056AB63",
+      "expect": "0xDA29A60",
+      "write": "@newbase"
+    },
+    {
+      "why": "&npcmanager  (mov ecx, 0xda29a60 at 0x0056AC96)",
+      "at": "0x0056AC97",
+      "expect": "0xDA29A60",
+      "write": "@newbase"
+    },
+    {
+      "why": "&npcmanager  (mov ecx, 0xda29a60 at 0x005A58FD)",
+      "at": "0x005A58FE",
+      "expect": "0xDA29A60",
+      "write": "@newbase"
+    },
+    {
+      "why": "&npcmanager  (mov ecx, 0xda29a60 at 0x005A5A6D)",
+      "at": "0x005A5A6E",
+      "expect": "0xDA29A60",
+      "write": "@newbase"
+    },
+    {
+      "why": "&npcmanager  (mov ecx, 0xda29a60 at 0x005A6D7A)",
+      "at": "0x005A6D7B",
+      "expect": "0xDA29A60",
+      "write": "@newbase"
+    },
+    {
+      "why": "&npcmanager  (mov ecx, 0xda29a60 at 0x005A847A)",
+      "at": "0x005A847B",
+      "expect": "0xDA29A60",
+      "write": "@newbase"
+    },
+    {
+      "why": "&npcmanager  (mov ecx, 0xda29a60 at 0x005A946A)",
+      "at": "0x005A946B",
+      "expect": "0xDA29A60",
+      "write": "@newbase"
+    },
+    {
+      "why": "&npcmanager  (mov ecx, 0xda29a60 at 0x005B6503)",
+      "at": "0x005B6504",
+      "expect": "0xDA29A60",
+      "write": "@newbase"
+    },
+    {
+      "why": "&npcmanager  (mov ecx, 0xda29a60 at 0x005B674B)",
+      "at": "0x005B674C",
+      "expect": "0xDA29A60",
+      "write": "@newbase"
+    },
+    {
+      "why": "&npcmanager  (mov ecx, 0xda29a60 at 0x005DE83E)",
+      "at": "0x005DE83F",
+      "expect": "0xDA29A60",
+      "write": "@newbase"
+    },
+    {
+      "why": "&npcmanager.reader  (mov ecx, 0xda2ca64 at 0x00696D30)",
+      "at": "0x00696D31",
+      "expect": "0xDA2CA64",
+      "write": "@newbase + rows * 12 + 4"
+    },
+    {
+      "why": "&npcmanager  (mov ecx, 0xda29a60 at 0x0069DD90)",
+      "at": "0x0069DD91",
+      "expect": "0xDA29A60",
+      "write": "@newbase"
+    }
+  ]
+}

@@ -220,6 +220,27 @@ answers (`client-2026-npc-dialog-self-close`, or Bridge2026 sending `0x442E` per
 click, which flickers between pages. Only the server knows which page is last; a 42-byte cave at the END
 exit makes it say so. Bridge2026 notices the first END a zone sends and stops its per-ack close for it.
 
+### `npc-table-cap` — NPC.txt may hold more than 1024 rows (NOT BOOTED YET)
+
+`NPCManager` is a global whose first member is a fixed `rows[1024]` array of 12-byte entries, with its own row count
+right behind it at `+0x3000` and the parsed `NPC.txt` (`OptionReader`, 67 KB) behind that. `nm_Load` appends a row for
+every ShineNPC record of the file - the whole file, on every zone - and never tests the count, so row 1025 overwrites
+the count: the loader sees zero NPCs, asserts `NPCManager::nm_Load : Empty NPC inform`, and **every zone of the
+cluster exits at startup**. Found 2026-09-18, when a capture harvest took the table from 895 to 1043 rows.
+
+The object cannot grow where it is, so the recipe moves all of it to a new zero-filled section sized for `rows`
+(default 4096) and re-points three kinds of site: every `[this+0x3000]` / `[this+0x3004]` in the ten NPCManager
+methods (77), every `0x400` those methods bound a row index with (9), and every `mov ecx, offset npcmanager[.reader]`
+(25). 111 edits, none typed by hand: `tools/mk_npc_table_cap.py` finds each by decoding the stock exe and regenerates
+the file byte for byte. It checks that no other section holds the address and lists the `[reg+0x3000]` sites it left
+alone because they belong to another class.
+
+**Status:** applies and verifies on the stock exe and at the end of the full chain (`build_zone.py --experimental` ->
+`build/Zone.2026.npct.exe`); the default chain is unchanged and still reproduces the deployed binary. It has NOT run
+on a live zone. The test that matters: a stack whose NPC.txt has more than 1024 rows reaches READY with its NPCs
+placed, and a dynamic NPC (`nm_DynamicRegenerateNPC`, the Elderine puzzle event) still spawns and releases. This is
+the TABLE cap; the per-zone NPC object pool (1024) is `npc-object-pool-cap`.
+
 ### `client-2026-npc-dialog-self-close` — the first CLIENT recipe: let the 2026 quest dialog close itself
 
 The runner does not care which executable it is pointed at, so client patches live here too. This one
