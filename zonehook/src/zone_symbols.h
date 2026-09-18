@@ -6,7 +6,7 @@
 // (the exe sets DYNAMIC_BASE), so every address is rebased at runtime against the real module base:
 // see zone::rebase() in hook.h. Never use one of these as a raw pointer.
 #pragma once
-#include <stdint.h>
+// no CRT: the fixed-width names come from hook.h
 
 namespace zone {
 
@@ -265,6 +265,11 @@ static const Handler kHandlers[] = {
     { "sp_NC_WT_LICENSE_REQ", 0x0059E410u },
 };
 static const int kHandlerCount = 246;
+
+// Anchors - see ANCHORS in mk_symbols.py for why the service thread, and not WinMain.
+static const uint32_t kVaStartDispatcher = 0x006535B0u;
+static const uint32_t kVaWinMain = 0x0049D910u;
+static const uint32_t kVaZoneServiceThread = 0x005A9D90u;
 
 // vtables, for the cases where swapping a slot is the right tool
 struct Vtable { const char* name; uint32_t va; };

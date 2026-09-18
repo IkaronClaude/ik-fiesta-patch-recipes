@@ -16,11 +16,17 @@ if not exist "%VCVARS%" (
 call "%VCVARS%" >nul 2>&1
 
 if not exist build mkdir build
-set FLAGS=/nologo /W4 /EHsc /GS- /std:c++17 /DWIN32_LEAN_AND_MEAN /Fobuild\ /Fdbuild\
+rem ZH_NO_ODS: Wine implements OutputDebugString by RAISING AN EXCEPTION, and setting one up at
+rem DllMain time overflowed the main thread stack and killed the zone before it started
+rem (measured 2026-09-19). Build without it only when running under a real Windows debugger.
+set FLAGS=/nologo /W4 /EHsc /GS- /std:c++17 /DZH_NO_ODS /DWIN32_LEAN_AND_MEAN /Zc:threadSafeInit- /GR- /Fobuild\ /Fdbuild\
 if /i "%~1"=="debug" (set FLAGS=%FLAGS% /Od /Zi /MTd) else (set FLAGS=%FLAGS% /O2 /MT)
 
-cl %FLAGS% /LD src\dllmain.cpp src\hook.cpp src\packet_hook.cpp ^
-   /link /OUT:build\zonehook.dll /DEBUG /SUBSYSTEM:WINDOWS kernel32.lib user32.lib
+rem NO CRT: see src/nocrt.h. A DLL that pulls in the static CRT and is a static import of Zone.exe
+rem overflows the main thread stack during CRT start-up under Wine, before DllMain runs.
+cl %FLAGS% /LD src\dllmain.cpp src\hook.cpp src\packet_hook.cpp src\nocrt.cpp ^
+   /link /OUT:build\zonehook.dll /DEBUG /SUBSYSTEM:WINDOWS /NODEFAULTLIB /ENTRY:DllMain ^
+   kernel32.lib user32.lib
 if errorlevel 1 exit /b 1
 
 echo.
