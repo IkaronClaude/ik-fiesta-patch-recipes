@@ -75,6 +75,77 @@ class Pe:
                 return s["rawptr"] + delta
         return None
 
+    def data_directory(self, index: int):
+        """(RVA, size) of one data directory, and where its header field lives."""
+        n = struct.unpack_from("<I", self.d, self.opt + 92)[0]
+        if index >= n:
+            raise ValueError(f"image has only {n} data directories")
+        at = self.opt + 96 + index * 8
+        rva, size = struct.unpack_from("<II", self.d, at)
+        return rva, size, at
+
+    def add_import(self, dll: str, func: str, section: str = ".zhook"):
+        """Make the loader pull `dll` in before the entry point runs, by rebuilding the import descriptor
+        array in a new section with one extra entry.
+
+        WHY THIS AND NOT A CODE PATCH: the Windows loader already knows how to map a DLL and run its
+        DllMain, and it does so before any of the exe's own code - including the CRT - executes. An
+        injected LoadLibrary call has to pick a moment that is late enough for the CRT and early enough
+        to matter, and gets that wrong on exactly the paths that are hard to test. Adding an import is
+        also reversible by rewriting one data directory, and it leaves every original byte of .text
+        alone, so a recipe that does this composes with every other recipe in this repo.
+
+        SAFE HERE because the image has no bound-import directory (checked below): a bound image caches
+        resolved addresses and a loader that trusts them can skip the descriptor array entirely, which
+        would silently drop the new entry. The original descriptors are COPIED, not moved - their ILT,
+        IAT and name RVAs still point into .rdata and stay valid.
+
+        The DLL must export `func`; it is imported by name so the loader fails loudly (a message box
+        naming the missing export) rather than leaving a null in the IAT that nothing ever calls.
+        """
+        bound_rva, bound_size, _ = self.data_directory(11)
+        if bound_rva or bound_size:
+            raise ValueError("image has a bound-import directory; rebuilding imports needs it cleared first")
+        imp_rva, imp_size, imp_at = self.data_directory(1)
+        off = self.offset_of(self.image_base + imp_rva)
+        if off is None:
+            raise ValueError("import directory is not backed by file bytes")
+        old = []
+        while True:
+            fields = struct.unpack_from("<IIIII", self.d, off + len(old) * 20)
+            if not any(fields):
+                break
+            old.append(fields)
+        if not old:
+            raise ValueError("no import descriptors found")
+
+        dll_b = dll.encode() + b"\0"
+        func_b = func.encode() + b"\0"
+        n_desc = len(old) + 2                       # the originals, ours, and the null terminator
+        desc_len = n_desc * 20
+        ilt_at = desc_len                           # two u32: our one import, then the terminator
+        iat_at = ilt_at + 8
+        hint_at = iat_at + 8
+        name_at = hint_at + align(2 + len(func_b), 2)
+        total = name_at + len(dll_b)
+
+        base_va = self.append_bss_section(section, total, materialise=True)
+        base_rva = base_va - self.image_base
+        o = self.offset_of(base_va)
+        for i, fields in enumerate(old):            # copy the originals verbatim
+            struct.pack_into("<IIIII", self.d, o + i * 20, *fields)
+        struct.pack_into("<IIIII", self.d, o + len(old) * 20,
+                         base_rva + ilt_at, 0, 0, base_rva + name_at, base_rva + iat_at)
+        struct.pack_into("<IIIII", self.d, o + (len(old) + 1) * 20, 0, 0, 0, 0, 0)
+        struct.pack_into("<II", self.d, o + ilt_at, base_rva + hint_at, 0)
+        struct.pack_into("<II", self.d, o + iat_at, base_rva + hint_at, 0)
+        struct.pack_into("<H", self.d, o + hint_at, 0)
+        self.d[o + hint_at + 2:o + hint_at + 2 + len(func_b)] = func_b
+        self.d[o + name_at:o + name_at + len(dll_b)] = dll_b
+        struct.pack_into("<II", self.d, imp_at, base_rva, desc_len)
+        return dict(section=section, va=base_va, descriptors=len(old) + 1, bytes=total,
+                    old_directory=(imp_rva, imp_size), new_directory=(base_rva, desc_len))
+
     def append_bss_section(self, name: str, size: int, materialise: bool = False,
                            execute: bool = False):
         """Append a section for a relocated static object, and return its virtual address.
@@ -268,6 +339,18 @@ def main():
                   f"bytes virtual (0 on disk); SizeOfImage -> 0x{pe.size_of_image:08X}")
         env["@newbase"] = newbase
 
+    # -- an extra import, so the zone can be extended in C++ instead of hand-assembled bytes -----------
+    ai = r.get("add_import")
+    if ai:
+        if a.dry_run or a.verify:
+            print(f"add_import: {ai['dll']}!{ai['function']} into a new {ai.get('section', '.zhook')} section")
+        else:
+            info = pe.add_import(ai["dll"], ai["function"], ai.get("section", ".zhook"))
+            print(f"add_import: {ai['dll']}!{ai['function']} -> section {info['section']} at "
+                  f"0x{info['va']:08X} ({info['bytes']} bytes, {info['descriptors']} descriptors)")
+            print(f"  import directory RVA 0x{info['old_directory'][0]:08X} size 0x{info['old_directory'][1]:X}"
+                  f"  ->  RVA 0x{info['new_directory'][0]:08X} size 0x{info['new_directory'][1]:X}")
+
     # -- validate every site BEFORE touching anything -----------------------------------------------
     reader = Pe(bytearray(open(a.verify, "rb").read())) if a.verify else pe
     plan, problems = [], []
@@ -298,7 +381,7 @@ def main():
         head = "VERIFY FAILED" if a.verify else "REFUSING TO PATCH"
         raise SystemExit(f"{head}: {len(problems)} site(s) did not match:\n" + "\n".join(problems))
 
-    width = max(len(e["why"]) for e in r["edits"])
+    width = max((len(e["why"]) for e in r["edits"]), default=0)   # a recipe may be all section/import work
     for va, off, cur, write, why, _, fmt in plan:
         print(f"  {why:<{width}}  VA 0x{va:08X}  0x{cur:08X} -> 0x{write:08X}  ({struct.calcsize(fmt)} B)")
 
