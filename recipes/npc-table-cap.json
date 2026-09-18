@@ -1,7 +1,7 @@
 {
   "name": "npc-table-cap",
   "summary": "Lift the 1024-row limit of NPC.txt: NPCManager keeps the whole table in a fixed array inside a global, and row 1025 overwrites its own row count.",
-  "status": "GENERATED 2026-09-18 and verified to apply on the stock exe and on top of the full chain. NOT yet booted - see the README entry.",
+  "status": "PROVEN on the local stack 2026-09-18: patched exe + the 960-row table -> five zones READY, no new assert; patched exe + a 1400-row table -> five zones READY (only \"Invalid mob id\" for the generated test names); the SAME 1400-row table on the unpatched exe -> \"nm_Load : Empty NPC inform\" and Zone.exe exited. Elderine (zone04, the Honeying puzzle scripts + its 8 PzlHoney rows) booted clean. In the default chain.",
   "target": {
     "file": "Zone00/Zone.exe",
     "sha256": "7ef3532da08194a377558322ca2bd06d1ce5bdb2813796e033173b72d9ff883d",

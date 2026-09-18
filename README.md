@@ -220,7 +220,7 @@ answers (`client-2026-npc-dialog-self-close`, or Bridge2026 sending `0x442E` per
 click, which flickers between pages. Only the server knows which page is last; a 42-byte cave at the END
 exit makes it say so. Bridge2026 notices the first END a zone sends and stops its per-ack close for it.
 
-### `npc-table-cap` — NPC.txt may hold more than 1024 rows (NOT BOOTED YET)
+### `npc-table-cap` — NPC.txt may hold more than 1024 rows
 
 `NPCManager` is a global whose first member is a fixed `rows[1024]` array of 12-byte entries, with its own row count
 right behind it at `+0x3000` and the parsed `NPC.txt` (`OptionReader`, 67 KB) behind that. `nm_Load` appends a row for
@@ -235,11 +235,17 @@ methods (77), every `0x400` those methods bound a row index with (9), and every 
 the file byte for byte. It checks that no other section holds the address and lists the `[reg+0x3000]` sites it left
 alone because they belong to another class.
 
-**Status:** applies and verifies on the stock exe and at the end of the full chain (`build_zone.py --experimental` ->
-`build/Zone.2026.npct.exe`); the default chain is unchanged and still reproduces the deployed binary. It has NOT run
-on a live zone. The test that matters: a stack whose NPC.txt has more than 1024 rows reaches READY with its NPCs
-placed, and a dynamic NPC (`nm_DynamicRegenerateNPC`, the Elderine puzzle event) still spawns and releases. This is
-the TABLE cap; the per-zone NPC object pool (1024) is `npc-object-pool-cap`.
+**PROVEN on the local stack 2026-09-18**, three runs of five zones each:
+1. the patched exe with the current 960-row table - all five READY, no exception, no assert beyond the four known
+   ones (ThunderBolt shop rows, the missing SerItemMctBount file);
+2. the same exe with a **1400-row** table (960 + 440 generated rows) - all five READY. The only new asserts are
+   `nm_SetNPC : Invalid mob id[CapTest####]`, which is the generated names having no MobInfo row, exactly as
+   expected, and every real NPC is still placed;
+3. the CONTROL: that same 1400-row table on the unpatched `Zone.2026.exe` - `nm_Load : Empty NPC inform`,
+   `Zone.exe exited`, as before.
+Dynamic NPCs: zone04 hosts Eld and its Honeying puzzle scripts with the 8 PzlHoney rows; it booted clean with no
+`lss_Routine` error beyond the two pre-existing Albireo ones. In the default chain since. This is the TABLE cap;
+the per-zone NPC object pool (1024) is `npc-object-pool-cap`.
 
 ### `client-2026-npc-dialog-self-close` — the first CLIENT recipe: let the 2026 quest dialog close itself
 

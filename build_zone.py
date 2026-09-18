@@ -34,14 +34,13 @@ CHAIN = [
     ('npc-click-quest-fallthrough', []),
     ('quest-script-end-notify', []),
     ('handle-layout-2026', []),
+    # NPC.txt rows 1024 -> 4096: the whole NPCManager global moves to its own section
+    ('npc-table-cap', []),
 ]
 
 # Built and verified but NOT yet booted on a live zone: applied only with --experimental, so nobody gets an untested
 # binary by running the default chain. Move an entry up into CHAIN once it has run.
-EXPERIMENTAL = [
-    # NPC.txt rows: 1024 -> 4096 (the whole NPCManager global moves to a new section; 111 sites)
-    ('npc-table-cap', []),
-]
+EXPERIMENTAL = []
 
 # The chain as it was before handle-layout-2026, for reproducing build/Zone.maps.npc.dmg.exe exactly.
 LEGACY = {'npc-object-pool-cap': []}
