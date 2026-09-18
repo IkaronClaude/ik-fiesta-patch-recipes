@@ -5,3 +5,7 @@ __pycache__/
 # never commit game binaries -- BYO at runtime
 *.exe
 *.pdb
+zonehook/build/
+zonehook/*.exp
+zonehook/*.lib
+zonehook/*.obj
