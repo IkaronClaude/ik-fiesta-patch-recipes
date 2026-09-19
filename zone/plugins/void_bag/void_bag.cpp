@@ -563,6 +563,18 @@ void __fastcall store_impl(void* self, void* /*edx*/, void* itemcmd) {
     clear_bag(bag);
     bag->loaded = false;
     bag->owner = charno;
+    // A character is in the zone once. Any OTHER bag still carrying this character belongs to a player object
+    // from an earlier login (bags are kept per object and objects are pooled), and must stop answering to it:
+    // the reply is matched by character number, and matching the stale bag loaded the items into it and sent
+    // box 18 down the old, closed connection - the new login got nothing (2026-09-19, 13:17 then 14:21).
+    EnterCriticalSection(&g_bags_lock);
+    for (auto& kv : g_bags)
+        if (kv.second != bag && kv.second->owner == charno) {
+            zone::log("void bag of player %x let go of char %u (an earlier login of it)", kv.first, charno);
+            kv.second->owner = 0;
+            kv.second->loaded = false;
+        }
+    LeaveCriticalSection(&g_bags_lock);
     request_void_list(self, charno);
 }
 

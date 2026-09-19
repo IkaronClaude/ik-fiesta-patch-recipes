@@ -154,7 +154,11 @@ inline void log(const char* fmt, ...) {
     if (detail::g_log_ready) EnterCriticalSection(&detail::g_log_lock);
 
     char* buf = detail::g_log_buf;
-    size_t head = 0;
+    // UTC, like the bridge and docker logs, so a hook line can be put next to the packets it caused. Without it
+    // a stale-object bug hid for an afternoon: two loads in the log, no way to tell which login each was.
+    SYSTEMTIME st;
+    GetSystemTime(&st);
+    size_t head = (size_t)wsprintfA(buf, "%02u:%02u:%02u.%03u ", st.wHour, st.wMinute, st.wSecond, st.wMilliseconds);
     buf[head++] = '[';
     for (const char* t = detail::g_log_tag; *t && head < 40; t++) buf[head++] = *t;
     buf[head++] = ']';
