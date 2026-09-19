@@ -44,6 +44,13 @@ ANCHORS = {
     'ZoneServiceThread': '?zs_ServiceThreadFunction@ZoneServer@@SGKPAX@Z',
     'StartDispatcher': '?startDispatcher@WinService@@QAE_NVString@@P6A_NXZP6AXXZ@Z',
     'WinMain': '_WinMain@16',
+    # The charged-effect table (ChargedEffect.shn as loaded): {u16 item id, ChargedItemEffect*} x cideb_Total,
+    # which UseItemChargedBuff::uib_CanUseItem walks to find an item's effect. A true global, so it is in
+    # the PDB's GLOBAL symbol stream - which is why zone_globals.h (built from module symbols) lacks it.
+    'ChargedBuffDataBox': '?chargedbuffdatabox@@3V?$ChargedItemEffectDataBox@UChargedItemEffect@@@@A',
+    # ItemInventory's vtable. A bag of our own borrows its RTTI locator ([-1]): the zone has 41
+    # __RTDynamicCast call sites, and one reading a null locator off a bag would take the zone down.
+    'ItemInventoryVtable': '??_7ItemInventory@@6B@',
 }
 
 

@@ -1,4 +1,4 @@
-// zonehook.dll - the LOADER. Zone.exe is patched to import it (recipes/dll-loader.json), and everything
+// fiestahook.dll - the LOADER. A server exe is patched to import it (recipes/dll-loader*.json), and everything
 // else lives in hooks/*.dll, which this loads.
 //
 // TWO STAGES, and the reason for it:
@@ -18,7 +18,7 @@
 //
 // Run by hand, the exe only registers a service and exits: stage 2 never fires, and that is expected.
 // Stage 1 still logs, which is how you tell the DLL loaded at all.
-#include "../include/zonehook.h"
+#include "../include/hook_core.h"
 #include "plugins.h"
 #include "service_hook.h"
 
@@ -27,57 +27,63 @@
 // allocation anywhere in the start-up path.
 namespace {
 enum { kMaxCallbacks = 32 };
-zone::ServiceInitFn g_callbacks[kMaxCallbacks];
+hook::ServiceInitFn g_callbacks[kMaxCallbacks];
 int g_callback_count = 0;
 }  // namespace
 
-extern "C" __declspec(dllexport) int ZoneHookRegister(zone::ServiceInitFn fn) {
+extern "C" __declspec(dllexport) int ZoneHookRegister(hook::ServiceInitFn fn) {
     if (!fn || g_callback_count >= kMaxCallbacks) return 0;
     g_callbacks[g_callback_count++] = fn;
     return 1;
 }
 
-// ---- stage 2: on the service thread, before the zone's own ServiceMain ------------------------------
+// ---- stage 2: on the service thread, before the server's own ServiceMain ------------------------------
 
 static void start_plugins() {
-    zone::log("service starting - loading plugins before the zone's ServiceMain");
+    hook::log("service starting - loading plugins before the server's ServiceMain");
 
-    int loaded = zone::load_plugins();
+    int loaded = hook::load_plugins();
     for (int i = 0; i < g_callback_count; i++) {
-        zone::log("plugin callback %d of %d", i + 1, g_callback_count);
+        hook::log("plugin callback %d of %d", i + 1, g_callback_count);
         g_callbacks[i]();
     }
 
     if (!loaded) {
         // Not an error: a stock server has no plugins. Say so plainly rather than leaving the log silent,
         // because "no hooks ran" and "no hooks exist" look identical otherwise.
-        zone::log("no plugins in hooks/ - the zone runs exactly as it would unpatched");
+        hook::log("no plugins in hooks/ - the server runs exactly as it would unpatched");
     } else {
-        zone::log("%d plugin(s) up, %d callback(s) run", loaded, g_callback_count);
+        hook::log("%d plugin(s) up, %d callback(s) run", loaded, g_callback_count);
     }
 }
 
 // ---- stage 1: loader init ---------------------------------------------------------------------------
 
 extern "C" __declspec(dllexport) void ZoneHookInit() {
-    // Imported by name from Zone.exe so a missing or mismatched DLL fails loudly at load. Nothing calls
+    // Imported by name from the patched exe so a missing or mismatched DLL fails loudly at load. Nothing calls
     // it; the import exists to make the loader map us.
 }
 
 BOOL APIENTRY DllMain(HMODULE module, DWORD reason, LPVOID) {
     if (reason == DLL_PROCESS_ATTACH) {
         DisableThreadLibraryCalls(module);
-        zone::log_init("loader");
-        zone::log("loaded; exe base %x, %d known packet handlers",
-                  zone::module_base(), zone::kHandlerCount);
+        hook::log_init("loader");
+        // Which exe: the same loader goes into Zone.exe and Character.exe, so say which one this is.
+        // STATIC, not on the stack: DllMain runs on the loader's barely-committed stack, where a MAX_PATH
+        // buffer plus the log's own was exactly what overflowed it by 824 bytes (2026-09-19).
+        static char exe[MAX_PATH];
+        DWORD n = GetModuleFileNameA(NULL, exe, MAX_PATH);
+        const char* name = exe;
+        for (DWORD i = 0; i < n; i++) if (exe[i] == '\\' || exe[i] == '/') name = exe + i + 1;
+        hook::log("loaded into %s; exe base %x", n ? name : "?", hook::module_base());
 
-        if (zone::hook_service_main(start_plugins)) {
-            zone::log("waiting for ServiceMain");
+        if (hook::hook_service_main(start_plugins)) {
+            hook::log("waiting for ServiceMain");
         } else {
-            zone::log("NOT A SERVICE (no StartServiceCtrlDispatcherA import) - nothing will be loaded");
+            hook::log("NOT A SERVICE (no StartServiceCtrlDispatcherA import) - nothing will be loaded");
         }
     } else if (reason == DLL_PROCESS_DETACH) {
-        zone::uninstall_all();
+        hook::uninstall_all();
     }
     return TRUE;
 }

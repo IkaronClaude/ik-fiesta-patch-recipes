@@ -47,6 +47,9 @@ EXPERIMENTAL = [
     # Third permanent inventory expansion (8 pages, as in 2026) - the 2026 client's prerequisite for the void
     # inventory. One imm8 in UseItemChargedBuff::uib_CanUseItem; see the recipe.
     ('inventory-expansion-cap', []),
+    # Bag 18 (the 2026 Void Inventory) in item moves: widens sp_ItemReloc's two bag switches and hands case 18
+    # to the void_bag plugin through a slot. Inert without the plugin (a null slot takes the default).
+    ('void-bag-reloc', []),
 ]
 
 # The chain as it was before handle-layout-2026, for reproducing build/Zone.maps.npc.dmg.exe exactly.
