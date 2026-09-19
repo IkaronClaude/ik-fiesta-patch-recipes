@@ -1,9 +1,9 @@
 // void_bag - the extra inventory (bag 18), as a hook DLL.
 //
-// STATUS: bag 18 exists in the zone and items move in and out of it (void-bag-reloc recipe); moves are
-// saved to tItem by the zone's own generic storage calls. LOADING at login is new and not yet booted: the
-// zone asks Character for bag 18 (NC_CHAR_GET_ITEMLIST_BY_TYPE_REQ), which needs the Character chain and
-// the char_void plugin there - see "loading" below.
+// STATUS (proven live 2026-09-19): bag 18 is a real ItemBag in the zone; items move in and out of it
+// (void-bag-reloc recipe), moves are saved to tItem by the zone's own generic storage calls, and at login
+// the zone asks Character for bag 18 (NC_CHAR_GET_ITEMLIST_BY_TYPE_REQ - needs the Character chain and the
+// char_void plugin there, see "loading" below). The unlock is the item's permanent charged effect.
 //
 // ---- THE SPEC (operator) ---------------------------------------------------------------------------
 //   2 pages of 144 slots = 288 cells total.
@@ -62,12 +62,9 @@
 // ItemInventory's 192 and was never meant to - ItemAccountStorage already carries 576, so a bag larger
 // than the inventory is ordinary here.
 //
-// ---- NEXT, in order --------------------------------------------------------------------------------
-//   1. Find how an existing bag expansion persists its unlock, and mirror it. The spec says "like the
-//      bags do", and the server's own mechanism is the one to copy - do not invent a flag.
-//   2. Add the subclass. Its cell array and the id 18 are a RECIPE (a constant and a vtable), not a
-//      runtime patch: reviewable and verifiable in a way a DLL rewriting bytes is not.
-//   3. Persistence is S2S - see docs/HOOK-TARGETS.md. A bag that does not survive a relog is not a bag.
+// ---- OPEN ------------------------------------------------------------------------------------------
+//   - Which bags the void bag may trade with. It is judged as the inventory for now (see IA_CanInvenReloc
+//     below); the operator suspects official is stricter (e.g. no trading straight out of it).
 //
 // UNVERIFIED: whether 0x300B/0x3001/0x300C keep these numbers on the 2026 wire (the opcode table this
 // repo has is the 2016 one, and the names printed for them were UNKNOWN_xxxx). The FIELD layout above is
@@ -209,8 +206,7 @@ struct ChargedBuffEntry {
 static_assert(sizeof(ChargedBuffEntry) == 8, "the zone walks this table in 8-byte steps");
 
 const zone::types::ChargedItemEffect* charged_effect_of(unsigned short item_id) {
-    using Box = zone::types::ChargedItemEffectDataBox_ChargedItemEffect_;
-    auto* box = (const Box*)zone::rebase(zone::kVaChargedBuffDataBox);
+    const auto* box = zone::global::chargedbuffdatabox();
     auto* arr = (const ChargedBuffEntry*)box->cideb_Array;
     for (int i = 0; arr && i < box->cideb_Total; i++)
         if (arr[i].item == item_id) return arr[i].effect;
@@ -316,9 +312,9 @@ unsigned char __fastcall vb_inven_type(VoidBag*, void*) { return kVoidBagId; }
 void* g_vtable[5];
 
 void build_vtable() {
-    void** inv_vt = (void**)zone::rebase(zone::kVaItemInventoryVtable);
+    void** inv_vt = zone::vtable::ItemInventory();
     g_vtable[0] = inv_vt[-1];
-    g_vtable[1] = zone::rebase(zone::fn::kVa_ItemRewardStorage__ib_GetInventoryCell);  // the shared one
+    g_vtable[1] = (void*)zone::fn::ItemRewardStorage__ib_GetInventoryCell();  // the shared one
     g_vtable[2] = (void*)vb_size_input;
     g_vtable[3] = (void*)vb_size_output;
     g_vtable[4] = (void*)vb_inven_type;
@@ -433,7 +429,7 @@ unsigned short handle_of(void* player) {
 }
 
 // The global packet every zone sender fills: its first member points at the buffer, which starts with the opcode.
-void* global_packet() { return zone::rebase(zone::kVaGlobalProtocolPacket); }
+void* global_packet() { return zone::global::gpp(); }
 unsigned char* global_buffer() { return *(unsigned char**)global_packet(); }
 
 bool set_packet_len(int len) {
@@ -441,8 +437,7 @@ bool set_packet_len(int len) {
 }
 
 void request_void_list(void* player, unsigned charno) {
-    typedef void*(__fastcall* GetSocket)(void* bundle, void* edx);
-    void* session = ((GetSocket)zone::rebase(zone::kVaSocketBundleGetSocket))(zone::rebase(zone::kVaSock2GameDB), 0);
+    void* session = zone::fn::SocketBundle_GameDBSession___sb_GetSocket()(zone::global::sock2gameDB(), 0);
     unsigned char* b = global_buffer();
     if (!session || !b) {
         zone::log("void bag of char %u: NOT requested - %s", charno, session ? "no packet buffer" : "no Character session");
@@ -635,10 +630,10 @@ ZONEHOOK_PLUGIN("void_bag") {
     g_seen_scripts = new std::unordered_set<std::string>();
     zone::lua::on_function_call(on_script_call);
     zone::hook_function("ChargedItemEffectElement::ciee_Activ",
-                        zone::rebase(zone::fn::kVa_ChargedItemEffectList__ChargedItemEffectElement__ciee_Activ),
+                        (void*)zone::fn::ChargedItemEffectList__ChargedItemEffectElement__ciee_Activ(),
                         (void*)activ_thunk, &g_activ_detour);
     zone::hook_function("UseItemChargedBuff::uib_CanUseItem",
-                        zone::rebase(zone::fn::kVa_UseEffect__UseItemChargedBuff__uib_CanUseItem),
+                        (void*)zone::fn::UseEffect__UseItemChargedBuff__uib_CanUseItem(),
                         (void*)canuse_thunk, &g_canuse_detour);
 
     // The bag itself. The slot is filled LAST, once everything the cave will reach is ready: the
@@ -646,13 +641,13 @@ ZONEHOOK_PLUGIN("void_bag") {
     InitializeCriticalSection(&g_bags_lock);
     build_vtable();
     zone::hook_function("ShinePlayer::so_StoreInventoryFromServer",
-                        zone::rebase(zone::fn::kVa_ShineObjectClass__ShinePlayer__so_StoreInventoryFromServer),
+                        (void*)zone::fn::ShineObjectClass__ShinePlayer__so_StoreInventoryFromServer(),
                         (void*)store_thunk, &g_store_detour);
     zone::hook_function("GameDBSession::gds_NC_CHAR_GET_ITEMLIST_BY_TYPE_ACK",
-                        zone::rebase(zone::fn::kVa_GameDBSession__gds_NC_CHAR_GET_ITEMLIST_BY_TYPE_ACK),
+                        (void*)zone::fn::GameDBSession__gds_NC_CHAR_GET_ITEMLIST_BY_TYPE_ACK(),
                         (void*)list_ack_thunk, &g_list_detour);
     zone::hook_function("CItemAuthorityBase::IA_CanInvenReloc",
-                        zone::rebase(zone::fn::kVa_CItemAuthorityBase__IA_CanInvenReloc),
+                        (void*)zone::fn::CItemAuthorityBase__IA_CanInvenReloc(),
                         (void*)ia_thunk, &g_ia_detour);
     zone::ArenaRegion slot = zone::arena_region(".voidreloc");
     if (slot.base && slot.size >= 4) {

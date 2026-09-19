@@ -581,6 +581,135 @@ def emit_functions(syms, recs, namer, secs, image_base, notes):
     return out
 
 
+# ---- functions the procedure list does not name: templates and COMDAT folds -------------------------
+#
+# emit_functions() works from the module procedures, which name each function ONCE. Two kinds are missed:
+# template members (their names hold '<', which the spelling rules there refuse) and COMDAT folds - the
+# linker keeps ONE body for identical instantiations, so SocketBundle<GameDBSession>::sb_GetSocket,
+# <WorldManagerSession> and <GameLogSession> share 0x4199B0 and the procedure list carries one of the three.
+# Every one of them is still a PUBLIC, and a public's mangled name encodes its whole signature, which MSVC's
+# undname spells out: "public: class GameDBSession * __thiscall SocketBundle<class GameDBSession>::
+# sb_GetSocket(void)". So each function public not already emitted is demangled, and emitted when every type
+# in its signature is one zone_types.h defines (or a primitive) - never guessed.
+
+PRIMITIVE = {
+    'void', 'bool', 'char', 'signed char', 'unsigned char', 'short', 'unsigned short', 'int', 'unsigned int',
+    'long', 'unsigned long', 'float', 'double', 'wchar_t', '__int64', 'unsigned __int64',
+}
+UNDNAME = r'C:/Program Files/Microsoft Visual Studio/18/Community/VC/Tools/MSVC/14.50.35717/bin/Hostx64/x86/undname.exe'
+PUB = re.compile(r'^\s*\d+ \| S_PUB32 \[size = \d+\] `(.*)`\s*$')
+PUB_AT = re.compile(r'flags = ([a-z |]+), addr = ([0-9A-F]{4}):(\d+)')
+UND = re.compile(r'^(?:(?:public|private|protected): )?(?:(?:static|virtual) )*(.+?) '
+                 r'(__thiscall|__cdecl|__stdcall|__fastcall) (.+?)\((.*)\)(?: const)?$')
+
+
+def parse_publics(path):
+    out, pending = [], None
+    with open(path, encoding='latin-1') as fh:
+        for line in fh:
+            m = PUB.match(line)
+            if m:
+                pending = m.group(1)
+                continue
+            if pending is None:
+                continue
+            a = PUB_AT.search(line)
+            if a and pending.startswith('?'):
+                out.append((pending, int(a.group(2), 16), int(a.group(3)), 'function' in a.group(1)))
+            pending = None
+    return out
+
+
+VTABLE = re.compile(r'^\?\?_7(.+?)@@6B@$')
+
+
+def emit_vtables(pub_path, known, secs, image_base, notes):
+    """zone::vtable::<Class>() for every class zone_types.h defines: the address of its vtable, as void**.
+
+    A vtable is a public (`??_7<Class>@@6B@`), not a global, so neither the module nor the global stream has
+    it. What needs one: a new subclass of a zone class borrows its RTTI locator ([-1]) - the void bag does
+    this with ItemInventory's - and a vtable hook needs the table to patch."""
+    out = []
+    for mangled, seg, off, _fn in parse_publics(pub_path):
+        m = VTABLE.match(mangled)
+        if not m or not (1 <= seg <= len(secs)):
+            continue
+        # ItemInventory@@ -> ItemInventory ; ShinePlayer@ShineObjectClass -> ShineObjectClass::ShinePlayer
+        name = '::'.join(reversed(m.group(1).split('@')))
+        ident = cxx_ident(name)
+        if ident not in known:
+            continue
+        va = image_base + secs[seg - 1][0] + off
+        out.append("static const unsigned int kVa_%s = 0x%08Xu;   // %s::`vftable'" % (ident, va, name))
+        out.append('inline void** %s() { return (void**)::zone::rebase(kVa_%s); }' % (ident, ident))
+        notes['vtable'] += 1
+    return out
+
+
+def undecorate(names, exe):
+    out = {}
+    for i in range(0, len(names), 100):
+        r = subprocess.run([exe] + names[i:i + 100], capture_output=True, text=True, errors='replace')
+        for m in re.finditer(r'Undecoration of :- "(.*?)"\s*\nis :- "(.*?)"', r.stdout):
+            out[m.group(1)] = m.group(2)
+    return out
+
+
+def spell(t, known):
+    """An undname type -> the C++ zone_types.h spells, or None. References become pointers (same ABI)."""
+    t = t.replace('const ', '').replace(' const', '').replace('volatile ', '').strip()
+    t = re.sub(r'\b(class|struct|union|enum) ', '', t)
+    stars = ''
+    while t.endswith('*') or t.endswith('&'):
+        stars += '*'
+        t = t[:-1].rstrip()
+    if '__ptr64' in t or '(' in t or '[' in t:
+        return None
+    if t in PRIMITIVE:
+        base = {'__int64': 'long long', 'unsigned __int64': 'unsigned long long'}.get(t, t)
+    else:
+        base = cxx_ident(t)
+        if base not in known:
+            return None
+    return base + stars
+
+
+def emit_public_functions(pub_path, taken, known, secs, image_base, notes, undname=UNDNAME):
+    if not os.path.exists(undname):
+        print('  (no undname at %s - templated/folded functions skipped)' % undname)
+        return []
+    pubs = [p[:3] for p in parse_publics(pub_path) if p[3] and 1 <= p[1] <= len(secs)]
+    und = undecorate([p[0] for p in pubs], undname)
+    out, used = [], set(taken)
+    for mangled, seg, off in pubs:
+        m = UND.match(und.get(mangled, ''))
+        if not m:
+            continue
+        ret, conv, qual, args = m.groups()
+        qual = re.sub(r'\b(class|struct|union|enum) ', '', qual)
+        if not is_game_type(qual.split('::')[0].split('<')[0]) or '`' in qual or 'operator' in qual:
+            continue
+        ident = cxx_ident(qual)
+        if ident in used or ident in RESERVED:
+            continue
+        r = spell(ret, known)
+        a = [] if args in ('void', '') else [spell(x, known) for x in re.split(r',(?![^<]*>)', args)]
+        if r is None or any(x is None for x in a) or args.endswith('...'):
+            notes['fn_public_unspellable'] += 1
+            continue
+        used.add(ident)
+        va = image_base + secs[seg - 1][0] + off
+        thiscall = conv == '__thiscall'
+        params = (['void* self', 'void* edx'] if thiscall else []) + ['%s a%d' % (x, i + 1) for i, x in enumerate(a)]
+        out.append('// %s   (from its public name: %s)' % (und[mangled], 'a template member or a COMDAT fold'))
+        out.append('typedef %s (%s* %s_t)(%s);' % (r, '__fastcall' if thiscall else conv, ident, ', '.join(params) or 'void'))
+        out.append('static const unsigned int kVa_%s = 0x%08Xu;' % (ident, va))
+        out.append('inline %s_t %s() { return (%s_t)::zone::rebase(kVa_%s); }' % (ident, ident, ident, ident))
+        out.append('')
+        notes['fn_public'] += 1
+    return out
+
+
 # ---- main -------------------------------------------------------------------------------------------
 
 BANNER = """// GENERATED by zonehook/tools/mk_types.py - do not edit, re-run the tool.
@@ -659,7 +788,9 @@ def main():
     tmp = os.environ.get('TEMP', '.')
     tdump = a.types_dump or os.path.join(tmp, 'zone-types.txt')
     sdump = a.symbols_dump or os.path.join(tmp, 'zone-syms.txt')
-    for flag, path in (('-types', tdump), ('-symbols', sdump)):
+    gdump = os.path.join(tmp, 'zone-globals.txt')
+    pdump = os.path.join(tmp, 'zone-publics.txt')
+    for flag, path in (('-types', tdump), ('-symbols', sdump), ('-globals', gdump), ('-publics', pdump)):
         if not os.path.exists(path):
             print('dumping %s -> %s' % (flag, path))
             with open(path, 'wb') as fh:
@@ -784,6 +915,8 @@ def main():
         fh.write('\n}  // namespace types\n}  // namespace zone\n')
 
     fn_lines = emit_functions(syms, recs, namer, secs, image_base, notes)
+    taken = {l.split('kVa_')[1].split(' ')[0] for l in fn_lines if l.startswith('static const unsigned int kVa_')}
+    fn_lines += emit_public_functions(pdump, taken, set(candidates), secs, image_base, notes)
     fns_h = os.path.join(a.out, 'zone_functions.h')
     with open(fns_h, 'w', newline='\n') as fh:
         fh.write(BANNER % (os.path.basename(a.pdb), os.path.basename(a.exe), exe_sha, WHY_FNS))
@@ -792,7 +925,15 @@ def main():
         fh.write('\n'.join(fn_lines))
         fh.write('\n}  // namespace fn\n}  // namespace zone\n')
 
-    dsyms = parse_data_symbols(sdump)
+    # Module symbols carry the statics; the TRUE globals (gpp, sock2gameDB, chargedbuffdatabox, ...) are
+    # only in the PDB's global symbol stream - which is why they used to be hand-listed ANCHORS in
+    # mk_symbols.py. Read both, one entry per address, module first.
+    dsyms, seen = [], set()
+    for src in (sdump, gdump):
+        for d in parse_data_symbols(src):
+            if (d[1], d[2]) not in seen:
+                seen.add((d[1], d[2]))
+                dsyms.append(d)
     glob_lines = emit_globals(dsyms, recs, namer, secs, image_base, notes)
     globals_h = os.path.join(a.out, 'zone_globals.h')
     with open(globals_h, 'w', newline='\n') as fh:
@@ -800,10 +941,15 @@ def main():
         fh.write('#include "zonehook.h"\n#include "zone_types.h"\n\n')
         fh.write('namespace zone {\nnamespace global {\n\nusing namespace ::zone::types;\n\n')
         fh.write('\n'.join(glob_lines))
-        fh.write('\n}  // namespace global\n}  // namespace zone\n')
+        fh.write('\n}  // namespace global\n\n')
+        fh.write("// Every zone class's vtable, by its class name (see emit_vtables in the tool).\n")
+        fh.write('namespace vtable {\n\n')
+        fh.write('\n'.join(emit_vtables(pdump, set(candidates), secs, image_base, notes)))
+        fh.write('\n\n}  // namespace vtable\n}  // namespace zone\n')
 
     print()
-    print('  %s  %d globals  (%s)' % (globals_h, notes['global'], human(os.path.getsize(globals_h))))
+    print('  %s  %d globals, %d vtables  (%s)' % (globals_h, notes['global'], notes['vtable'],
+                                                    human(os.path.getsize(globals_h))))
     print('  %s   %d enums, %d structs, %d unions  (%s)'
           % (types_h, len(enums), len(structs), len(unions), human(os.path.getsize(types_h))))
     print('  %s  %d functions  (%s)' % (fns_h, notes['fn'], human(os.path.getsize(fns_h))))
@@ -812,6 +958,7 @@ def main():
     print('  functions with an unspellable signature, skipped : %d' % notes['fn_unspellable'])
     print('  type records dropped as not-the-game             : %d' % notes['type_dropped'])
     print('  globals emitted untyped (address only)           : %d' % notes['global_untyped'])
+    print('  functions from public names (templates, folds)   : %d  (unspellable: %d)' % (notes['fn_public'], notes['fn_public_unspellable']))
     print('  globals skipped as an ambiguous duplicate name   : %d' % notes['global_ambiguous'])
 
 
