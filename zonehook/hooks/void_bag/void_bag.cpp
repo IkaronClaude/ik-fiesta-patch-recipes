@@ -1,8 +1,9 @@
 // void_bag - the extra inventory (bag 18), as a hook DLL.
 //
-// STATUS: bag 18 exists in the zone and items move in and out of it within a session (with the
-// void-bag-reloc recipe). NOT YET PERSISTED: the Character side - saving the move and loading bag 18
-// at login - is the next piece.
+// STATUS: bag 18 exists in the zone and items move in and out of it (void-bag-reloc recipe); moves are
+// saved to tItem by the zone's own generic storage calls. LOADING at login is new and not yet booted: the
+// zone asks Character for bag 18 (NC_CHAR_GET_ITEMLIST_BY_TYPE_REQ), which needs the Character chain and
+// the char_void plugin there - see "loading" below.
 //
 // ---- THE SPEC (operator) ---------------------------------------------------------------------------
 //   2 pages of 144 slots = 288 cells total.
@@ -293,6 +294,9 @@ const int kVoidCapacity = kMaxVoidPages * kCellsPerVoidPage;
 struct VoidBag {
     void** vptr;
     ItemInventoryCell cells[kVoidCapacity];
+    // ours, after everything the zone reads (the vptr and 288 cells)
+    bool loaded;            // the character's bag-18 rows have arrived from Character (see "loading" below)
+    unsigned owner;         // the character they belong to (so_GetCharRegistNumber)
 };
 static_assert(offsetof(VoidBag, cells) == 4, "ib_GetInventoryCell addresses this + 4 + slot * 116");
 static_assert(sizeof(ItemInventoryCell) == 116, "and 116 is the cell size it multiplies by");
@@ -339,6 +343,8 @@ VoidBag* bag_for(void* player, bool create) {
     } else if (create) {
         bag = new VoidBag;
         bag->vptr = &g_vtable[1];
+        bag->loaded = false;
+        bag->owner = 0;
         clear_bag(bag);
         g_bags[player] = bag;
     }
@@ -346,10 +352,19 @@ VoidBag* bag_for(void* player, bool create) {
     return bag;
 }
 
-// What the recipe's cave calls: ItemBag* __cdecl (ShinePlayer*). Null would make the move take the
-// zone's default - refused, exactly as without the recipe.
+// What the recipe's cave calls: ItemBag* __cdecl (ShinePlayer*). Null makes the move take the zone's
+// default - refused, exactly as without the recipe.
+//
+// NOT UNTIL THE BAG IS LOADED. Its contents arrive from Character a moment after login (see "loading"
+// below). A move made before that would work on an empty in-memory bag while tItem still holds the real
+// rows: a deposit could take a slot a stored item already occupies, and two items would then share one
+// (nStorageType, nStorage). Refusing costs the player one click; the other way costs an item.
 extern "C" void* __cdecl void_bag_of(void* player) {
-    return player ? bag_for(player, true) : nullptr;
+    VoidBag* bag = player ? bag_for(player, false) : nullptr;
+    if (bag && bag->loaded) return bag;
+    zone::log("void bag of player %x: %s - move refused", player,
+              bag ? "contents not loaded from Character yet" : "never loaded (no inventory login seen)");
+    return nullptr;
 }
 
 // Which bags an item may move between. Every move is checked by CItemAuthorityBase::IA_CanInvenReloc(
@@ -380,16 +395,180 @@ void __declspec(naked) ia_thunk() {
     __asm { jmp ia_impl }
 }
 
-// A character is being loaded into this player object: whatever the bag held belonged to someone else.
+// ---- loading: bag 18 from Character at login ----------------------------------------------------------
+//
+// Character sends the login bags as PROTO_NC_CHAR_ITEM_CMDs, one per bag, and so_StoreInventoryFromServer
+// picks the bag by nPartMark (byte 1): 0x04 inventory, 0x08 equipment, 0x10 mini-house, 0x20 action items.
+// There is no bit for bag 18. But there is a request for ANY bag, already in both exes:
+//
+//   zone -> Character  NC_CHAR_GET_ITEMLIST_BY_TYPE_REQ 0x1076  {u16 op, u16 handle, u32 charno, u8 type, u32 owner}
+//   Character -> zone  NC_CHAR_GET_ITEMLIST_BY_TYPE_ACK 0x1077  ... +8 type, +9 owner, +0xD u16 error (0x1200 ok),
+//                      +0x10 flags (bit 0 first reply, bit 1 last), +0x11 u8 count, +0x12 the items
+//
+// The zone sends it itself for the mini-house bags (0x5722A4) and its reply handler loads types 3, 13, 14 and
+// 16 (0x518E20). Character answers 18 through the char_void plugin (char-itemlist-void widens its switch).
+//
+// So: when the inventory part arrives - once per login into this zone - the bag is reset and 18 is asked for.
+// The replies are loaded with the zone's own ItemBag::ib_Initializetotal (the function the login bags go
+// through: it files each item at its own slot and asserts on a slot past the bag), and after the last one
+// the client gets box 18 as a 0x1047, built by the zone's own ci_FillBufferInventoryItem. Until then the bag
+// is not "loaded" and every move into or out of it is refused (void_bag_of).
+
+const unsigned short kOpItemListByTypeReq = 0x1076;   // NC_CHAR_GET_ITEMLIST_BY_TYPE_REQ: CHAR (4) << 10 | 118
+const unsigned short kOpClientItemCmd = 0x1047;       // NC_CHAR_CLIENT_ITEM_CMD, as so_StoreInventoryFromServer sends it
+const unsigned short kItemListOk = 0x1200;
+const unsigned char kPartInventory = 0x04;            // so_StoreInventoryFromServer: test al, 4 -> the inventory
+const int kClientChunkBytes = 0x1F40;                 // what so_StoreInventoryFromServer asks per 0x1047
+
+using zone::types::ShineObjectClass__ShinePlayer;
+static_assert(offsetof(ShineObjectClass__ShinePlayer, sp_Item.itembag) == 0x7FD8,
+              "the CharacterInventory so_StoreInventoryFromServer passes to ci_FillBufferInventoryItem (0x44E01A)");
+
+unsigned char_number(void* player) {
+    return (unsigned)zone::fn::ShineObjectClass__ShinePlayer__so_GetCharRegistNumber()(player, 0);
+}
+
+unsigned short handle_of(void* player) {
+    return *(const unsigned short*)((const char*)player + offsetof(zone::types::ShineObjectClass__ShineObject, so_handle));
+}
+
+// The global packet every zone sender fills: its first member points at the buffer, which starts with the opcode.
+void* global_packet() { return zone::rebase(zone::kVaGlobalProtocolPacket); }
+unsigned char* global_buffer() { return *(unsigned char**)global_packet(); }
+
+bool set_packet_len(int len) {
+    return zone::fn::ProtocolPacket__pp_SetPacketLen()(global_packet(), 0, len) != 0;
+}
+
+void request_void_list(void* player, unsigned charno) {
+    typedef void*(__fastcall* GetSocket)(void* bundle, void* edx);
+    void* session = ((GetSocket)zone::rebase(zone::kVaSocketBundleGetSocket))(zone::rebase(zone::kVaSock2GameDB), 0);
+    unsigned char* b = global_buffer();
+    if (!session || !b) {
+        zone::log("void bag of char %u: NOT requested - %s", charno, session ? "no packet buffer" : "no Character session");
+        return;
+    }
+    *(unsigned short*)(b + 0) = kOpItemListByTypeReq;
+    *(unsigned short*)(b + 2) = handle_of(player);
+    *(unsigned*)(b + 4) = charno;
+    b[8] = kVoidBagId;
+    *(unsigned*)(b + 9) = charno;
+    if (!set_packet_len(13)) {
+        zone::log("void bag of char %u: NOT requested - pp_SetPacketLen refused 13 bytes", charno);
+        return;
+    }
+    zone::fn::ProtocolPacket__pp_SendPacket()(global_packet(), 0, (zone::types::ZoneBaseSession*)session);
+    zone::log("void bag of char %u (player %x): asked Character for bag %u", charno, player, (unsigned)kVoidBagId);
+}
+
+// Box 18 to the client, exactly as so_StoreInventoryFromServer sends a login bag (0x44DF57..0x44E0AB): the
+// global buffer as {u16 0x1047, u8 count, u8 box, u8 flags (bit 0: first), items}, filled 0x1F40 bytes at a
+// time by ci_FillBufferInventoryItem, which walks the bag it is GIVEN - ours - and returns the bytes it wrote.
+int send_void_list(void* player, VoidBag* bag) {
+    unsigned char* b = global_buffer();
+    if (!b) return 0;
+    *(unsigned short*)b = kOpClientItemCmd;
+    unsigned char* p = b + 2;
+    p[1] = kVoidBagId;
+    void* ci = (char*)player + offsetof(ShineObjectClass__ShinePlayer, sp_Item.itembag);
+    auto fill = zone::fn::CharacterInventory__ci_FillBufferInventoryItem();
+    int cursor = 0, packets = 0;
+    unsigned char first = 1;
+    for (;;) {
+        int n = fill(ci, 0, p, (zone::types::PROTO_ITEMPACKET_INFORM*)(p + 3), kVoidBagId, &cursor,
+                     kClientChunkBytes, (zone::types::ItemBag*)bag);
+        if (n <= 0) break;
+        p[2] = (unsigned char)((p[2] & ~1) | first);
+        first = 0;
+        if (!set_packet_len(n + 5)) { zone::log("box 18 list: pp_SetPacketLen refused %d bytes", n + 5); break; }
+        // ShinePlayer::so_GetDataSocketStream()->[+0xC](player, packet): the client send the zone uses here
+        typedef void(__fastcall* Send)(void* stream, void* edx, void* player, void* packet);
+        void* stream = zone::fn::ShineObjectClass__ShinePlayer__so_GetDataSocketStream()(player, 0);
+        if (!stream) break;
+        ((Send)(*(void***)stream)[0xC / 4])(stream, 0, player, global_packet());
+        packets++;
+    }
+    return packets;
+}
+
+VoidBag* bag_of_char(unsigned owner, void** player_out) {
+    VoidBag* found = nullptr;
+    EnterCriticalSection(&g_bags_lock);
+    for (auto& kv : g_bags)
+        if (kv.second->owner == owner) { found = kv.second; *player_out = kv.first; break; }
+    LeaveCriticalSection(&g_bags_lock);
+    // the object may have been handed to another character since the request went out
+    if (found && char_number(*player_out) != owner) return nullptr;
+    return found;
+}
+
+void on_void_list(const unsigned char* pkt) {
+    unsigned owner = *(const unsigned*)(pkt + 9);
+    unsigned short err = *(const unsigned short*)(pkt + 0xD);
+    unsigned char flags = pkt[0x10];
+    unsigned char n = pkt[0x11];
+    void* player = nullptr;
+    VoidBag* bag = bag_of_char(owner, &player);
+    if (!bag) {
+        zone::log("bag 18 reply for char %u: no such player here any more - dropped", owner);
+        return;
+    }
+    if (err != kItemListOk) {
+        // 0x1202 is what a Character WITHOUT char_void answers. The bag stays unloaded: moves stay refused.
+        zone::log("bag 18 reply for char %u: error 0x%04X - bag left unloaded, void moves stay refused", owner, (unsigned)err);
+        return;
+    }
+    if (flags & 1) { clear_bag(bag); bag->loaded = false; }
+    if (n) {
+        unsigned char count = n;
+        zone::fn::ItemBag__ib_Initializetotal()(bag, 0, &count,
+            (zone::types::PROTO_ITEMPACKET_TOTAL*)(pkt + 0x12), kVoidBagId);
+    }
+    zone::log("bag 18 reply for char %u: %u item(s)%s%s", owner, (unsigned)n, (flags & 1) ? ", first" : "",
+              (flags & 2) ? ", last" : "");
+    if (flags & 2) {
+        int items = 0;
+        for (const auto& c : bag->cells)
+            if (c.iic_Item.iti_itemstruct.itemid != 0xFFFF) items++;
+        bag->loaded = true;
+        int packets = send_void_list(player, bag);
+        zone::log("void bag of char %u LOADED: %d item(s) in %d cells; box 18 sent to the client in %d packet(s)",
+                  owner, items, kVoidCapacity, packets);
+    }
+}
+
+// GameDBSession::gds_NC_CHAR_GET_ITEMLIST_BY_TYPE_ACK(NETCOMMAND*, int): type 18 is ours, the rest go on.
+zone::Detour g_list_detour;
+
+void __fastcall list_ack_impl(void* self, void* /*edx*/, unsigned char* pkt, int a2) {
+    if (pkt && pkt[8] == kVoidBagId) {
+        on_void_list(pkt);
+        return;
+    }
+    typedef void(__fastcall* Orig)(void*, void*, unsigned char*, int);
+    ((Orig)g_list_detour.trampoline)(self, 0, pkt, a2);
+}
+
+void __declspec(naked) list_ack_thunk() {
+    __asm { jmp list_ack_impl }
+}
+
+// A login bag arrived. Only the INVENTORY part marks a (re)load of the character: it resets the void bag and
+// asks for bag 18. The other parts (equipment, mini-house, action items) leave it alone - clearing on every
+// part, as this used to, wiped the bag three more times per login.
 zone::Detour g_store_detour;
 
 void __fastcall store_impl(void* self, void* /*edx*/, void* itemcmd) {
     typedef void(__fastcall* Orig)(void*, void*, void*);
     ((Orig)g_store_detour.trampoline)(self, 0, itemcmd);
-    if (VoidBag* bag = bag_for(self, false)) {
-        clear_bag(bag);
-        zone::log("void bag of player %x cleared for a newly loaded character", self);
-    }
+    const unsigned char* cmd = (const unsigned char*)itemcmd;
+    if (!cmd || !(cmd[1] & kPartInventory)) return;
+    unsigned charno = char_number(self);
+    VoidBag* bag = bag_for(self, true);
+    clear_bag(bag);
+    bag->loaded = false;
+    bag->owner = charno;
+    request_void_list(self, charno);
 }
 
 void __declspec(naked) store_thunk() {
@@ -469,6 +648,9 @@ ZONEHOOK_PLUGIN("void_bag") {
     zone::hook_function("ShinePlayer::so_StoreInventoryFromServer",
                         zone::rebase(zone::fn::kVa_ShineObjectClass__ShinePlayer__so_StoreInventoryFromServer),
                         (void*)store_thunk, &g_store_detour);
+    zone::hook_function("GameDBSession::gds_NC_CHAR_GET_ITEMLIST_BY_TYPE_ACK",
+                        zone::rebase(zone::fn::kVa_GameDBSession__gds_NC_CHAR_GET_ITEMLIST_BY_TYPE_ACK),
+                        (void*)list_ack_thunk, &g_list_detour);
     zone::hook_function("CItemAuthorityBase::IA_CanInvenReloc",
                         zone::rebase(zone::fn::kVa_CItemAuthorityBase__IA_CanInvenReloc),
                         (void*)ia_thunk, &g_ia_detour);

@@ -1,0 +1,172 @@
+{
+  "name": "char-itemlist-void",
+  "summary": "Let NC_CHAR_GET_ITEMLIST_BY_TYPE_REQ answer bag 18 (the 2026 Void Inventory) through a packer the char_void plugin provides.",
+  "status": "BUILT AND STATICALLY VERIFIED. Not yet booted.",
+  "target": {
+    "file": "Character/Character.exe",
+    "sha256": "2889640536a271468ef17cc6c74bd6f8799222e3bd95b81d53ea59d41c5a9e1c",
+    "size": 927744
+  },
+  "params": {},
+  "consts": {
+    "switch_cmp_imm8": "0x00417507",
+    "switch_tbl_disp": "0x00417511",
+    "switch_tbl_old": "0x0041781C",
+    "default": "0x004176B6",
+    "resolved": "0x0041752B",
+    "gate1_imm8": "0x00469F81",
+    "gate2_imm8": "0x0046A06B",
+    "old_max_type": "0x10",
+    "new_max_type": "0x12",
+    "old_type_limit": "0x11",
+    "new_type_limit": "0x13",
+    "slot": "0x00",
+    "tbl": "0x04",
+    "cave": "0x50"
+  },
+  "new_section": {
+    "name": ".charvoid",
+    "size": "0x80",
+    "materialise": true,
+    "execute": true,
+    "note": "One arena region, labelled .charvoid: the plugin slot (+0), the widened jump table (+0x04) and the case-18 cave (+0x50). Executable and materialised, and writable because the plugin fills the slot."
+  },
+  "why": [
+    "The zone asks Character for one bag's items with NC_CHAR_GET_ITEMLIST_BY_TYPE_REQ (0x1076, {header, u8",
+    "type, u32 owner}); Character's handler (0x417460 - it logs no name of its own, it is found by the 0x1077",
+    "reply it builds) switches on the type and calls that bag's packer:",
+    "",
+    "    0x417505  cmp ecx, 0x10 ; ja 0x4176B6 (error 0x1202) ; jmp [ecx*4 + 0x41781C]",
+    "    case 9:   lea edx,[ebp-0x1E828] ; push edx ; lea ecx,[ebp-0x1C813] ; push ecx ; push eax ; mov ecx,esi",
+    "              call 0x402F80 ; jmp 0x41752B",
+    "",
+    "and everything after 0x41752B is bag-agnostic: it splits the packed list into 0x1077 replies of at most",
+    "0x1FFB bytes, first/last flagged. So bag 18 needs a case and a packer, nothing else. The packer is the",
+    "plugin's (__thiscall(CPFs*, owner, out, int* len), as 0x402F80); a null slot takes the default, so without",
+    "the plugin Character answers 18 with the 0x1202 it always did.",
+    "",
+    "The two list readers the packers end in (0x469F70, 0x46A040) refuse any type >= 0x11 before querying;",
+    "p_Item_GetListType itself is `WHERE nOwner = @nCharNo AND nStorageType = @nStorageType`, generic. Their",
+    "bound goes to 0x13. Every existing caller passes a constant type below 0x11, so none of them changes."
+  ],
+  "code": [
+    {
+      "why": "the handler's jump table, widened to 0..18",
+      "at": "@newbase + tbl",
+      "emit": [
+        {
+          "u32": "0x00417515"
+        },
+        {
+          "u32": "0x00417548"
+        },
+        {
+          "u32": "0x00417560"
+        },
+        {
+          "u32": "0x0041762F"
+        },
+        {
+          "u32": "0x00417578"
+        },
+        {
+          "u32": "0x00417590"
+        },
+        {
+          "u32": "0x004175A8"
+        },
+        {
+          "u32": "0x004175C3"
+        },
+        {
+          "u32": "0x004175DE"
+        },
+        {
+          "u32": "0x004175F9"
+        },
+        {
+          "u32": "0x00417533"
+        },
+        {
+          "u32": "0x0041769B"
+        },
+        {
+          "u32": "0x00417614"
+        },
+        {
+          "u32": "0x0041764A"
+        },
+        {
+          "u32": "0x00417665"
+        },
+        {
+          "u32": "0x0041769B"
+        },
+        {
+          "u32": "0x00417680"
+        },
+        {
+          "u32": "default"
+        },
+        {
+          "u32": "@newbase + cave"
+        }
+      ]
+    },
+    {
+      "why": "case 18: the plugin's packer, called exactly as case 9 calls 0x402F80, else the default",
+      "at": "@newbase + cave",
+      "emit": [
+        "8B15",
+        {
+          "u32": "@newbase + slot"
+        },
+        "85D2",
+        "0F84",
+        {
+          "rel32": "default"
+        },
+        "8D8DD817FEFF",
+        "51",
+        "8D8DED37FEFF",
+        "51",
+        "50",
+        "8BCE",
+        "FFD2",
+        "E9",
+        {
+          "rel32": "resolved"
+        }
+      ]
+    }
+  ],
+  "edits": [
+    {
+      "why": "GET_ITEMLIST_BY_TYPE switch: bound 16 -> 18",
+      "at": "switch_cmp_imm8",
+      "width": 1,
+      "expect": "old_max_type",
+      "write": "new_max_type"
+    },
+    {
+      "why": "GET_ITEMLIST_BY_TYPE switch: the widened table",
+      "at": "switch_tbl_disp",
+      "expect": "switch_tbl_old",
+      "write": "@newbase + tbl"
+    },
+    {
+      "why": "list reader 0x469F70: accept type 18",
+      "at": "gate1_imm8",
+      "width": 1,
+      "expect": "old_type_limit",
+      "write": "new_type_limit"
+    },
+    {
+      "why": "list reader 0x46A040: accept type 18",
+      "at": "gate2_imm8",
+      "width": 1,
+      "expect": "old_type_limit",
+      "write": "new_type_limit"
+    }
+  ]
+}
