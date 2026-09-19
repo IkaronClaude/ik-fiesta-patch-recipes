@@ -1,0 +1,69 @@
+{
+  "name": "inventory-expansion-cap",
+  "summary": "Allow a third permanent inventory expansion: 2 + 6 = 8 inventory pages, as in 2026, instead of 2 + 4 = 6.",
+  "status": "BUILT AND STATICALLY VERIFIED. Not yet booted.",
+
+  "target": {
+    "file": "Zone00/Zone.exe",
+    "sha256": "7ef3532da08194a377558322ca2bd06d1ce5bdb2813796e033173b72d9ff883d",
+    "size": 4673536
+  },
+
+  "params": {
+    "max_extra_pages": 6
+  },
+
+  "consts": {
+    "old_max": "4",
+    "site": "0x00598580"
+  },
+
+  "limits": {
+    "max_extra_pages": {
+      "max": "6",
+      "why": "Two other things are sized for exactly 8 pages and would need changing too: ChargedItemElement::ciee_Activ clamps cec_MoreInven to 6 when it applies an expansion (0x4505EE, cmp byte [ecx+0x27A], 6), and ItemInventory is a fixed ItemInventoryCell[192] = 8 pages of 24. Above 6 the use check would admit an expansion that the apply step silently truncates, into cells that do not exist."
+    }
+  },
+
+  "why": [
+    "A character starts with 2 inventory pages. Inventory expansions (ChargedEffect EffectEnum 2,",
+    "EE_MOREINVENTORY - the Old/Tough Bag family and the permanent Iron Case, EffectValue 2) add pages.",
+    "In 2016 the most you can add is 4, so 6 pages. 2026 allows 6 more, so 8 - and the 2026 client",
+    "will not let a Void Inventory item be used at all until the character holds three permanent",
+    "expansions (client 0x8167C0, counted from the 0x9003 charged-effect entries). So this is the",
+    "prerequisite for the void inventory, not a nicety.",
+    "",
+    "Observed 2026-09-19 on our stack: Iron Case #1 and #2 answered 0x3016 result 0x0700 (used),",
+    "Iron Case #3 answered 0x0713, 'The selected item does not have any effect when used'. The zone",
+    "produces 0x713 in exactly two places; for a charged item it is",
+    "UseEffect::UseItemChargedBuff::uib_CanUseItem, which switches on EffectEnum and for",
+    "EE_MOREINVENTORY does:",
+    "",
+    "    0x598574   movzx edx, byte ptr [ecx+0xA]    ; ChargedEffectContainer::cec_MoreInven, current",
+    "    0x598578   movzx eax, word ptr [esi+0x28]   ; ChargedItemEffect::EffectValue of this item",
+    "    0x59857C   add   edx, eax",
+    "    0x59857E   cmp   edx, 4                     ; 83 FA 04",
+    "    0x598581   jle   allowed",
+    "               -> 0x713",
+    "",
+    "THE REST OF THE ZONE ALREADY ALLOWS 8 PAGES. The apply step clamps to 6, not 4, and the",
+    "inventory itself is 192 cells - 8 pages of 24. Only this pre-use check was stricter, so raising",
+    "its constant to match is the whole change: one imm8.",
+    "",
+    "NOT CHANGED: the storage check right after it (0x598593, cmp ecx, 2 on cec_MoreStorage). A",
+    "different bag with its own limits.",
+    "",
+    "NOT CHECKED HERE: that items in pages 7-8 survive a relog. Slots are stored by number and the",
+    "array already has them, so there is no reason they would not - but it has not been watched yet."
+  ],
+
+  "edits": [
+    {
+      "why": "UseItemChargedBuff::uib_CanUseItem: EE_MOREINVENTORY cap (cmp edx, imm8)",
+      "at": "site",
+      "width": 1,
+      "expect": "old_max",
+      "write": "max_extra_pages"
+    }
+  ]
+}
