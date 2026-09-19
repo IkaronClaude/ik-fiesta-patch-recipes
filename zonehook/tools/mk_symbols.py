@@ -1,7 +1,7 @@
 """Generate zonehook's symbol table from Zone.pdb.
 
     python tools/mk_symbols.py --pdb Z:/ServerSource/Zone00/Zone.pdb --exe Z:/ServerSource/Zone00/Zone.exe \
-        --out src/zone_symbols.h
+        --out include/zone_symbols.h
 
 Every address the DLL hooks comes from here, never from a number typed into C++. The zone's packet handlers
 are `ShinePlayer::sp_NC_<NAME>` - 195 of them - and they are NOT virtual (the mangling says QAE = public
@@ -51,7 +51,7 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument('--pdb', default='Z:/ServerSource/Zone00/Zone.pdb')
     ap.add_argument('--exe', default='Z:/ServerSource/Zone00/Zone.exe')
-    ap.add_argument('--out', default=os.path.join(HERE, '..', 'src', 'zone_symbols.h'))
+    ap.add_argument('--out', default=os.path.join(HERE, '..', 'include', 'zone_symbols.h'))
     a = ap.parse_args()
 
     secs = D.sections(a.exe)[0]   # sections() returns (list, ...); the list is what maps seg -> VA
@@ -85,16 +85,16 @@ def main():
         '// (the exe sets DYNAMIC_BASE), so every address is rebased at runtime against the real module base:',
         '// see zone::rebase() in hook.h. Never use one of these as a raw pointer.',
         '#pragma once',
-        '// no CRT: the fixed-width names come from hook.h',
+        '// Self-contained: plain `unsigned int`, so this can be included before anything else.',
         '',
         'namespace zone {',
         '',
-        'static const uint32_t kImageBase = 0x%08Xu;' % base,
+        'static const unsigned int kImageBase = 0x%08Xu;' % base,
         'static const char kExeSha256[] = "%s";' % exe_sha,
         '',
         '// ShinePlayer::sp_NC_<NAME>(TNETCOMMAND*, int, unsigned short) - the packet handlers.',
         '// void __thiscall, so a detour must preserve ECX (the ShinePlayer*).',
-        'struct Handler { const char* name; uint32_t va; };',
+        'struct Handler { const char* name; unsigned int va; };',
         'static const Handler kHandlers[] = {',
     ]
     for name in sorted(handlers):
@@ -106,12 +106,12 @@ def main():
     ]
     out.append('// Anchors - see ANCHORS in mk_symbols.py for why the service thread, and not WinMain.')
     for k in sorted(anchors):
-        out.append('static const uint32_t kVa%s = 0x%08Xu;' % (k, anchors[k]))
+        out.append('static const unsigned int kVa%s = 0x%08Xu;' % (k, anchors[k]))
     out.append('')
 
     if extra:
         out.append('// vtables, for the cases where swapping a slot is the right tool')
-        out.append('struct Vtable { const char* name; uint32_t va; };')
+        out.append('struct Vtable { const char* name; unsigned int va; };')
         out.append('static const Vtable kVtables[] = {')
         for name in sorted(extra):
             out.append('    { "%s", 0x%08Xu },' % (name.replace('"', ''), extra[name]))

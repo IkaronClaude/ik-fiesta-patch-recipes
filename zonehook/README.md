@@ -1,84 +1,77 @@
-# zonehook — write zone features in C++ instead of byte patches
+# zonehook
 
-Every 2026 feature the zone still lacks is **code**, not data: the void bag is a new `ItemBag` subclass, the
-Corruption event is a whole packet department, quest-gated map entry is a check the 2016 exes never had. A
-recipe in this repo can move a constant or repoint a global; it cannot add a class or a packet handler. So
-the zone gets a DLL, and the features get written in C++.
+Write zone features in C++ instead of hand-assembled bytes.
 
-## How it loads
-
-`recipes/dll-loader.json` adds one import to Zone.exe. The Windows loader then maps `zonehook.dll` and runs
-its `DllMain` **before the exe's entry point** — ahead of the CRT, before any zone thread exists. No code is
-patched to make this happen, and it is undone by rewriting one data directory.
-
-The import descriptor array (8 entries in `.rdata`) is *copied* into a new `.zhook` section with a ninth
-appended; the originals keep their ILT/IAT/name RVAs. `apply.py` refuses if the image has a bound-import
-directory, because a bound image may skip the descriptor array entirely and silently drop the new entry.
-Zone.exe has none.
+Zone.exe is patched once to import `zonehook.dll` (`recipes/dll-loader.json`). That loader then loads
+every DLL in a `hooks/` folder beside the exe, immediately before the zone's own `ServiceMain`. Features
+live in those plugins; the loader itself never changes.
 
 ```
-python apply.py recipes/dll-loader.json --exe Z:/ServerSource/Zone00/Zone.exe --out build/Zone.hooked.exe
-cd zonehook && build.bat
-copy zonehook\build\zonehook.dll  <next to Zone.hooked.exe>
+zonehook.dll          the loader. CRT-free, does one thing.
+hooks/*.dll           your features. Full CRT, full C++.
+include/zonehook.h    header-only library - detour, vtable, IAT, packet macros, logging
+include/zone_types.h      466 enums, 3540 structs, 54 unions   generated from Zone.pdb
+include/zone_functions.h  10261 typed function pointers        generated from Zone.pdb
+include/zone_globals.h    372 global objects (the loaded tables)
+include/zonehook_lua.h    the zone's Lua 5.2 engine
+docs/HOOK-TARGETS.md      WHERE to hook, and with which tool
 ```
 
-Verified with an independent parser: `pefile` reads the patched image as
-`zonehook.dll -> ZoneHookInit (hint 0)`, and the eight original imports are byte-identical.
+## Build
 
-## What's in the box
+```bash
+./build.bat                     # zonehook.dll
+hooks/build_hook.bat void_bag   # hooks/build/void_bag.dll
+```
 
-| | |
-|---|---|
-| `src/hook.h/.cpp` | trampoline `detour()`, `vtable_set()`, `rebase()`, logging |
-| `src/packet_hook.h/.cpp` | hook a zone packet handler **by name** |
-| `src/zone_symbols.h` | generated — 246 handler addresses straight from Zone.pdb |
-| `tools/mk_symbols.py` | regenerates the above for a different Zone build |
-| `test/test_hook.cpp` | self-test; runs standalone, no Zone.exe needed |
+Deploy `zonehook.dll` next to the patched Zone.exe and the plugins in `hooks/`. Rebuild the exe with
+`python build_zone.py --exe <stock Zone.exe> --out Zone.exe --experimental`.
 
-## Hooking a packet
-
-The zone dispatches to `ShinePlayer::sp_NC_<NAME>(TNETCOMMAND*, int, unsigned short)`. **None of these is
-virtual** — the mangling is `QAE` (public `__thiscall`), not `UAE` — so there is no vtable slot to swap and
-the call sites are direct. Each hook is a trampoline on the function itself, at an address taken from the
-PDB rather than typed in.
+## A plugin
 
 ```cpp
+#include <zonehook.h>
+
 ZONE_HOOK_PACKET(NC_ITEM_RELOC_REQ, {
-    const unsigned char* p = (const unsigned char*)cmd;
-    unsigned short from = *(const unsigned short*)(p + 2);   // past the opcode
-    unsigned short to   = *(const unsigned short*)(p + 4);
-    zone::log("[reloc] %u:%u -> %u:%u", from >> 10, from & 0x3FF, to >> 10, to & 0x3FF);
-    ZONE_CALL_ORIGINAL_OF(NC_ITEM_RELOC_REQ);                // omit to swallow the packet
+    zone::log("reloc from player %x", self);
+    ZONE_CALL_ORIGINAL_OF(NC_ITEM_RELOC_REQ);     // omit to swallow the packet
 });
-...
-ZONE_INSTALL_PACKET(NC_ITEM_RELOC_REQ);
+
+ZONEHOOK_PLUGIN("my_feature") {
+    ZONE_INSTALL_PACKET(NC_ITEM_RELOC_REQ);
+}
 ```
 
-`__thiscall` puts the `ShinePlayer*` in ECX, which a free function cannot declare portably — hence the
-macro, which emits a naked thunk and hands the body an explicit `self`.
+Everything logs to `zonehook.log` beside the exe, one file, each line tagged with the module that wrote
+it — one chronological narrative rather than five separate logs.
 
-`vtable_set()` is there for genuinely virtual methods, where swapping a slot is cheaper and safer than
-rewriting `.text`.
+## Two things worth knowing
 
-## Things that will bite
+**Why plugins load at service start, not in DllMain.** `LoadLibrary` inside `DllMain` does work and would
+put plugins up before `WinMain`. It is not used, because it runs the plugin's `DllMain` under the loader
+lock, on a barely-committed stack, where a static CRT dies outright. Loading from the service thread
+gives every plugin a normal 1 MB stack, no loader lock, and the full CRT - and still runs before a single
+line of zone code, because `WinMain` only registers the service. Nothing is lost by waiting.
 
-- **Install only from `DllMain`.** Rewriting code another thread is executing is how you get a crash that
-  reproduces once a week. At `DLL_PROCESS_ATTACH` no zone thread exists yet.
-- **Don't *call* zone code from `DllMain`.** The CRT has not run and the globals are not constructed. Do
-  that work in a hook body, which by definition fires once the zone is alive.
-- **`insn_len()` is deliberately partial.** It decodes the prologue shapes this build actually uses and
-  returns 0 for anything else, so `detour()` refuses instead of truncating an instruction. If a hook is
-  refused, the log names the address and the byte — add that opcode rather than working around it. The
-  `A0-A3` moffs group was added exactly this way, after `test_hook` caught `55 8B EC A1 ...`.
-- **Zone.exe sets DYNAMIC_BASE**, so it can load away from 0x00400000. Every address goes through
-  `zone::rebase()`; never use a PDB VA as a raw pointer.
-- **32-bit only.** Zone.exe is PE32; a 64-bit DLL will not load into it. `build.bat` uses `vcvars32.bat`.
-- **The symbol table is per-build.** `zone_symbols.h` records the exe's SHA-256; regenerate with
-  `mk_symbols.py` against a different Zone.
+**Why the generated headers are trustworthy.** Every struct carries a `static_assert` on its size against
+the binary, so a wrong layout fails the *build*. Field offsets come from the PDB and are reproduced under
+`#pragma pack(1)` with explicit padding. A member whose type cannot be spelled exactly becomes raw bytes
+of the right width with the original type in a comment - never a guess. And all 246 packet-handler
+addresses cross-check between two independent extraction paths.
 
-## Status
+## Verified live
 
-Built and self-tested on 2026-09-19. The import injection is verified structurally with `pefile`; the hook
-machinery passes `test_hook.exe` (trampoline on a `__thiscall` method, on a `__cdecl` function, result
-rewriting, and clean uninstall). **Not yet run inside a live zone** — that needs the docker stack with the
-patched exe and the DLL beside it.
+Under Wine, in the docker stack, 2026-09-19:
+
+```
+[loader] loaded; exe base 400000, 246 known packet handlers
+[loader] [service] table entry 0: 'ZoneServer' ServiceMain 653480 -> 789023c0
+[loader] [service] '_Zone0' starting; running set-up before its ServiceMain at 653480
+[void_bag] CRT ok - inventory is 192 cells of 116 bytes
+[void_bag] [hook] NC_ITEM_RELOC_REQ at 537170 -> 788683c0 (trampoline 30d20000, 5 bytes displaced)
+[void_bag] [hook] LuaScript::ls_FunctionCall at 5d7bc0 -> 78862b7b
+[loader] 1 plugin(s) up
+[void_bag] script -> chrlghk (state 3ed60df0)
+```
+
+The zone went on to load all its maps normally.
