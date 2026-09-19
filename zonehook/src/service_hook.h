@@ -24,9 +24,9 @@
 // until we return from the first line. It needs no PDB, no address, and no instruction decoding, so it
 // works on every Fiesta exe that is a service, not just this one.
 #pragma once
-#include "../include/zonehook.h"
+#include "../include/hook_core.h"
 
-namespace zone {
+namespace hook {
 
 typedef void (*ServiceInitFn)();
 
@@ -41,4 +41,4 @@ bool hook_service_main(ServiceInitFn fn);
 // service never started" from "the service started and our set-up failed".
 bool service_started();
 
-}  // namespace zone
+}  // namespace hook

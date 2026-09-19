@@ -1,5 +1,5 @@
 @echo off
-rem Build zonehook.dll - the LOADER. 32-bit, to match Zone.exe (PE32).
+rem Build fiestahook.dll - the LOADER. 32-bit, to match Zone.exe (PE32) - and Character.exe, the same loader.
 rem   build.bat            release
 rem   build.bat debug      with symbols and no optimisation
 rem
@@ -28,12 +28,12 @@ set FLAGS=/nologo /W4 /EHsc /GS- /std:c++17 /DZH_NO_ODS /DWIN32_LEAN_AND_MEAN /Z
 if /i "%~1"=="debug" (set FLAGS=%FLAGS% /Od /Zi /MTd) else (set FLAGS=%FLAGS% /O2 /MT)
 
 cl %FLAGS% /LD src\dllmain.cpp src\plugins.cpp src\service_hook.cpp src\nocrt.cpp ^
-   /link /OUT:build\zonehook.dll /DEBUG /SUBSYSTEM:WINDOWS /NODEFAULTLIB /ENTRY:DllMain ^
+   /link /OUT:build\fiestahook.dll /DEBUG /SUBSYSTEM:WINDOWS /NODEFAULTLIB /ENTRY:DllMain ^
    kernel32.lib user32.lib advapi32.lib
 if errorlevel 1 exit /b 1
 
 echo.
-echo   build\zonehook.dll
+echo   build\fiestahook.dll
 echo.
-echo Deploy: zonehook.dll NEXT TO the patched Zone.exe, plugins in a hooks\ subfolder. Patch with:
+echo Deploy: fiestahook.dll NEXT TO the patched exe (Zone.exe or Character.exe), plugins in a hooks\ subfolder. Patch with:
 echo   python apply.py recipes/dll-loader.json --exe Zone.exe --out Zone.hooked.exe

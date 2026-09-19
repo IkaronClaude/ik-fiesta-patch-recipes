@@ -30,7 +30,7 @@
     "naming the export, instead of leaving a null in an IAT slot nobody calls."
   ],
   "add_import": {
-    "dll": "zonehook.dll",
+    "dll": "fiestahook.dll",
     "function": "ZoneHookInit",
     "section": ".zhook"
   },

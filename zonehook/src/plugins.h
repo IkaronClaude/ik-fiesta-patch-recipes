@@ -24,12 +24,12 @@
 // SCM calls ServiceMain, and we load the plugins immediately before that (see service_hook.h), so a plugin
 // is still up before a single line of zone code has run.
 #pragma once
-#include "../include/zonehook.h"
+#include "../include/hook_core.h"
 
-namespace zone {
+namespace hook {
 
 // Load every *.dll in `<folder beside the exe>`. Returns how many loaded. A failure is logged with its
 // reason and skipped - one bad plugin must not stop the others or the zone.
 int load_plugins(const wchar_t* folder = L"hooks");
 
-}  // namespace zone
+}  // namespace hook

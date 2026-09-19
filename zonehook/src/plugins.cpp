@@ -1,6 +1,6 @@
 #include "plugins.h"
 
-namespace zone {
+namespace hook {
 namespace {
 
 size_t wlen(const wchar_t* s) {
@@ -81,4 +81,4 @@ int load_plugins(const wchar_t* folder) {
     return loaded;
 }
 
-}  // namespace zone
+}  // namespace hook

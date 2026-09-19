@@ -7,13 +7,13 @@
 // in exactly that position. Staying CRT-free leaves the loader with no redistributable dependency, which
 // is what you want in something a server loads on every start. Plugins in hooks/ are under no such
 // restriction: they are loaded later, from the service thread, and may use the full CRT.
-#include "../include/zonehook.h"
+#include "../include/hook_core.h"
 
 extern "C" {
 
 #pragma function(memcpy, memset)
 
-void* memcpy(void* dst, const void* src, size_t n) { return zone::detail::mem_copy(dst, src, n); }
-void* memset(void* dst, int v, size_t n) { return zone::detail::mem_set(dst, v, n); }
+void* memcpy(void* dst, const void* src, size_t n) { return hook::detail::mem_copy(dst, src, n); }
+void* memset(void* dst, int v, size_t n) { return hook::detail::mem_set(dst, v, n); }
 
 }  // extern "C"

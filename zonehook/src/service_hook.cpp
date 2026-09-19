@@ -1,9 +1,9 @@
 #include "service_hook.h"
 
-#define detail_str_cmp  ::zone::detail::str_cmp
-#define detail_str_copy ::zone::detail::str_copy
+#define detail_str_cmp  ::hook::detail::str_cmp
+#define detail_str_copy ::hook::detail::str_copy
 
-namespace zone {
+namespace hook {
 namespace {
 
 enum { kMaxServices = 8, kMaxName = 64 };
@@ -90,4 +90,4 @@ bool hook_service_main(ServiceInitFn fn) {
 
 bool service_started() { return g_started; }
 
-}  // namespace zone
+}  // namespace hook
