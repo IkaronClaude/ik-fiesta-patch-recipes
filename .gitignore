@@ -5,20 +5,16 @@ __pycache__/
 # never commit game binaries -- BYO at runtime
 *.exe
 *.pdb
-zonehook/build/
-zonehook/*.exp
-zonehook/*.lib
-zonehook/*.obj
+*.exp
+*.lib
+*.obj
+*.ilk
 
-# Generated from Zone.pdb by zonehook/tools/mk_types.py. NOT committed: they are a derivative of the
-# server's debug symbols, which are BYO like every other game file here, and they are ~6MB. Regenerate:
-#   python zonehook/tools/mk_types.py --pdb Z:/ServerSource/Zone00/Zone.pdb \
-#                                     --exe Z:/ServerSource/Zone00/Zone.exe --out zonehook/include
-# (zone_symbols.h stays committed - it is a short table of packet-handler addresses, and predates this.)
-zonehook/include/zone_types.h
-zonehook/include/zone_functions.h
-zonehook/include/zone_globals.h
-zonehook/build/
-zonehook/hooks/build/
-zonehook/dllmain.exp
-zonehook/dllmain.lib
+# Generated from Zone.pdb by zone/tools/mk_types.py. NOT committed: they are a derivative of the server's
+# debug symbols, which are BYO like every other game file here, and they are ~7MB. Regenerate:
+#   python zone/tools/mk_types.py --pdb Z:/ServerSource/Zone00/Zone.pdb \
+#                                 --exe Z:/ServerSource/Zone00/Zone.exe --out zone/include
+# (zone_symbols.h and character_symbols.h stay committed - short address tables, no layouts.)
+zone/include/zone_types.h
+zone/include/zone_functions.h
+zone/include/zone_globals.h

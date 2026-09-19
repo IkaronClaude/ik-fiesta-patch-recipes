@@ -1,0 +1,38 @@
+{
+  "name": "dll-loader",
+  "summary": "Make Zone.exe load a companion DLL before its entry point, so features can be written in C/C++ instead of hand-assembled patches.",
+  "status": "BUILT 2026-09-18, not yet run against a live zone. The import injection is verified structurally (see tools/verify_import.py).",
+  "target": {
+    "file": "Zone00/Zone.exe",
+    "sha256": "7ef3532da08194a377558322ca2bd06d1ce5bdb2813796e033173b72d9ff883d",
+    "size": 4673536
+  },
+  "params": {},
+  "consts": {},
+  "why": [
+    "Every feature the 2026 content needs from the zone - the void bag (a new ItemBag type), the Corruption",
+    "event (a whole new packet department), quest-gated map entry, the 2026 price table - is CODE, not data.",
+    "Expressing those as byte edits in this repo does not scale: a recipe can move a constant or repoint a",
+    "global, but it cannot add a class, a packet handler or a DB round trip.",
+    "",
+    "So give the zone a DLL and write the features in C++. The loader does the work: an image that imports a",
+    "DLL has it mapped and its DllMain run BEFORE the exe entry point, ahead of the CRT, with no code patched.",
+    "",
+    "HOW: the import descriptor array (8 entries, RVA 0x0034ABB4 in .rdata) is COPIED into a new section with",
+    "one entry appended for fiestahook.dll, and the import data directory is pointed at the copy. The originals",
+    "keep their ILT/IAT/name RVAs, which still point into .rdata. Nothing in .text changes.",
+    "",
+    "SAFE because the image has no bound-import directory (checked at apply time and refused otherwise): a",
+    "bound image caches resolved addresses and a loader may then skip the descriptor array, silently dropping",
+    "the new import. Zone.exe has BoundImport RVA 0 size 0.",
+    "",
+    "ZoneHookInit is imported BY NAME so a missing or mismatched DLL fails loudly at load with a message box",
+    "naming the export, instead of leaving a null in an IAT slot nobody calls."
+  ],
+  "add_import": {
+    "dll": "fiestahook.dll",
+    "function": "ZoneHookInit",
+    "section": ".zhook"
+  },
+  "edits": []
+}
