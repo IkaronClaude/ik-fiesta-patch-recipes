@@ -44,18 +44,9 @@ ANCHORS = {
     'ZoneServiceThread': '?zs_ServiceThreadFunction@ZoneServer@@SGKPAX@Z',
     'StartDispatcher': '?startDispatcher@WinService@@QAE_NVString@@P6A_NXZP6AXXZ@Z',
     'WinMain': '_WinMain@16',
-    # The charged-effect table (ChargedEffect.shn as loaded): {u16 item id, ChargedItemEffect*} x cideb_Total,
-    # which UseItemChargedBuff::uib_CanUseItem walks to find an item's effect. A true global, so it is in
-    # the PDB's GLOBAL symbol stream - which is why zone_globals.h (built from module symbols) lacks it.
-    'ChargedBuffDataBox': '?chargedbuffdatabox@@3V?$ChargedItemEffectDataBox@UChargedItemEffect@@@@A',
-    # ItemInventory's vtable. A bag of our own borrows its RTTI locator ([-1]): the zone has 41
-    # __RTDynamicCast call sites, and one reading a null locator off a bag would take the zone down.
-    'ItemInventoryVtable': '??_7ItemInventory@@6B@',
-    # Sending to the Character server the way the zone does (e.g. NC_CHAR_GET_ITEMLIST_BY_TYPE_REQ at
-    # 0x5722A4): fill the global packet `gpp`, pp_SetPacketLen, then pp_SendPacket(sock2gameDB.sb_GetSocket()).
-    'GlobalProtocolPacket': '?gpp@@3VGlobalProtocolPacket@@A',
-    'Sock2GameDB': '?sock2gameDB@@3V?$SocketBundle@VGameDBSession@@@@A',
-    'SocketBundleGetSocket': '?sb_GetSocket@?$SocketBundle@VGameDBSession@@@@QAEPAVGameDBSession@@XZ',
+    # Data, vtables and template functions are NOT anchors any more: mk_types.py generates a typed accessor
+    # for every one - zone::global::chargedbuffdatabox(), zone::global::gpp(), zone::vtable::ItemInventory(),
+    # zone::fn::SocketBundle_GameDBSession___sb_GetSocket() - from the global stream and the public names.
 }
 
 

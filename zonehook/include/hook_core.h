@@ -192,7 +192,14 @@ inline void log(const char* fmt, ...) {
 // The exe's actual base. GetModuleHandle(NULL) is the exe no matter which module asks.
 // NOT a function-local static: that needs the CRT's __Init_thread_header/footer, which do not exist in
 // the no-CRT loader. GetModuleHandleW(NULL) is a cheap PEB read, so resolving every time costs nothing.
-inline uptr module_base() { return (uptr)GetModuleHandleW(NULL); }
+// The exe's load address, looked up once: an image never moves after it is mapped, and every generated
+// accessor (zone::fn::X(), zone::global::X(), chr::fn::X()) goes through rebase(), so this is on hot paths.
+// A race between two first callers is harmless - both store the same value.
+inline uptr module_base() {
+    static volatile uptr base = 0;
+    if (!base) base = (uptr)GetModuleHandleW(NULL);
+    return base;
+}
 
 // A PDB VA (based at the default image base) -> the live address in this process.
 // Every Fiesta server exe links at 0x00400000; pass the base from your symbol header if one does not.

@@ -58,6 +58,26 @@ inline void* handler_address(const char* name) {
     return NULL;
 }
 
+// Are the disassembly-found functions (character_symbols.h, chr::fn::ItemListReader() etc.) really where the
+// header says, in the exe this plugin is loaded into? The header was generated from one Character.exe; the
+// server may be running another. Checks the bytes each was found with; logs every mismatch. Call it before
+// hooking or calling any of them - a plugin that skips it trusts an address it has not seen.
+inline bool verify_known() {
+    bool ok = true;
+    for (int i = 0; i < kKnownCount; i++) {
+        const KnownHead& k = kKnownHeads[i];
+        const unsigned char* p = (const unsigned char*)rebase(k.va, kImageBase);
+        for (unsigned j = 0; j < k.n; j++)
+            if (p[j] != k.head[j]) {
+                log("[hook] %s at %x does not start with the bytes it was found with - not the Character.exe "
+                    "character_symbols.h was generated from", k.name, p);
+                ok = false;
+                break;
+            }
+    }
+    return ok;
+}
+
 inline bool hook_handler(const char* name, void* replacement, Detour* out) {
     void* target = handler_address(name);
     if (!target) { log("[hook] NO SUCH HANDLER in character_symbols.h: %s", name); return false; }

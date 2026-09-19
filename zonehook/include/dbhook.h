@@ -49,14 +49,8 @@ inline Record* of_handler(void* self) {
 }
 
 namespace detail {
-typedef bool(__cdecl* QueryFn)(Record*, const char*, ...);
-typedef bool(__fastcall* ThisBoolFn)(Record*, void*);
-typedef void(__fastcall* ThisVoidFn)(Record*, void*);
-typedef void*(__fastcall* ThisPtrFn)(Record*, void*);
-typedef Record*(__fastcall* ReadIntFn)(Record*, void*, int*);
-typedef Record*(__fastcall* ReadULongFn)(Record*, void*, unsigned long*);
-
-inline void* fn(unsigned int va) { return va ? rebase(va, kImageBase) : NULL; }
+// The framework functions come from character_symbols.h as typed chr::fn::X() accessors; one the byte match
+// could not find in this exe has no accessor at all, so using it is a compile error, not a null call.
 
 // The size the server's own buffer can hold, less the terminator. See rule 2.
 enum { kMaxQuery = 0x2004 - 1 };
@@ -74,50 +68,42 @@ inline bool query(Record* rec, const char* fmt, ...) {
         log("[db] REFUSED: query longer than the server's %d-byte buffer (%d)", (int)detail::kMaxQuery, n);
         return false;
     }
-    auto q = (detail::QueryFn)detail::fn(kVa_DBRecord_query);
-    if (!q) { log("[db] DBRecord::query not located"); return false; }
-    bool ok = q(rec, "%s", sql);
+    bool ok = fn::DBRecord_query()(rec, (char*)"%s", sql);
     if (!ok) log("[db] query FAILED: %s", sql);
     return ok;
 }
 
 // Next row. false at the end of the result set.
 inline bool fetch(Record* rec) {
-    auto f = (detail::ThisBoolFn)detail::fn(kVa_DBRecord_fetch);
-    return rec && f && f(rec, 0);
+    return rec && fn::DBRecord_fetch()(rec, 0);
 }
 
 // Close the cursor. Always, before anything else uses the statement - see rule 1.
 inline void end_fetch(Record* rec) {
-    auto f = (detail::ThisVoidFn)detail::fn(kVa_DBRecord_endFetch);
-    if (rec && f) f(rec, 0);
+    if (rec) fn::DBRecord_endFetch()(rec, 0);
 }
 
 // The next column of the current row, in order. The framework has exactly these two readers.
 inline int read_int(Record* rec) {
     int v = 0;
-    auto f = (detail::ReadIntFn)detail::fn(kVa_DBRecord_readInt);
-    if (rec && f) f(rec, 0, &v);
+    if (rec) fn::DBRecord_readInt()(rec, 0, &v);
     return v;
 }
 
 inline unsigned long read_ulong(Record* rec) {
     unsigned long v = 0;
-    auto f = (detail::ReadULongFn)detail::fn(kVa_DBRecord_readULong);
-    if (rec && f) f(rec, 0, &v);
+    if (rec) fn::DBRecord_readULong()(rec, 0, &v);
     return v;
 }
 
 // The worker's ODBC statement handle (HSTMT), for everything the two readers cannot do.
 inline void* statement(Record* rec) {
-    auto f = (detail::ThisPtrFn)detail::fn(kVa_DBRecord_getStatement);
-    return rec && f ? f(rec, 0) : NULL;
+    return rec ? fn::DBRecord_getStatement()(rec, 0) : NULL;
 }
 
 // Commit, on the worker's connection (Database::CommitTran).
 inline bool commit(Record* rec) {
-    auto f = (detail::ThisBoolFn)detail::fn(kVa_Database_CommitTran);
-    return rec && f && f(rec, 0);
+    return rec && fn::Database_CommitTran()(rec, 0);
 }
 
 // Any ODBC32 entry point, by NAME. Character.exe imports ODBC32 only by ordinal, so its IAT has no names to

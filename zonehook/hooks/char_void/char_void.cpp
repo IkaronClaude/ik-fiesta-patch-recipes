@@ -41,32 +41,6 @@
 
 namespace {
 
-// ---- the functions, and the bytes each must start with --------------------------------------------
-//
-// Found by reading the disassembly, not by the symbol generator: none of them logs a name. So each is
-// checked against the bytes it was found with before anything is hooked or called; a different
-// Character.exe gets a log line and an untouched server, not a guess.
-
-struct Known { const char* what; unsigned va; unsigned char head[8]; unsigned n; };
-
-// int __thiscall(DBF+0x24) reader(DBRecord* dbf, u32 owner, u8 type, int limit, int* count, Rec* recs)
-const Known kReader   = { "item list reader", 0x00469F70u, { 0x55, 0x8B, 0xEC, 0x8B, 0x45, 0x10, 0x56 }, 7 };
-// int __thiscall(CPFs*) pack(Buffer* list, u8* out, int* len)
-const Known kPack     = { "item list packer", 0x00402E50u, { 0x55, 0x8B, 0xEC, 0x81, 0xEC, 0x88, 0x00, 0x00 }, 8 };
-// int __thiscall(CPFs*) inventory(u32 owner, u8* out, int* len) - sub-less: mov eax, 0x168C ; call _chkstk
-const Known kInvenBag = { "inventory packer", 0x00402F80u, { 0x55, 0x8B, 0xEC, 0xB8, 0x8C, 0x16, 0x00, 0x00 }, 8 };
-
-bool matches(const Known& k) {
-    const unsigned char* p = (const unsigned char*)chr::rebase(k.va);
-    for (unsigned i = 0; i < k.n; i++)
-        if (p[i] != k.head[i]) {
-            chr::log("%s at %x does not start with the bytes it was found with - this is not the Character.exe "
-                     "char_void was written for; nothing hooked", k.what, p);
-            return false;
-        }
-    return true;
-}
-
 // ---- the list the reader fills --------------------------------------------------------------------
 //
 // {int count; int pad; Rec rec[limit]} - the wrapper passes &count and count+8. A record is 40 bytes
@@ -79,24 +53,18 @@ const int kInventoryCells = 192;          // ItemInventory::ii_Array in Zone.pdb
 const unsigned char kVoidBag = 18;
 const int kVoidCells = 2 * 144;           // two pages of 144 (void_bag.cpp)
 
-typedef int(__fastcall* Reader)(void* ecx, void* edx, void* dbf, unsigned owner, int type, int limit,
-                                int* count, void* recs);                          // ret 0x18
-typedef int(__fastcall* Packer)(void* self, void* edx, void* list, void* out, int* len);   // ret 0xC
-
 // Read bag `type` of character `owner` and pack it into `out` - what every stock bag packer does, with
 // the capacity a parameter instead of a constant.
 int load_and_pack(void* self, unsigned owner, void* out, int* len, unsigned char type, int limit) {
     if (!self || !out || !len) return 0;
     char* dbf = *(char**)self + chr::kWorkerDbfOffset;       // this worker's own, already-connected DBRecord
     std::vector<unsigned char> list(8 + (size_t)limit * kRecordSize, 0);
-    Reader read = (Reader)chr::rebase(kReader.va);
-    if (!read(dbf + 0x24, 0, dbf, owner, type, limit, (int*)list.data(), list.data() + 8)) {
+    if (!chr::fn::ItemListReader()(dbf + 0x24, 0, dbf, owner, type, limit, (int*)list.data(), list.data() + 8)) {
         chr::log("bag %u of char %u: the DB read FAILED", (unsigned)type, owner);
         return 0;
     }
     int n = *(int*)list.data();
-    Packer pack = (Packer)chr::rebase(kPack.va);
-    int r = pack(self, 0, list.data(), out, len);
+    int r = chr::fn::ItemListPack()(self, 0, list.data(), (unsigned char*)out, len);
     chr::log("bag %u of char %u: %d item(s) read (limit %d), packed %d bytes -> %s", (unsigned)type, owner, n,
              limit, *len, r ? "ok" : "PACK FAILED");
     if (n >= limit) chr::log("bag %u of char %u: AT the limit - rows past %d stay in tItem, unloaded",
@@ -118,11 +86,13 @@ chr::Detour g_inven_detour;
 }  // namespace
 
 HOOK_PLUGIN("char_void") {
-    if (!matches(kReader) || !matches(kPack) || !matches(kInvenBag)) return;
+    // ItemListReader / ItemListPack / InventoryPacker were found by reading the disassembly (none logs a name);
+    // character_symbols.h carries the bytes each starts with. A different Character.exe: a log line, no hooks.
+    if (!chr::verify_known()) return;
 
     // 1. the inventory, 144 -> 192. Replaced whole: the trampoline is never called, because the stock body
     //    IS the 144 limit (its stack frame is sized for it).
-    chr::hook_function("inventory packer (144 -> 192)", chr::rebase(kInvenBag.va), (void*)pack_inventory,
+    chr::hook_function("inventory packer (144 -> 192)", (void*)chr::fn::InventoryPacker(), (void*)pack_inventory,
                        &g_inven_detour);
 
     // 2. bag 18. The slot is filled last: the recipe's cave treats null as "no plugin" and answers 0x1202.

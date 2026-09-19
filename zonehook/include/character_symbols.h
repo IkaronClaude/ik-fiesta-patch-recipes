@@ -377,6 +377,89 @@ static const unsigned int kVa_Database_InitEnv = 0x00451DD0u;   // unique byte m
 static const unsigned int kVa_Database_close = 0x00451FD0u;   // unique byte match
 static const unsigned int kVa_Database_openDB = 0x00452080u;   // unique byte match
 
+// Typed accessors. __thiscall is spelled __fastcall with a dead edx (same ABI, callee-clean).
+namespace fn {
+
+// public: int __thiscall CPFs::CheckConnectionValidation(struct NETPACKET *)
+typedef int (__fastcall* CPFs_CheckConnectionValidation_t)(void* self, void* edx, void* a1);
+inline CPFs_CheckConnectionValidation_t CPFs_CheckConnectionValidation() { return (CPFs_CheckConnectionValidation_t)::hook::rebase(kVa_CPFs_CheckConnectionValidation, kImageBase); }
+
+// DBRecord_bindColumns: not found in this exe
+// public: void __thiscall DBRecord::close(void)
+typedef void (__fastcall* DBRecord_close_t)(void* self, void* edx);
+inline DBRecord_close_t DBRecord_close() { return (DBRecord_close_t)::hook::rebase(kVa_DBRecord_close, kImageBase); }
+
+// public: void __thiscall DBRecord::endFetch(void)
+typedef void (__fastcall* DBRecord_endFetch_t)(void* self, void* edx);
+inline DBRecord_endFetch_t DBRecord_endFetch() { return (DBRecord_endFetch_t)::hook::rebase(kVa_DBRecord_endFetch, kImageBase); }
+
+// public: bool __thiscall DBRecord::fetch(void)
+typedef bool (__fastcall* DBRecord_fetch_t)(void* self, void* edx);
+inline DBRecord_fetch_t DBRecord_fetch() { return (DBRecord_fetch_t)::hook::rebase(kVa_DBRecord_fetch, kImageBase); }
+
+// public: void * __thiscall DBRecord::getStatement(void)
+typedef void* (__fastcall* DBRecord_getStatement_t)(void* self, void* edx);
+inline DBRecord_getStatement_t DBRecord_getStatement() { return (DBRecord_getStatement_t)::hook::rebase(kVa_DBRecord_getStatement, kImageBase); }
+
+// public: virtual bool __thiscall DBRecord::openDB(char *)
+typedef bool (__fastcall* DBRecord_openDB_t)(void* self, void* edx, char* a1);
+inline DBRecord_openDB_t DBRecord_openDB() { return (DBRecord_openDB_t)::hook::rebase(kVa_DBRecord_openDB, kImageBase); }
+
+// public: bool __cdecl DBRecord::query(char const *,...)
+typedef bool (__cdecl* DBRecord_query_t)(void* self, char* a1, ...);
+inline DBRecord_query_t DBRecord_query() { return (DBRecord_query_t)::hook::rebase(kVa_DBRecord_query, kImageBase); }
+
+// public: class DBRecord & __thiscall DBRecord::operator>>(int &)
+typedef void* (__fastcall* DBRecord_readInt_t)(void* self, void* edx, int* a1);
+inline DBRecord_readInt_t DBRecord_readInt() { return (DBRecord_readInt_t)::hook::rebase(kVa_DBRecord_readInt, kImageBase); }
+
+// public: class DBRecord & __thiscall DBRecord::operator>>(unsigned long &)
+typedef void* (__fastcall* DBRecord_readULong_t)(void* self, void* edx, unsigned long* a1);
+inline DBRecord_readULong_t DBRecord_readULong() { return (DBRecord_readULong_t)::hook::rebase(kVa_DBRecord_readULong, kImageBase); }
+
+// public: bool __thiscall Database::CommitTran(void)
+typedef bool (__fastcall* Database_CommitTran_t)(void* self, void* edx);
+inline Database_CommitTran_t Database_CommitTran() { return (Database_CommitTran_t)::hook::rebase(kVa_Database_CommitTran, kImageBase); }
+
+// protected: bool __thiscall Database::InitEnv(void)
+typedef bool (__fastcall* Database_InitEnv_t)(void* self, void* edx);
+inline Database_InitEnv_t Database_InitEnv() { return (Database_InitEnv_t)::hook::rebase(kVa_Database_InitEnv, kImageBase); }
+
+// public: void __thiscall Database::close(void)
+typedef void (__fastcall* Database_close_t)(void* self, void* edx);
+inline Database_close_t Database_close() { return (Database_close_t)::hook::rebase(kVa_Database_close, kImageBase); }
+
+// public: virtual bool __thiscall Database::openDB(char *)
+typedef bool (__fastcall* Database_openDB_t)(void* self, void* edx, char* a1);
+inline Database_openDB_t Database_openDB() { return (Database_openDB_t)::hook::rebase(kVa_Database_openDB, kImageBase); }
+
+// ItemListReader - found by reading the disassembly: reads bag `type` of `owner` (p_Item_GetListType) into 40-byte records, at most `limit`; __thiscall on dbf+0x24, ret 0x18. Every per-bag wrapper (0x46A290 bag 9 limit 0x90, 0x46A2C0 bag 8 ...) calls it; refuses type >= 0x11 unless char-itemlist-void widened it.
+typedef int (__fastcall* ItemListReader_t)(void* ecx, void* edx, void* dbf, unsigned long owner, int type, int limit, int* count, void* records);
+static const unsigned int kVa_ItemListReader = 0x00469F70u;
+inline ItemListReader_t ItemListReader() { return (ItemListReader_t)::hook::rebase(kVa_ItemListReader, kImageBase); }
+
+// ItemListPack - found by reading the disassembly: packs a reader list {int count; int pad; records} into the zone wire form {.., u8 count, items}; __thiscall on the handler's CPFs, ret 0xC.
+typedef int (__fastcall* ItemListPack_t)(void* cpfs, void* edx, void* list, unsigned char* out, int* len);
+static const unsigned int kVa_ItemListPack = 0x00402E50u;
+inline ItemListPack_t ItemListPack() { return (ItemListPack_t)::hook::rebase(kVa_ItemListPack, kImageBase); }
+
+// InventoryPacker - found by reading the disassembly: bag 9 end to end: reader (limit 144, a stack buffer sized for exactly that) + ItemListPack. Called by fc_NC_CHAR_CHARDATA_REQ (login) and GET_ITEMLIST_BY_TYPE case 9. char_void replaces it (192).
+typedef int (__fastcall* InventoryPacker_t)(void* cpfs, void* edx, unsigned long owner, unsigned char* out, int* len);
+static const unsigned int kVa_InventoryPacker = 0x00402F80u;
+inline InventoryPacker_t InventoryPacker() { return (InventoryPacker_t)::hook::rebase(kVa_InventoryPacker, kImageBase); }
+
+}  // namespace fn
+
+// The bytes each disassembly-found function starts with, for chr::verify_known() (charhook.h):
+// the header was generated from one exe; a plugin runs in whichever one is deployed.
+struct KnownHead { const char* name; unsigned int va; unsigned char head[16]; unsigned int n; };
+static const KnownHead kKnownHeads[] = {
+    { "ItemListReader", 0x00469F70u, { 0x55, 0x8B, 0xEC, 0x8B, 0x45, 0x10, 0x56 }, 7 },
+    { "ItemListPack", 0x00402E50u, { 0x55, 0x8B, 0xEC, 0x81, 0xEC, 0x88, 0x00, 0x00, 0x00 }, 9 },
+    { "InventoryPacker", 0x00402F80u, { 0x55, 0x8B, 0xEC, 0xB8, 0x8C, 0x16, 0x00, 0x00 }, 8 },
+};
+static const int kKnownCount = 3;
+
 // CSessionWorker::m_DBF - each worker thread's own, already-connected DBRecord. Read off every call to a
 // stored-procedure wrapper (add reg, <this> before the call): 33 call sites, all agreeing.
 static const unsigned int kWorkerDbfOffset = 0x124C;

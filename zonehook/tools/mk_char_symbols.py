@@ -55,6 +55,80 @@ FRAMEWORK = {
     '?CheckConnectionValidation@CPFs@@QAEHPAUNETPACKET@@@Z': 'CPFs_CheckConnectionValidation',
 }
 
+# Functions found by READING THE DISASSEMBLY - no log string, no Account.pdb twin. Each is kept only if the
+# exe has the bytes it was found with at that address (checked here, and emitted so a plugin can check the
+# exe it is actually loaded into: chr::verify_known()). The signature is what the call sites show.
+#   (name, va, head bytes, typedef'd signature as (return, params), how it was found)
+KNOWN = [
+    ('ItemListReader', 0x469F70, '558BEC8B451056',
+     ('int', 'void* ecx, void* edx, void* dbf, unsigned long owner, int type, int limit, int* count, void* records'),
+     'reads bag `type` of `owner` (p_Item_GetListType) into 40-byte records, at most `limit`; __thiscall on '
+     'dbf+0x24, ret 0x18. Every per-bag wrapper (0x46A290 bag 9 limit 0x90, 0x46A2C0 bag 8 ...) calls it; '
+     'refuses type >= 0x11 unless char-itemlist-void widened it.'),
+    ('ItemListPack', 0x402E50, '558BEC81EC88000000',
+     ('int', 'void* cpfs, void* edx, void* list, unsigned char* out, int* len'),
+     'packs a reader list {int count; int pad; records} into the zone wire form {.., u8 count, items}; '
+     '__thiscall on the handler\'s CPFs, ret 0xC.'),
+    ('InventoryPacker', 0x402F80, '558BECB88C160000',
+     ('int', 'void* cpfs, void* edx, unsigned long owner, unsigned char* out, int* len'),
+     'bag 9 end to end: reader (limit 144, a stack buffer sized for exactly that) + ItemListPack. Called by '
+     'fc_NC_CHAR_CHARDATA_REQ (login) and GET_ITEMLIST_BY_TYPE case 9. char_void replaces it (192).'),
+]
+
+UNDNAME = r'C:/Program Files/Microsoft Visual Studio/18/Community/VC/Tools/MSVC/14.50.35717/bin/Hostx64/x86/undname.exe'
+PRIMITIVE = {'void', 'bool', 'char', 'signed char', 'unsigned char', 'short', 'unsigned short', 'int',
+             'unsigned int', 'long', 'unsigned long', 'float', 'double', 'wchar_t', '__int64', 'unsigned __int64'}
+
+
+def framework_signatures(mangled_names):
+    """{mangled: (ret, conv, [params])} from undname. There are no Character types to spell, so a class is
+    void* - the ABI is the same, and the framework is used through its functions, not its fields."""
+    import subprocess
+    if not os.path.exists(UNDNAME):
+        return {}
+    r = subprocess.run([UNDNAME] + list(mangled_names), capture_output=True, text=True, errors='replace')
+    und = dict(re.findall(r'Undecoration of :- "(.*?)"\s*\nis :- "(.*?)"', r.stdout))
+
+    def spell(t):
+        t = re.sub(r'\b(const|volatile) ', '', t).replace(' const', '').strip()
+        stars = ''
+        while t.endswith('*') or t.endswith('&'):
+            stars += '*'
+            t = t[:-1].rstrip()
+        if re.match(r'(class|struct|union|enum) ', t):
+            return 'void' + (stars or '*') if stars else None     # a class by VALUE cannot be spelled
+        if t == '__int64':
+            t = 'long long'
+        return (t + stars) if t in PRIMITIVE or t == 'long long' else None
+
+    out = {}
+    for m, text in und.items():
+        g = re.match(r'^(?:(?:public|private|protected): )?(?:(?:static|virtual) )*(.+?) '
+                     r'(__thiscall|__cdecl|__stdcall|__fastcall) (.+?)\((.*)\)(?: const)?$', text)
+        if not g:
+            continue
+        ret, conv, qual, args = g.groups()
+        # a NON-static member that is __cdecl (DBRecord::query is variadic, so it has to be) takes `this` as a
+        # hidden FIRST STACK argument - undname does not show it
+        cdecl_member = conv == '__cdecl' and '::' in qual and 'static ' not in text
+        variadic = args.endswith('...')
+        plist = [] if args in ('void', '', '...') else [a for a in re.split(r',', args.replace(',...', '')) if a]
+        sp = [spell(ret)] + [spell(a) for a in plist]
+        if any(x is None for x in sp):
+            continue
+        params = [('%s a%d' % (x, i + 1)) for i, x in enumerate(sp[1:])]
+        if conv == '__thiscall':
+            params = ['void* self', 'void* edx'] + params
+            conv = '__fastcall'
+        elif cdecl_member:
+            params = ['void* self'] + params
+        if variadic:
+            if conv != '__cdecl':
+                continue
+            params.append('...')
+        out[m] = (sp[0], conv, params, text)
+    return out
+
 
 class Image:
     def __init__(self, path):
@@ -328,6 +402,44 @@ def main():
     for name in sorted(fw):
         lines.append('static const unsigned int kVa_%s = 0x%08Xu;   // %s'
                      % (name, fw[name] or 0, framework.how.get(name) or 'NOT FOUND'))
+
+    # Typed accessors: chr::fn::X() is the live, callable pointer - no kVa, no rebase, no cast at the call
+    # site. A framework function the byte match did not find yields NULL rather than a wrong address.
+    sigs = framework_signatures(FRAMEWORK)
+    fn_lines = ['', '// Typed accessors. __thiscall is spelled __fastcall with a dead edx (same ABI, callee-clean).',
+                'namespace fn {', '']
+    for mangled, name in sorted(FRAMEWORK.items(), key=lambda kv: kv[1]):
+        if not fw.get(name) or mangled not in sigs:
+            fn_lines.append('// %s: %s' % (name, 'not found in this exe' if not fw.get(name) else 'signature not spellable'))
+            continue
+        ret, conv, params, text = sigs[mangled]
+        fn_lines.append('// %s' % text)
+        fn_lines.append('typedef %s (%s* %s_t)(%s);' % (ret, conv, name, ', '.join(params) or 'void'))
+        fn_lines.append('inline %s_t %s() { return (%s_t)::hook::rebase(kVa_%s, kImageBase); }' % (name, name, name, name))
+        fn_lines.append('')
+    known_ok = []
+    for name, va, head, (ret, params), why in KNOWN:
+        want = bytes.fromhex(head)
+        got = img.data[img.pe.get_offset_from_rva(va - img.base):][:len(want)]
+        if got != want:
+            fn_lines.append('// %s: NOT at 0x%08X in this exe (bytes differ) - left out' % (name, va))
+            print('  KNOWN %-16s bytes DIFFER at 0x%08X - left out' % (name, va))
+            continue
+        known_ok.append((name, va, want))
+        fn_lines.append('// %s - found by reading the disassembly: %s' % (name, why))
+        fn_lines.append('typedef %s (__fastcall* %s_t)(%s);' % (ret, name, params))
+        fn_lines.append('static const unsigned int kVa_%s = 0x%08Xu;' % (name, va))
+        fn_lines.append('inline %s_t %s() { return (%s_t)::hook::rebase(kVa_%s, kImageBase); }' % (name, name, name, name))
+        fn_lines.append('')
+    fn_lines.append('}  // namespace fn')
+    fn_lines += ['', '// The bytes each disassembly-found function starts with, for chr::verify_known() (charhook.h):',
+                 '// the header was generated from one exe; a plugin runs in whichever one is deployed.',
+                 'struct KnownHead { const char* name; unsigned int va; unsigned char head[16]; unsigned int n; };',
+                 'static const KnownHead kKnownHeads[] = {']
+    for name, va, want in known_ok:
+        fn_lines.append('    { "%s", 0x%08Xu, { %s }, %d },' % (name, va, ', '.join('0x%02X' % b for b in want), len(want)))
+    fn_lines += ['};', 'static const int kKnownCount = %d;' % len(known_ok)]
+    lines += fn_lines
     dbf, votes = worker_db_offset(img, hs)
     lines.append('')
     if dbf is not None:

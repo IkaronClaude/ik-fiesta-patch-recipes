@@ -267,11 +267,6 @@ static const Handler kHandlers[] = {
 static const int kHandlerCount = 246;
 
 // Anchors - see ANCHORS in mk_symbols.py for why the service thread, and not WinMain.
-static const unsigned int kVaChargedBuffDataBox = 0x00AA4280u;
-static const unsigned int kVaGlobalProtocolPacket = 0x0084D908u;
-static const unsigned int kVaItemInventoryVtable = 0x0070AE84u;
-static const unsigned int kVaSock2GameDB = 0x14D454B8u;
-static const unsigned int kVaSocketBundleGetSocket = 0x004199B0u;
 static const unsigned int kVaStartDispatcher = 0x006535B0u;
 static const unsigned int kVaWinMain = 0x0049D910u;
 static const unsigned int kVaZoneServiceThread = 0x005A9D90u;
