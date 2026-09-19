@@ -1,9 +1,9 @@
 #!/usr/bin/env python
 """Apply a declarative binary-patch recipe to a PE32 image.
 
-    python apply.py recipes/mob-spawn-group-cap.json --exe Z:/ServerSource/Zone00/Zone.exe --out build/Zone.exe
-    python apply.py recipes/mob-spawn-group-cap.json --exe ... --dry-run
-    python apply.py recipes/mob-spawn-group-cap.json --exe ... --verify build/Zone.exe
+    python apply.py zone/recipes/mob-spawn-group-cap.json --exe Z:/ServerSource/Zone00/Zone.exe --out build/Zone.exe
+    python apply.py zone/recipes/mob-spawn-group-cap.json --exe ... --dry-run
+    python apply.py zone/recipes/mob-spawn-group-cap.json --exe ... --verify build/Zone.exe
 
 Stdlib only, on purpose: a recipe you cannot run because a dependency moved is not repeatable.
 

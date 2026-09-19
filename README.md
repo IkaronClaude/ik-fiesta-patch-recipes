@@ -7,19 +7,63 @@ checked by someone who wasn't there.
 
 ```bash
 # see what a recipe would do, without writing anything
-python apply.py recipes/mob-spawn-group-cap.json --exe Z:/ServerSource/Zone00/Zone.exe --dry-run
+python apply.py zone/recipes/mob-spawn-group-cap.json --exe Z:/ServerSource/Zone00/Zone.exe --dry-run
 
 # produce a patched binary (never in place)
-python apply.py recipes/mob-spawn-group-cap.json --exe Z:/ServerSource/Zone00/Zone.exe --out build/Zone.exe
+python apply.py zone/recipes/mob-spawn-group-cap.json --exe Z:/ServerSource/Zone00/Zone.exe --out build/Zone.exe
 
 # change a parameter without editing the recipe
-python apply.py recipes/mob-spawn-group-cap.json --exe ... --out build/Zone.exe --set groups=32768
+python apply.py zone/recipes/mob-spawn-group-cap.json --exe ... --out build/Zone.exe --set groups=32768
 
 # prove a binary you already have is the patched one
-python apply.py recipes/mob-spawn-group-cap.json --exe ... --verify build/Zone.exe
+python apply.py zone/recipes/mob-spawn-group-cap.json --exe ... --verify build/Zone.exe
 ```
 
 Stdlib only. A recipe you can't run because a dependency moved is not repeatable.
+
+Byte patches reach their limit quickly - they can move a constant or repoint a global, but they cannot add a
+class, a packet handler or a DB round trip. For that the exes load **hook plugins**: C++ DLLs written against a
+header library generated from the game's own symbols. See [Hooks](#hooks).
+
+## Layout
+
+```
+README.md        this file: recipes, the build, hooks
+apply.py         the recipe runner (one recipe, one exe)
+build.py         a whole chain from a STOCK exe: --target zone (default) | character
+build/           every output (patched exes, fiestahook.dll, plugins/) - gitignored
+
+common/          shared by every target
+  loader/        fiestahook.dll - the loader the patched exes import (build.bat)
+  include/       hook_core.h - the exe-agnostic core of the hook library
+  tools/         xref_range.py - reference scanner for recipes
+  build_plugin.bat  build one plugin: <target> <name>
+zone/            Zone.exe:      recipes/ plugins/ include/ tools/ docs/   - see zone/README.md
+character/       Character.exe: recipes/ plugins/ include/ tools/         - see character/README.md
+client/          the client:    recipes/                                  - see client/README.md
+```
+
+## Building
+
+```bash
+# the patched exes, from the stock ones (never in place; every recipe re-verified on the result)
+python build.py --exe Z:/ServerSource/Zone00/Zone.exe --out build/Zone.hooked.exe --experimental
+python build.py --target character --exe Z:/ServerSource/Character/Character.exe --out build/Character.hooked.exe
+
+# the loader and the plugins (Visual Studio, 32-bit toolchain)
+common\loader\build.bat                          # -> build\fiestahook.dll
+common\build_plugin.bat zone void_bag             # -> build\plugins\void_bag.dll
+common\build_plugin.bat character char_void       # -> build\plugins\char_void.dll
+
+# the generated headers (after a new exe/pdb)
+python zone/tools/mk_types.py --pdb Z:/ServerSource/Zone00/Zone.pdb --exe Z:/ServerSource/Zone00/Zone.exe --out zone/include
+python zone/tools/mk_symbols.py
+python character/tools/mk_char_symbols.py
+```
+
+`--experimental` adds the recipes that are built and verified but not in the default chain yet (the hook loader
+among them). The chain order lives in `build.py`: recipes that add memory take arena space in order, so the same
+recipes in another order give a different - still working - binary.
 
 ## What the runner guarantees
 
@@ -56,246 +100,111 @@ deliberately **not** `eval()`. Recipe files are data; data from a file should no
 - `@newbase` resolves to the virtual address of `new_section`, which lets a recipe relocate a large
   static object without needing a code cave or an allocator.
 
-## Recipes
+## Hooks
 
-### `mob-spawn-group-cap` — lift Zone.exe's 4096 spawn-group ceiling
-
-`MobHatchery` stores its spawn groups as an **inline fixed array**, not a pointer: the constructor
-(`0x4B3FC0`) runs the eh vector-constructor iterator over `0x1000` elements of `0x19B8` bytes and puts the
-`List<MobBreederGroup>` header at a baked `+0x19B8000`. That's 25.7 MB embedded in the object.
-
-It is **static, not heap** — `0x5AD987` stores the constant `0x13389A48` into the global pointer
-`?mobhatchery@@3PAVMobHatchery@@A`, and a CRT init stub does `mov ecx,0x13389A48; call ctor`. (The `PAV`
-in the symbol is a pointer *variable* aimed at a static, which is exactly what makes it look
-heap-allocated.) It cannot grow in place either: the array ends at `0x14D41A48` and `?clockwatch@@…`
-starts at `0x14D41A60` — **24 bytes** of headroom.
-
-It *can* be relocated, and that's the whole trick. All 14 call sites reach the object through the global
-pointer; only three instructions carry its raw address. So the recipe appends a section with room, repoints
-those three immediates, and rewrites every constant the layout is built from — **22 edits, no code cave
-and no allocator call**. (An earlier draft said "and therefore no new runtime failure mode". That did not
-follow and was not true: relocating into a fresh section is itself a new failure mode, and the first two
-attempts crashed. See Status.)
-
-**The overflow guards need no patching.** `mh_Load` and `mh_ScriptBreed` don't compare against a literal;
-they test whether the List handed back the invalid-handle sentinel (`cmp ax, 0xFFFF` at `0x4B6595`). The
-bound is the List's stored capacity, which `l_MakeList` sets from the constant this recipe changes. A
-`[4096]` seen in `mh_View` output is `%d` rendered from that same field and will follow automatically.
-There are zero 16- or 32-bit compares against 4096 anywhere in the regen code.
-
-**Ceiling: 65534.** Handles are `unsigned short`, and `0xFFFF` is both the invalid-handle sentinel and a
-capacity `l_MakeList` explicitly refuses (`0x4B3B57` nulls the array and returns an unusable list). Going
-beyond means retyping the `List` template — every handle, and probably the wire protocol.
-
-**Sizing.** Shipped content is 6,038 `MobRegenGroup` records across 88 files (per zone: 1628 / 1962 /
-1942 / 261). One process therefore needs more than 4096 *today*, before any 2026 content.
-
-| groups | memory | vs current content |
-|---|---|---|
-| 8,192 | 51 MB | 1.4× |
-| **16,384** (default) | **103 MB** | **2.7×** |
-| 32,768 | 206 MB | 5.4× |
-| 65,534 | 412 MB | hard ceiling |
-
-This is a large net *saving*, not a cost: one process replaces five, each of which carried its own 25.7 MB
-hatchery inside a 334 MB `.data` image.
-
-### `damage-overflow-saturate` — stop huge hits landing for 1
-
-`roe_CalcDamage` returns `int`, but the damage pipeline under it works in **double**. The conversion is
-one call to `__ftol2_sse`, which returns the x86 *integer indefinite* `0x80000000` when the value doesn't
-fit an `int32`. That negative survives three modifiers and reaches the tail:
+### How a hook gets into the server
 
 ```
-test eax, eax
-jg   ok
-mov  dword ptr [ebp-0x10], 1     <-- the biggest hit in the game lands for 1
+Zone.exe (patched by dll-loader)
+  imports fiestahook.dll!ZoneHookInit ──► Windows maps fiestahook.dll before the exe's entry point
+      DllMain: rewrites the IAT slot of StartServiceCtrlDispatcherA
+  WinMain ──► StartServiceCtrlDispatcherA (ours) ──► swaps the service table's ServiceMain for ours
+  SCM starts the service ──► our ServiceMain:
+      LoadLibrary every hooks\*.dll beside the exe      (each plugin's DllMain installs its hooks)
+      then the server's own ServiceMain                  (the server starts, already hooked)
 ```
 
-**The clamp is not the bug and must not be touched** — that `1` is also the floor for legitimately
-non-positive damage (defence ≥ attack), so rewriting it to a maximum would make every weak hit maximal. By
-the clamp the magnitude is already gone, so the fix goes at the conversion.
+1. **The import.** The `dll-loader` recipe (and `dll-loader-character`) copies the exe's import descriptors into
+   arena space with one entry added, `fiestahook.dll!ZoneHookInit`, and points the import directory at the copy.
+   No code is patched. Windows (or Wine) then maps the loader before the exe runs a single instruction, and a
+   missing DLL fails loudly at startup instead of silently.
+2. **The loader is CRT-free.** It is mapped during loader init, on a barely committed stack, where C runtime
+   start-up has been measured to overflow. So it does almost nothing there: it hooks the one import every
+   Fiesta server exe uses to become a Windows service, and waits.
+3. **Plugins load at service start.** These exes are services: `WinMain` only registers the service table, and
+   the server really starts when the SCM calls `ServiceMain`. The loader runs its set-up in front of that call:
+   every DLL in the `hooks\` folder beside the exe is loaded, then the real `ServiceMain` runs. So a plugin gets
+   a normal 1 MB stack, no loader lock, the full CRT and STL - and still runs before one line of server code.
+4. **A plugin installs its hooks in its `DllMain`** (the `HOOK_PLUGIN` macro) and is then called by the server
+   like any function it already calls.
 
-Both damage-producing conversions (`roe_CalcDamage` 0x506187, `roe_AttackPowerCalcDamage` 0x504A27) are
-redirected to a 36-byte stub in an appended executable section. It saturates on the indefinite result
-**only when the original double was positive** — `__ftol2_sse` also returns `0x80000000` for negative
-overflow and NaN, and saturating those would invent enormous damage from a broken calculation. The sign is
-taken with `FTST` before the call and stashed across it.
+The same loader goes into Zone.exe and Character.exe; each has its own `hooks\` folder, so a plugin only ever
+loads into the exe it was written for. Everything logs to one `fiestahook.log` beside the exe, each line tagged
+with the module that wrote it.
 
-Default `saturate_to` is `0x00FFFFFF` rather than `INT_MAX`, because modifiers run *after* the conversion
-and at least one multiplies — `0x7FFFFFFF` would just wrap again and land back on the clamp.
-
-The other 207 `__ftol2_sse` sites convert rates and stats (`roe_AC`, `roe_MinWC`, `roe_HitRate`, …) and are
-deliberately left alone.
-
-### `quest-count-cap` — Zone.exe won't start above 3000 quests
-
-`ZoneServer_zs_start_sink` checks the quest file header at startup and kills the process:
+### The header library
 
 ```
-movzx edi, word ptr [eax+2]    ; QUEST_DATA_HEAD.NumOfQuest (u16)
-mov   eax, 0xBB8               ; 3000
-cmp   di, ax
-jbe   ok
-      ac_As("Too Many Quest - MAXQUEST")  ->  ShineExit
+common/include/hook_core.h       detours (with trampolines), vtable and IAT hooks, logging, rebase(),
+                                 arena_region() - the core, exe-agnostic
+zone/include/zonehook.h          packet-handler hooks (ZONE_HOOK_PACKET), the zone:: namespace
+zone/include/zonehook_lua.h      the zone's Lua 5.2 engine: register functions, observe every script call
+zone/include/zone_types.h        466 enums, 3540 structs, 54 unions        - generated from Zone.pdb
+zone/include/zone_functions.h    ~11,000 typed function pointers          - generated
+zone/include/zone_globals.h      ~1,000 typed globals, ~800 vtables       - generated
+character/include/charhook.h     Character handler hooks (CHAR_HOOK_HANDLER), verify_known()
+character/include/dbhook.h       the handler's worker DB connection: query / fetch / read / commit
+character/include/character_symbols.h   generated without a PDB - see character/README.md
 ```
 
-**Unlike the spawn-group cap, nothing is sized by this number** — the quest body is allocated from
-`__filelength`, the lookups are STL hash maps, `GetQuestDataByIndex` bounds against `NumOfQuest` from the
-header, and the player's array is `malloc(n*32)` on demand. A scan for 3000 and its derived sizes (375 =
-3000 bits, 376, ×2, ×4, ±1) finds nothing in quest code at all. So it really is one 32-bit immediate — no
-relocation, no code, no structure growth. That contrast is the reason this recipe is one edit and
-`mob-spawn-group-cap` is twenty-two.
+**Every address is a typed accessor.** A plugin never writes an address, a `rebase` or a cast:
 
-Hard ceiling 65535: `NumOfQuest` is a `u16` and the guard compares 16-bit (`cmp di, ax`), so a larger
-constant would silently truncate. The runner refuses it. Default 16384 keeps the guard useful against a
-corrupt header while clearing 2026's 3100+.
-
-### `block-distribute-map-cap`, `block-info-cap`, `instance-cluster-cap` — the per-process map limits
-
-Three caps bind when one zone process hosts many maps; `recipes/NOTES-map-caps.md` has the full reading.
-
-| recipe | stock cap | assert | what moves |
-|---|---|---|---|
-| `block-distribute-map-cap` | 64 distinct maps (`bdm_Array[64]`, a 1 KB static) | `bdm_Find` ShineExits | the array to `.bdmarr`; 3 `this` immediates + 6 counts (9 edits) |
-| `block-info-cap` | 256 block infos (`mbib_array[256]` + count, 741 KB static) | `mbib_Load: Too many block info[256]` | the box to `.mbibox`; 4 addresses, 2 vector counts, the bound, 6 count-member offsets (12 edits) |
-| `instance-cluster-cap` | 10 instance clusters (`Clusters[10]` mid-object) + List capacity 14 | `AddInstanceDungeonCluster: Cannot Add[10]` | only the array, to `.clusarr`: three `lea reg,[this+0x28068]` become `mov reg, imm32; nop`, two imm8 bounds, the dtor trip count, the `push 0xe` (13 edits) |
-
-Two things these needed that earlier recipes did not:
-
-- **Byte-width edits.** imm8 operands (`cmp esi, 0x40`, `push 0xe`) and the opcode / padding bytes of the
-  lea->mov rewrite are single bytes inside instructions whose other bytes must stay. `"width": 1` (or 2)
-  on an edit reads, expects and writes just that many bytes; the default stays 4.
-- **Range scans.** `tools/xref_range.py --range lo-hi` lists every instruction whose imm32 / absolute
-  disp32 lands inside a static object, and `--disp lo-hi` every register-relative member access — the
-  form a mid-object array takes. This is how the three `lea` sites and the five `mbib_Number` accesses
-  were found, and how "no absolute reference to a slot" was established rather than assumed.
-
-Limits are imm8-shaped: 124 maps (multiple of 4 for the unrolled destructor), 123 clusters; block infos
-are imm32 everywhere (1024 by default). Chained on top of `mob-spawn-group-cap` + `quest-count-cap`:
-
-```bash
-python apply.py recipes/block-distribute-map-cap.json --exe build/Zone.quest.exe --out build/Zone.maps1.exe --allow-hash-mismatch
-python apply.py recipes/block-info-cap.json           --exe build/Zone.maps1.exe --out build/Zone.maps2.exe --allow-hash-mismatch
-python apply.py recipes/instance-cluster-cap.json     --exe build/Zone.maps2.exe --out build/Zone.maps.exe  --allow-hash-mismatch
-# every recipe verifies against the final image:
-python apply.py recipes/<any>.json --exe Z:/ServerSource/Zone00/Zone.exe --verify build/Zone.maps.exe
+```cpp
+zone::fn::ItemBag__ib_Initializetotal()(bag, 0, &count, items, 18);     // a function, typed from the PDB
+zone::global::gpp();                                                    // GlobalProtocolPacket*
+zone::fn::SocketBundle_GameDBSession___sb_GetSocket()(zone::global::sock2gameDB(), 0);
+zone::vtable::ItemInventory();                                          // void** - a class's vtable
+chr::fn::DBRecord_query()(record, "%s", sql);                           // Character, no PDB
 ```
 
-### `handle-layout-2026` — every object kind in the handle range the 2026 client expects
+The generators produce these from the PDB's module symbols, its global stream, and the public names (demangled
+with `undname`, which is how template members and COMDAT-folded functions get a typed entry). The exe's base is
+looked up once. `__thiscall` is spelled `__fastcall` with a dead `edx` - the same ABI, callee-clean.
 
-The 2026 client decides what an object IS from its handle alone (`Fiesta.exe 0x903BC0`), and the 2016 zone
-allocates in a different layout: 2026 grew the mob range to 12000 and the NPC range to 1024, which moved every
-other kind. A 2016 player (`0x1F4F`) and a 2016 drop (`0x2908`) are both mobs to the 2026 client; a picked-up
-drop stayed on the ground because its removal went to the mob manager. 54 edits move each kind to its 2026
-base, capacities unchanged: `sohu_HandleSplit` plus each kind's two handle makers, the only places the bases
-occur (searched as imm32 and imm16). Needs `npc-object-pool-cap --set handle_base=0x525C`.
+**Why the generated headers are trustworthy.** Every struct carries a `static_assert` on its size against the
+binary, so a wrong layout fails the *build*. Field offsets come from the PDB and are reproduced under
+`#pragma pack(1)` with explicit padding. A member whose type cannot be spelled exactly becomes raw bytes of the
+right width with the original type in a comment, never a guess. A function whose signature cannot be spelled
+from types the header defines is left out.
 
-**Build the zone with `build_zone.py`**, which applies all ten recipes in order from the stock exe and
-verifies each on the result. `--legacy --upto damage-overflow-saturate` reproduces the older
-`Zone.maps.npc.dmg.exe` byte for byte, which is how the chain order was recovered.
+### A plugin
 
-### `npc-click-quest-fallthrough` — an NPC with an EMPTY quest script ignores every click
+```cpp
+#include <zonehook.h>
 
-`ShinePlayer::InteractWithNPC` decides between "quest" and "the NPC's own role" *before* running anything,
-then discards the quest click's result. A quest sitting on an empty DOING or END script (245 + 83 in the 2016
-data, 262 + 91 in the 2026 set) therefore runs nothing, sends nothing, and never reaches the menu or shop: the
-NPC is dead to that player. A 24-byte cave makes a quest click that ran nothing fall through to the role.
+ZONE_HOOK_PACKET(NC_ITEM_RELOC_REQ, {
+    zone::log("reloc from player %x", self);
+    ZONE_CALL_ORIGINAL_OF(NC_ITEM_RELOC_REQ);     // omit to swallow the packet
+});
 
-Proven live with a scripted client. The cave has to **push the stack argument again** - `call`ing a
-`__thiscall` with a stack argument from a cave puts a second return address in front of it, and the first
-build of this recipe crashed the zone on one click because of exactly that. The recipe carries the callstack.
-
-### `quest-script-end-notify` — tell the client when a quest script ends
-
-The zone already has the send and both clients already have the handler; one early exit keeps them apart.
-`CQuestZone::QuestNext` has a switch case for `QSC_END` that sends a `0x4401` carrying command 1, and
-`On_NC_QUEST_SCRIPT_CMD_REQ` case 1 on the client is `CloseWin(NpcDialogWin)` in the 2016 and the 2026 build
-alike - but the loop tests for END *before* the switch and leaves, so the case is dead code and no 2016
-server has ever put a command-1 `0x4401` on the wire.
-
-A 2016 client never noticed, because its dialog closes itself on every click. A 2026 client holds the
-window open until told, so against a 2016 zone the last page of every script sticks. The two other
-answers (`client-2026-npc-dialog-self-close`, or Bridge2026 sending `0x442E` per ack) close on *every*
-click, which flickers between pages. Only the server knows which page is last; a 42-byte cave at the END
-exit makes it say so. Bridge2026 notices the first END a zone sends and stops its per-ack close for it.
-
-### `npc-table-cap` — NPC.txt may hold more than 1024 rows
-
-`NPCManager` is a global whose first member is a fixed `rows[1024]` array of 12-byte entries, with its own row count
-right behind it at `+0x3000` and the parsed `NPC.txt` (`OptionReader`, 67 KB) behind that. `nm_Load` appends a row for
-every ShineNPC record of the file - the whole file, on every zone - and never tests the count, so row 1025 overwrites
-the count: the loader sees zero NPCs, asserts `NPCManager::nm_Load : Empty NPC inform`, and **every zone of the
-cluster exits at startup**. Found 2026-09-18, when a capture harvest took the table from 895 to 1043 rows.
-
-The object cannot grow where it is, so the recipe moves all of it to a new zero-filled section sized for `rows`
-(default 4096) and re-points three kinds of site: every `[this+0x3000]` / `[this+0x3004]` in the ten NPCManager
-methods (77), every `0x400` those methods bound a row index with (9), and every `mov ecx, offset npcmanager[.reader]`
-(25). 111 edits, none typed by hand: `tools/mk_npc_table_cap.py` finds each by decoding the stock exe and regenerates
-the file byte for byte. It checks that no other section holds the address and lists the `[reg+0x3000]` sites it left
-alone because they belong to another class.
-
-**PROVEN on the local stack 2026-09-18**, three runs of five zones each:
-1. the patched exe with the current 960-row table - all five READY, no exception, no assert beyond the four known
-   ones (ThunderBolt shop rows, the missing SerItemMctBount file);
-2. the same exe with a **1400-row** table (960 + 440 generated rows) - all five READY. The only new asserts are
-   `nm_SetNPC : Invalid mob id[CapTest####]`, which is the generated names having no MobInfo row, exactly as
-   expected, and every real NPC is still placed;
-3. the CONTROL: that same 1400-row table on the unpatched `Zone.2026.exe` - `nm_Load : Empty NPC inform`,
-   `Zone.exe exited`, as before.
-Dynamic NPCs: zone04 hosts Eld and its Honeying puzzle scripts with the 8 PzlHoney rows; it booted clean with no
-`lss_Routine` error beyond the two pre-existing Albireo ones. In the default chain since. This is the TABLE cap;
-the per-zone NPC object pool (1024) is `npc-object-pool-cap`.
-
-### `client-2026-npc-dialog-self-close` — the first CLIENT recipe: let the 2026 quest dialog close itself
-
-The runner does not care which executable it is pointed at, so client patches live here too. This one
-targets the 2026 US **`Fiesta.exe`** (not the stale `Fiesta.bin` that ships beside it).
-
-A 2016 client closes its quest dialog on every button click and lets the server's next page reopen it.
-The 2026 client put a global in front of that close, set only by a new packet (`0x442E`) that no 2016
-server sends — so against one, *Next* and *Complete Quest* do nothing on the last page of a script, Esc
-closes the window, and the quest turns out to have progressed anyway.
-
-    2016  NpcDialogWin::DirectMessage, msg 0x24:  if (keepOpen) keepOpen = 0;  else CloseWin(this);
-    2026                                          if (keepOpen) keepOpen = 0;  if (g_C319D5 == 1) CloseWin(this);
-
-Three bytes restore the 2016 branch exactly. The recipe carries the full disassembly and the reasoning.
-
-```bash
-python apply.py recipes/client-2026-npc-dialog-self-close.json --exe <client>/Fiesta.exe --out build/client2026/Fiesta.exe
-# on a copy that already carries other byte patches the file hash differs; the per-site expect checks still hold:
-python apply.py recipes/client-2026-npc-dialog-self-close.json --exe <patched>/Fiesta.exe --out build/client2026/Fiesta.exe --allow-hash-mismatch
+HOOK_PLUGIN("my_feature") {
+    ZONE_INSTALL_PACKET(NC_ITEM_RELOC_REQ);
+    zone::hook_function("ShinePlayer::so_StoreInventoryFromServer",
+                        (void*)zone::fn::ShineObjectClass__ShinePlayer__so_StoreInventoryFromServer(),
+                        (void*)my_thunk, &my_detour);                 // any function, by its typed accessor
+}
 ```
 
-It does **not** remove the close-and-reopen between pages: that is native 2016 behaviour. Keeping the
-window up between pages needs the server to say which page is the last one. The no-client-patch
-alternative is fiesta-proxy's Bridge2026, which sends the `0x442E` itself; run it with `-NoDialogClose`
-when testing this recipe so it is the patch being tested and not the bridge. **Untested live as of
-2026-09-17.**
+Character is the same with `#include <charhook.h>`, `CHAR_HOOK_HANDLER(fc_NC_..., {...})` and
+`CHAR_INSTALL_HANDLER`. Build with `common\build_plugin.bat <target> <name>`; deploy the DLL into that exe's
+`hooks\` folder beside `fiestahook.dll`.
 
-## Status
+**Recipe or plugin?** A recipe when the change is a constant, a table, a cap or a moved object - it is reviewable
+and verifiable byte by byte. A plugin when it is behaviour: a new class, a packet, a DB round trip. The two meet
+through **slots**: a recipe reserves a labelled region in the exe's arena (a jump-table case, a function pointer),
+and the plugin finds it with `arena_region(".label")` and fills it. A null slot takes the stock path, so a patched
+exe without its plugin behaves exactly as unpatched. `void-bag-reloc` + `void_bag` and `char-itemlist-void` +
+`char_void` are built that way.
 
-`mob-spawn-group-cap` **works**: boots clean at `groups=16384` under Wine, 91 maps loaded, and on an
-all-maps-on-one-zone layout (5,845 groups) it clears the spawn-group ceiling and stops on a different,
-unpatched limit — the instance-dungeon cluster cap, written up in
-`recipes/NOTES-instance-dungeon-cluster-cap.md`.
+### Live
 
-Getting there took two failed rounds, and both failures generalise to any recipe in this repo:
+Proven under Wine in the docker stack on 2026-09-19. Zone.exe and Character.exe both run with the loader, and
+the Void Inventory works end to end through both plugins.
 
-**Search the offset RANGE, not the value.** Only 8 of 15 sites bake exactly `0x19B8000`; seven more bake
-`base+0x4/+0x8/+0xC/+0xE` to reach members of the structure that follows the array. An exact-value search
-finds the 8, and the binary then reads a garbage free-list head from inside the array and faults in
-`l_AllocZ+0x1F`. One nearby hit (`0x019B820F` in `MoveManager::mm_Step`) is coincidence — a range search
-needs a human to separate real offsets from collisions.
+## Targets
 
-**Look for unrolled loops.** The constructor's node-linking loop is unrolled four ways and bakes the
-*iteration* count (`0x400` = 1024), not the element count (4096). Nothing matching `0x1000` exists at that
-site. Without it, only the first 4096 nodes are linked and everything above hands back an unlinked node.
-
-The diagnostic that isolated both: build with `--set groups=4096` — relocation applied, count unchanged.
-That booted clean, while `groups=4097` crashed, which ruled out the section, the relocation, the image
-size and address space in one run, and pointed squarely at the count.
-
-Untested: whether a virtual-only (BSS) section works. The only virtual-only run used a count that failed
-for unrelated reasons, so `materialise: true` is simply the configuration that has been exercised.
+- [zone/README.md](zone/README.md) - Zone.exe: the caps (spawn groups, quests, maps, NPC table, handles), damage
+  overflow, quest-dialog fixes, and the Void Inventory.
+- [character/README.md](character/README.md) - Character.exe: the Void Inventory's DB side, the 192-item
+  inventory load, and how its symbols are found without a PDB.
+- [client/README.md](client/README.md) - the 2026 client's quest-dialog close.

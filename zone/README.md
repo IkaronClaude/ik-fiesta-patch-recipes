@@ -1,0 +1,246 @@
+# zone/ - Zone.exe
+
+Everything that patches or extends **Zone.exe**: its recipes, its hook plugins and the headers generated from
+`Zone.pdb`. How recipes and hooks work in general is in the [root README](../README.md).
+
+```
+recipes/     the byte patches, in chain order in ../build.py (CHAIN, then EXPERIMENTAL)
+plugins/     void_bag/ - the 2026 Void Inventory (bag 18)
+include/     zonehook.h (the zone layer of the hook library), zonehook_lua.h,
+             zone_symbols.h (committed), zone_types/functions/globals.h (generated, gitignored)
+tools/       mk_types.py / mk_symbols.py (headers from Zone.pdb), recipe generators
+docs/        HOOK-TARGETS.md - where to hook what, and with which tool
+```
+
+## Hook plugins
+
+### `void_bag` - the Void Inventory (bag 18)
+
+A tenth `ItemBag` subclass with 288 cells (2 pages of 144), unlocked page by page by the VoidInvent item's
+permanent charged effect (EffectEnum 45). Moves reach it through the `void-bag-reloc` recipe; at login the zone
+asks Character for bag 18 (`NC_CHAR_GET_ITEMLIST_BY_TYPE_REQ`), which needs `character/` too. Until the
+contents have arrived every move into or out of it is refused, so an item can never share a slot with a stored
+one. Proven live 2026-09-19. The file's header comment is the full write-up.
+
+## Hook recipes (experimental chain)
+
+- `dll-loader` - the import of `fiestahook.dll`; no code patched.
+- `inventory-expansion-cap` - a third permanent inventory expansion (8 pages, as in 2026).
+- `void-bag-reloc` - widens `sp_ItemReloc`'s two bag switches to 18 and hands case 18 to the plugin via a slot.
+
+## Recipes
+
+### `mob-spawn-group-cap` — lift Zone.exe's 4096 spawn-group ceiling
+
+`MobHatchery` stores its spawn groups as an **inline fixed array**, not a pointer: the constructor
+(`0x4B3FC0`) runs the eh vector-constructor iterator over `0x1000` elements of `0x19B8` bytes and puts the
+`List<MobBreederGroup>` header at a baked `+0x19B8000`. That's 25.7 MB embedded in the object.
+
+It is **static, not heap** — `0x5AD987` stores the constant `0x13389A48` into the global pointer
+`?mobhatchery@@3PAVMobHatchery@@A`, and a CRT init stub does `mov ecx,0x13389A48; call ctor`. (The `PAV`
+in the symbol is a pointer *variable* aimed at a static, which is exactly what makes it look
+heap-allocated.) It cannot grow in place either: the array ends at `0x14D41A48` and `?clockwatch@@…`
+starts at `0x14D41A60` — **24 bytes** of headroom.
+
+It *can* be relocated, and that's the whole trick. All 14 call sites reach the object through the global
+pointer; only three instructions carry its raw address. So the recipe appends a section with room, repoints
+those three immediates, and rewrites every constant the layout is built from — **22 edits, no code cave
+and no allocator call**. (An earlier draft said "and therefore no new runtime failure mode". That did not
+follow and was not true: relocating into a fresh section is itself a new failure mode, and the first two
+attempts crashed. See Status.)
+
+**The overflow guards need no patching.** `mh_Load` and `mh_ScriptBreed` don't compare against a literal;
+they test whether the List handed back the invalid-handle sentinel (`cmp ax, 0xFFFF` at `0x4B6595`). The
+bound is the List's stored capacity, which `l_MakeList` sets from the constant this recipe changes. A
+`[4096]` seen in `mh_View` output is `%d` rendered from that same field and will follow automatically.
+There are zero 16- or 32-bit compares against 4096 anywhere in the regen code.
+
+**Ceiling: 65534.** Handles are `unsigned short`, and `0xFFFF` is both the invalid-handle sentinel and a
+capacity `l_MakeList` explicitly refuses (`0x4B3B57` nulls the array and returns an unusable list). Going
+beyond means retyping the `List` template — every handle, and probably the wire protocol.
+
+**Sizing.** Shipped content is 6,038 `MobRegenGroup` records across 88 files (per zone: 1628 / 1962 /
+1942 / 261). One process therefore needs more than 4096 *today*, before any 2026 content.
+
+| groups | memory | vs current content |
+|---|---|---|
+| 8,192 | 51 MB | 1.4× |
+| **16,384** (default) | **103 MB** | **2.7×** |
+| 32,768 | 206 MB | 5.4× |
+| 65,534 | 412 MB | hard ceiling |
+
+This is a large net *saving*, not a cost: one process replaces five, each of which carried its own 25.7 MB
+hatchery inside a 334 MB `.data` image.
+
+### `damage-overflow-saturate` — stop huge hits landing for 1
+
+`roe_CalcDamage` returns `int`, but the damage pipeline under it works in **double**. The conversion is
+one call to `__ftol2_sse`, which returns the x86 *integer indefinite* `0x80000000` when the value doesn't
+fit an `int32`. That negative survives three modifiers and reaches the tail:
+
+```
+test eax, eax
+jg   ok
+mov  dword ptr [ebp-0x10], 1     <-- the biggest hit in the game lands for 1
+```
+
+**The clamp is not the bug and must not be touched** — that `1` is also the floor for legitimately
+non-positive damage (defence ≥ attack), so rewriting it to a maximum would make every weak hit maximal. By
+the clamp the magnitude is already gone, so the fix goes at the conversion.
+
+Both damage-producing conversions (`roe_CalcDamage` 0x506187, `roe_AttackPowerCalcDamage` 0x504A27) are
+redirected to a 36-byte stub in an appended executable section. It saturates on the indefinite result
+**only when the original double was positive** — `__ftol2_sse` also returns `0x80000000` for negative
+overflow and NaN, and saturating those would invent enormous damage from a broken calculation. The sign is
+taken with `FTST` before the call and stashed across it.
+
+Default `saturate_to` is `0x00FFFFFF` rather than `INT_MAX`, because modifiers run *after* the conversion
+and at least one multiplies — `0x7FFFFFFF` would just wrap again and land back on the clamp.
+
+The other 207 `__ftol2_sse` sites convert rates and stats (`roe_AC`, `roe_MinWC`, `roe_HitRate`, …) and are
+deliberately left alone.
+
+### `quest-count-cap` — Zone.exe won't start above 3000 quests
+
+`ZoneServer_zs_start_sink` checks the quest file header at startup and kills the process:
+
+```
+movzx edi, word ptr [eax+2]    ; QUEST_DATA_HEAD.NumOfQuest (u16)
+mov   eax, 0xBB8               ; 3000
+cmp   di, ax
+jbe   ok
+      ac_As("Too Many Quest - MAXQUEST")  ->  ShineExit
+```
+
+**Unlike the spawn-group cap, nothing is sized by this number** — the quest body is allocated from
+`__filelength`, the lookups are STL hash maps, `GetQuestDataByIndex` bounds against `NumOfQuest` from the
+header, and the player's array is `malloc(n*32)` on demand. A scan for 3000 and its derived sizes (375 =
+3000 bits, 376, ×2, ×4, ±1) finds nothing in quest code at all. So it really is one 32-bit immediate — no
+relocation, no code, no structure growth. That contrast is the reason this recipe is one edit and
+`mob-spawn-group-cap` is twenty-two.
+
+Hard ceiling 65535: `NumOfQuest` is a `u16` and the guard compares 16-bit (`cmp di, ax`), so a larger
+constant would silently truncate. The runner refuses it. Default 16384 keeps the guard useful against a
+corrupt header while clearing 2026's 3100+.
+
+### `block-distribute-map-cap`, `block-info-cap`, `instance-cluster-cap` — the per-process map limits
+
+Three caps bind when one zone process hosts many maps; `zone/recipes/NOTES-map-caps.md` has the full reading.
+
+| recipe | stock cap | assert | what moves |
+|---|---|---|---|
+| `block-distribute-map-cap` | 64 distinct maps (`bdm_Array[64]`, a 1 KB static) | `bdm_Find` ShineExits | the array to `.bdmarr`; 3 `this` immediates + 6 counts (9 edits) |
+| `block-info-cap` | 256 block infos (`mbib_array[256]` + count, 741 KB static) | `mbib_Load: Too many block info[256]` | the box to `.mbibox`; 4 addresses, 2 vector counts, the bound, 6 count-member offsets (12 edits) |
+| `instance-cluster-cap` | 10 instance clusters (`Clusters[10]` mid-object) + List capacity 14 | `AddInstanceDungeonCluster: Cannot Add[10]` | only the array, to `.clusarr`: three `lea reg,[this+0x28068]` become `mov reg, imm32; nop`, two imm8 bounds, the dtor trip count, the `push 0xe` (13 edits) |
+
+Two things these needed that earlier recipes did not:
+
+- **Byte-width edits.** imm8 operands (`cmp esi, 0x40`, `push 0xe`) and the opcode / padding bytes of the
+  lea->mov rewrite are single bytes inside instructions whose other bytes must stay. `"width": 1` (or 2)
+  on an edit reads, expects and writes just that many bytes; the default stays 4.
+- **Range scans.** `common/tools/xref_range.py --range lo-hi` lists every instruction whose imm32 / absolute
+  disp32 lands inside a static object, and `--disp lo-hi` every register-relative member access — the
+  form a mid-object array takes. This is how the three `lea` sites and the five `mbib_Number` accesses
+  were found, and how "no absolute reference to a slot" was established rather than assumed.
+
+Limits are imm8-shaped: 124 maps (multiple of 4 for the unrolled destructor), 123 clusters; block infos
+are imm32 everywhere (1024 by default). Chained on top of `mob-spawn-group-cap` + `quest-count-cap`:
+
+```bash
+python apply.py zone/recipes/block-distribute-map-cap.json --exe build/Zone.quest.exe --out build/Zone.maps1.exe --allow-hash-mismatch
+python apply.py zone/recipes/block-info-cap.json           --exe build/Zone.maps1.exe --out build/Zone.maps2.exe --allow-hash-mismatch
+python apply.py zone/recipes/instance-cluster-cap.json     --exe build/Zone.maps2.exe --out build/Zone.maps.exe  --allow-hash-mismatch
+# every recipe verifies against the final image:
+python apply.py zone/recipes/<any>.json --exe Z:/ServerSource/Zone00/Zone.exe --verify build/Zone.maps.exe
+```
+
+### `handle-layout-2026` — every object kind in the handle range the 2026 client expects
+
+The 2026 client decides what an object IS from its handle alone (`Fiesta.exe 0x903BC0`), and the 2016 zone
+allocates in a different layout: 2026 grew the mob range to 12000 and the NPC range to 1024, which moved every
+other kind. A 2016 player (`0x1F4F`) and a 2016 drop (`0x2908`) are both mobs to the 2026 client; a picked-up
+drop stayed on the ground because its removal went to the mob manager. 54 edits move each kind to its 2026
+base, capacities unchanged: `sohu_HandleSplit` plus each kind's two handle makers, the only places the bases
+occur (searched as imm32 and imm16). Needs `npc-object-pool-cap --set handle_base=0x525C`.
+
+**Build the zone with `build.py`** (repo root), which applies the whole chain in order from the stock exe and
+verifies each on the result. `--legacy --upto damage-overflow-saturate` reproduces the older
+`Zone.maps.npc.dmg.exe` byte for byte, which is how the chain order was recovered.
+
+### `npc-click-quest-fallthrough` — an NPC with an EMPTY quest script ignores every click
+
+`ShinePlayer::InteractWithNPC` decides between "quest" and "the NPC's own role" *before* running anything,
+then discards the quest click's result. A quest sitting on an empty DOING or END script (245 + 83 in the 2016
+data, 262 + 91 in the 2026 set) therefore runs nothing, sends nothing, and never reaches the menu or shop: the
+NPC is dead to that player. A 24-byte cave makes a quest click that ran nothing fall through to the role.
+
+Proven live with a scripted client. The cave has to **push the stack argument again** - `call`ing a
+`__thiscall` with a stack argument from a cave puts a second return address in front of it, and the first
+build of this recipe crashed the zone on one click because of exactly that. The recipe carries the callstack.
+
+### `quest-script-end-notify` — tell the client when a quest script ends
+
+The zone already has the send and both clients already have the handler; one early exit keeps them apart.
+`CQuestZone::QuestNext` has a switch case for `QSC_END` that sends a `0x4401` carrying command 1, and
+`On_NC_QUEST_SCRIPT_CMD_REQ` case 1 on the client is `CloseWin(NpcDialogWin)` in the 2016 and the 2026 build
+alike - but the loop tests for END *before* the switch and leaves, so the case is dead code and no 2016
+server has ever put a command-1 `0x4401` on the wire.
+
+A 2016 client never noticed, because its dialog closes itself on every click. A 2026 client holds the
+window open until told, so against a 2016 zone the last page of every script sticks. The two other
+answers (`client-2026-npc-dialog-self-close`, or Bridge2026 sending `0x442E` per ack) close on *every*
+click, which flickers between pages. Only the server knows which page is last; a 42-byte cave at the END
+exit makes it say so. Bridge2026 notices the first END a zone sends and stops its per-ack close for it.
+
+### `npc-table-cap` — NPC.txt may hold more than 1024 rows
+
+`NPCManager` is a global whose first member is a fixed `rows[1024]` array of 12-byte entries, with its own row count
+right behind it at `+0x3000` and the parsed `NPC.txt` (`OptionReader`, 67 KB) behind that. `nm_Load` appends a row for
+every ShineNPC record of the file - the whole file, on every zone - and never tests the count, so row 1025 overwrites
+the count: the loader sees zero NPCs, asserts `NPCManager::nm_Load : Empty NPC inform`, and **every zone of the
+cluster exits at startup**. Found 2026-09-18, when a capture harvest took the table from 895 to 1043 rows.
+
+The object cannot grow where it is, so the recipe moves all of it to a new zero-filled section sized for `rows`
+(default 4096) and re-points three kinds of site: every `[this+0x3000]` / `[this+0x3004]` in the ten NPCManager
+methods (77), every `0x400` those methods bound a row index with (9), and every `mov ecx, offset npcmanager[.reader]`
+(25). 111 edits, none typed by hand: `zone/tools/mk_npc_table_cap.py` finds each by decoding the stock exe and regenerates
+the file byte for byte. It checks that no other section holds the address and lists the `[reg+0x3000]` sites it left
+alone because they belong to another class.
+
+**PROVEN on the local stack 2026-09-18**, three runs of five zones each:
+1. the patched exe with the current 960-row table - all five READY, no exception, no assert beyond the four known
+   ones (ThunderBolt shop rows, the missing SerItemMctBount file);
+2. the same exe with a **1400-row** table (960 + 440 generated rows) - all five READY. The only new asserts are
+   `nm_SetNPC : Invalid mob id[CapTest####]`, which is the generated names having no MobInfo row, exactly as
+   expected, and every real NPC is still placed;
+3. the CONTROL: that same 1400-row table on the unpatched `Zone.2026.exe` - `nm_Load : Empty NPC inform`,
+   `Zone.exe exited`, as before.
+Dynamic NPCs: zone04 hosts Eld and its Honeying puzzle scripts with the 8 PzlHoney rows; it booted clean with no
+`lss_Routine` error beyond the two pre-existing Albireo ones. In the default chain since. This is the TABLE cap;
+the per-zone NPC object pool (1024) is `npc-object-pool-cap`.
+
+## Status
+
+`mob-spawn-group-cap` **works**: boots clean at `groups=16384` under Wine, 91 maps loaded, and on an
+all-maps-on-one-zone layout (5,845 groups) it clears the spawn-group ceiling and stops on a different,
+unpatched limit — the instance-dungeon cluster cap, written up in
+`zone/recipes/NOTES-instance-dungeon-cluster-cap.md`.
+
+Getting there took two failed rounds, and both failures generalise to any recipe in this repo:
+
+**Search the offset RANGE, not the value.** Only 8 of 15 sites bake exactly `0x19B8000`; seven more bake
+`base+0x4/+0x8/+0xC/+0xE` to reach members of the structure that follows the array. An exact-value search
+finds the 8, and the binary then reads a garbage free-list head from inside the array and faults in
+`l_AllocZ+0x1F`. One nearby hit (`0x019B820F` in `MoveManager::mm_Step`) is coincidence — a range search
+needs a human to separate real offsets from collisions.
+
+**Look for unrolled loops.** The constructor's node-linking loop is unrolled four ways and bakes the
+*iteration* count (`0x400` = 1024), not the element count (4096). Nothing matching `0x1000` exists at that
+site. Without it, only the first 4096 nodes are linked and everything above hands back an unlinked node.
+
+The diagnostic that isolated both: build with `--set groups=4096` — relocation applied, count unchanged.
+That booted clean, while `groups=4097` crashed, which ruled out the section, the relocation, the image
+size and address space in one run, and pointed squarely at the count.
+
+Untested: whether a virtual-only (BSS) section works. The only virtual-only run used a count that failed
+for unrelated reasons, so `materialise: true` is simply the configuration that has been exercised.
