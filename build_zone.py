@@ -44,6 +44,9 @@ EXPERIMENTAL = [
     # Adds an import for zonehook.dll so features can be written in C++ (see zonehook/README.md). Structurally
     # verified with pefile and the hook library passes its own self-test, but no zone has booted with it yet.
     ('dll-loader', []),
+    # Third permanent inventory expansion (8 pages, as in 2026) - the 2026 client's prerequisite for the void
+    # inventory. One imm8 in UseItemChargedBuff::uib_CanUseItem; see the recipe.
+    ('inventory-expansion-cap', []),
 ]
 
 # The chain as it was before handle-layout-2026, for reproducing build/Zone.maps.npc.dmg.exe exactly.
