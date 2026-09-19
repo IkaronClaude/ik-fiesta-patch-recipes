@@ -114,6 +114,54 @@ def handlers(img):
     return out
 
 
+def handlers_by_reply(img, named, enums_path, check_va):
+    """Handlers that log NO name of their own, named by the one reply they build instead.
+
+    A REQ handler answers with its _ACK: `push <ack opcode>` into the packet-header setter. When exactly one
+    unnamed function pushes an _ACK opcode, and a _REQ of the same name exists, that function is the _REQ's
+    handler. Found this way first: NC_CHAR_GET_ITEMLIST_BY_TYPE_REQ (0x1076) at 0x417460, which pushes 0x1077
+    three times and writes no log line with its name. Opcodes = (department << 10) | command, from the
+    PDB-extracted enum list."""
+    import json
+    if not os.path.exists(enums_path):
+        print('  (no enum list at %s - handlers named by reply skipped)' % enums_path)
+        return {}
+    op = {}
+    for dept in json.load(open(enums_path, encoding='utf-8')).values():
+        for name, cmd in dept['opcodes'].items():
+            op[name] = (dept['id'] << 10) | cmd
+    taken = {v for v in named.values() if v}
+
+    def handler_shaped(st):
+        # the shape every log-named handler has: CPFs::CheckConnectionValidation called near the top, and a
+        # `ret 8` (two stack arguments, NETPACKET* and int) before the function's trailing padding
+        p = st - img.tva
+        body = img.tdata[p:p + 0x6000]
+        end = body.find(b'\xCC\xCC')
+        body = body[:end if end > 0 else len(body)]
+        early = any(body[i] == 0xE8 and st + i + 5 + struct.unpack_from('<i', body, i + 1)[0] == check_va
+                    for i in range(min(0x80, len(body) - 5)))
+        return early and b'\xC2\x08\x00' in body
+
+    claims = {}
+    for ack, code in op.items():
+        if not ack.endswith('_ACK') or ack[:-4] + '_REQ' not in op:
+            continue
+        starts = set()
+        for r in re.finditer(re.escape(b'h' + struct.pack('<I', code)), img.tdata):
+            st = img.func_start(img.tva + r.start())
+            if st:
+                starts.add(st)
+        if len(starts) == 1:
+            claims.setdefault(next(iter(starts)), []).append(ack[:-4] + '_REQ')
+    out = {}
+    for st, reqs in claims.items():
+        # one function claimed by two _ACKs is not named: which request it serves is not decidable here
+        if len(reqs) == 1 and st not in taken and check_va and handler_shaped(st):
+            out['CPFsCharacter::fc_%s' % reqs[0]] = st
+    return out
+
+
 # ---- 2. framework functions by masked bytes ----------------------------------------------------------
 
 def masked(img, va, n=None):
@@ -231,12 +279,17 @@ def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument('--exe', default='Z:/ServerSource/Character/Character.exe')
     ap.add_argument('--out', default=os.path.join(HERE, '..', 'include', 'character_symbols.h'))
+    ap.add_argument('--enums', default='C:/Projects/fiesta-proxy/lib/FiestaLib-Reloaded/docs/extracted/merged/all-enums.json',
+                    help='FiestaLib-Reloaded all-enums.json: names handlers that log no name by the reply they build')
     a = ap.parse_args()
     img = Image(a.exe)
     sha = hashlib.sha256(img.data).hexdigest()
 
     hs = handlers(img)
     fw = framework(img)
+    by_reply = {k: v for k, v in handlers_by_reply(img, hs, a.enums, fw.get('CPFs_CheckConnectionValidation')).items()
+                if k not in hs}
+    hs.update(by_reply)
 
     ok_h = {k: v for k, v in hs.items() if v}
     amb = sorted(k for k, v in hs.items() if not v)
@@ -261,6 +314,11 @@ def main():
     for k in sorted(ok_h):
         lines.append('    { "%s", 0x%08Xu },' % (k, ok_h[k]))
     lines += ['};', 'static const int kHandlerCount = %d;' % len(ok_h), '']
+    if by_reply:
+        lines.append('// Of these, named by the one _ACK they build (they log no name of their own): %d' % len(by_reply))
+        for k in sorted(by_reply):
+            lines.append('//   %s' % k)
+        lines.append('')
     if amb:
         lines.append('// Named in a log string but used by more than one function, so not assigned: %d' % len(amb))
         for k in amb:

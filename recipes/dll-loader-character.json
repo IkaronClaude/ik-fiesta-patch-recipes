@@ -1,0 +1,24 @@
+{
+  "name": "dll-loader-character",
+  "summary": "Make Character.exe load the companion hook DLL (fiestahook.dll) before its entry point - the same loader Zone.exe gets.",
+  "status": "BUILT, not yet run against a live Character.",
+  "target": {
+    "file": "Character/Character.exe",
+    "sha256": "2889640536a271468ef17cc6c74bd6f8799222e3bd95b81d53ea59d41c5a9e1c",
+    "size": 927744
+  },
+  "params": {},
+  "consts": {},
+  "why": [
+    "The same loader as dll-loader (read that recipe): one import of fiestahook.dll!ZoneHookInit appended to a",
+    "copy of the import descriptors, no code patched. Character.exe has no bound-import directory (checked at",
+    "apply time) and imports StartServiceCtrlDispatcherA, which is where the loader starts its plugins - from",
+    "Character/hooks/, a folder of its own: a zone plugin must never be loaded into Character."
+  ],
+  "add_import": {
+    "dll": "fiestahook.dll",
+    "function": "ZoneHookInit",
+    "section": ".zhook"
+  },
+  "edits": []
+}

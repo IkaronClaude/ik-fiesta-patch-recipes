@@ -51,6 +51,11 @@ ANCHORS = {
     # ItemInventory's vtable. A bag of our own borrows its RTTI locator ([-1]): the zone has 41
     # __RTDynamicCast call sites, and one reading a null locator off a bag would take the zone down.
     'ItemInventoryVtable': '??_7ItemInventory@@6B@',
+    # Sending to the Character server the way the zone does (e.g. NC_CHAR_GET_ITEMLIST_BY_TYPE_REQ at
+    # 0x5722A4): fill the global packet `gpp`, pp_SetPacketLen, then pp_SendPacket(sock2gameDB.sb_GetSocket()).
+    'GlobalProtocolPacket': '?gpp@@3VGlobalProtocolPacket@@A',
+    'Sock2GameDB': '?sock2gameDB@@3V?$SocketBundle@VGameDBSession@@@@A',
+    'SocketBundleGetSocket': '?sb_GetSocket@?$SocketBundle@VGameDBSession@@@@QAEPAVGameDBSession@@XZ',
 }
 
 

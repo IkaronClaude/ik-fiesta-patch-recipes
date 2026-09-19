@@ -52,6 +52,14 @@ EXPERIMENTAL = [
     ('void-bag-reloc', []),
 ]
 
+# Character.exe (--target character): the same loader, and bag 18 in NC_CHAR_GET_ITEMLIST_BY_TYPE_REQ. Both are
+# experimental in the same sense as above: built and verified, not yet booted.
+CHARACTER_CHAIN = [
+    ('dll-loader-character', []),
+    # bag 18 through the char_void plugin's packer; inert (answers 0x1202 as before) without the plugin
+    ('char-itemlist-void', []),
+]
+
 # The chain as it was before handle-layout-2026, for reproducing build/Zone.maps.npc.dmg.exe exactly.
 LEGACY = {'npc-object-pool-cap': []}
 
@@ -80,7 +88,8 @@ def verify(recipe, sets, stock, built):
 
 def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument('--exe', required=True, help='the STOCK Zone.exe; opened read-only')
+    ap.add_argument('--target', choices=('zone', 'character'), default='zone')
+    ap.add_argument('--exe', required=True, help='the STOCK Zone.exe (or Character.exe); opened read-only')
     ap.add_argument('--out', required=True)
     ap.add_argument('--upto', help='stop after this recipe')
     ap.add_argument('--experimental', action='store_true', help='also apply the recipes that have not been booted yet')
@@ -88,13 +97,13 @@ def main():
     a = ap.parse_args()
 
     chain = []
-    for name, sets in CHAIN:
+    for name, sets in (CHARACTER_CHAIN if a.target == 'character' else CHAIN):
         chain.append((name, LEGACY.get(name, sets) if a.legacy else sets))
         if name == a.upto:
             break
     if a.legacy and not a.upto:
         chain = [c for c in chain if c[0] != 'handle-layout-2026']
-    if a.experimental and not a.upto and not a.legacy:
+    if a.experimental and not a.upto and not a.legacy and a.target == 'zone':
         chain += EXPERIMENTAL
 
     work = tempfile.mkdtemp(prefix='zonebuild-')
