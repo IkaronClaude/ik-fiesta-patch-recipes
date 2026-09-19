@@ -116,6 +116,58 @@ ZONE_HOOK_PACKET(NC_ITEM_RELOC_REQ, {
     ZONE_CALL_ORIGINAL_OF(NC_ITEM_RELOC_REQ);
 });
 
+// ---- the time-limit item list: where an Iron Case, and a Void Inventory item, take effect ------------
+//
+// A permanent bag expansion is not a stored flag. It is a CHARGED EFFECT: using the item adds an entry
+// {record*, end date} to the character's ChargedItemEffectList, and ChargedItemEffectElement::ciee_Activ
+// applies it by switching on the record's EffectEnum. For the Iron Case (AddInventory02_4, EffectEnum 2,
+// EffectValue 2, KeepTime_Hour 0 = permanent) the whole effect is, at 0x4505E2:
+//
+//     state.ci_Effect.cec_MoreInven += EffectValue;  if (> 6) = 6;
+//
+// The 2026 Void Inventory item (VoidInvent, id 37144) is EffectEnum 45, EffectValue 1, KeepTime_Hour 0 -
+// one page per use, permanent. This zone's switch stops at 38 (`cmp ecx, 0x26; ja default`), so 45 lands
+// in the default and does NOTHING. It is bounds-checked: 45 is ignored, not used as an index.
+//
+// This hook watches every activation, so using a Void Inventory item shows whether 45 reaches here at all -
+// which decides whether the existing charged-item persistence carries the unlock for free.
+//
+// ciee_Activ is __thiscall(ChargedItemEffectElement* this, ChargedItem* state, unsigned short).
+// Prologue: push ebp / mov ebp,esp / push ebx / push esi - 5 bytes, all decodable.
+
+namespace {
+
+const int kEffectVoidInventory = 45;     // from the 2026 ChargedEffect table (VoidInvent)
+const int kEffectMoreInventory = 2;      // EE_MOREINVENTORY in the zone's own EffectEnumerate
+
+zone::Detour g_activ_detour;
+
+void __fastcall activ_impl(void* self, void* /*edx*/, void* state, unsigned short a2) {
+    using zone::types::ChargedItemEffect;
+    using zone::types::ChargedItemEffectList__ChargedItemEffectElement;
+    auto* el = (ChargedItemEffectList__ChargedItemEffectElement*)self;
+    const ChargedItemEffect* rec = el ? el->ciee_Index : nullptr;
+    if (rec) {
+        int e = (int)rec->EffectEnum;
+        const char* what = e == kEffectVoidInventory ? "   <-- VOID INVENTORY (this zone has no case for it)"
+                         : e == kEffectMoreInventory ? "   <-- inventory expansion (Iron Case family)"
+                         : e > 38                    ? "   <-- above this zone's switch: ignored"
+                         : "";
+        zone::log("charged effect %.32s  enum %d  value %u  keep %uh  until %u-%u-%u %u:%02u%s",
+                  rec->ItemID, e, (unsigned)rec->EffectValue, (unsigned)rec->KeepTime_Hour,
+                  2000u + el->ciee_Year, (unsigned)el->ciee_Month, (unsigned)el->ciee_Date,
+                  (unsigned)el->ciee_Hour, (unsigned)el->ciee_Minute, what);
+    }
+    typedef void(__fastcall* Orig)(void*, void*, void*, unsigned short);
+    ((Orig)g_activ_detour.trampoline)(self, 0, state, a2);
+}
+
+void __declspec(naked) activ_thunk() {
+    __asm { jmp activ_impl }
+}
+
+}  // namespace
+
 // ---- a script-visible view -------------------------------------------------------------------------
 //
 // Registered on every map's Lua state as VoidBagInfo(). Returns the cell count and how many relocations
@@ -156,6 +208,9 @@ ZONEHOOK_PLUGIN("void_bag") {
         zone::log("NC_ITEM_RELOC_REQ hook FAILED - no reloc trace will be produced");
     }
     zone::lua::on_function_call(on_script_call);
+    zone::hook_function("ChargedItemEffectElement::ciee_Activ",
+                        zone::rebase(zone::fn::kVa_ChargedItemEffectList__ChargedItemEffectElement__ciee_Activ),
+                        (void*)activ_thunk, &g_activ_detour);
 
     // The Lua function is registered per map, and no map is loaded yet at this point - the zone has not
     // started. Registration therefore has to happen when a state first appears, which is what the script
