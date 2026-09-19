@@ -25,6 +25,28 @@ import re
 import struct
 import sys
 
+# One shared arena instead of a section per recipe - see Pe.reserve(). Two, because page protection is a
+# property of the section, so code and data cannot share one.
+ARENA_DATA = ".zarena"
+ARENA_EXEC = ".zarenax"
+ARENA_MAGIC = b"ZARENA\0\0"
+# The arena header, at the start of .zarena:
+#   +0   magic
+#   +8   high-water mark, +12 reserved size
+#   +16  a DIRECTORY of the regions handed out: label[20], offset, size, flags. 32 bytes each.
+#
+# The directory is what makes --verify work. A region's address now depends on which recipes ran before
+# it, so nothing outside the image can recompute it - without this, verify recomputed a fresh-section
+# address and reported 8 of 12 recipes as broken when they were fine. The image describes itself instead.
+ARENA_HEADER = 0x400
+ARENA_DIR_AT = 16
+ARENA_DIR_ENTRY = 32
+ARENA_DIR_MAX = (ARENA_HEADER - ARENA_DIR_AT) // ARENA_DIR_ENTRY
+ARENA_FLAG_EXEC = 1
+# Code caves only: 0x1000 each, three recipes use one today. Fixed because the data arena sits
+# after it and growing it in place would overlap - raise this and rebuild the chain if it fills.
+ARENA_EXEC_SIZE = 0x10000
+
 SECTION_ALIGNMENT_FALLBACK = 0x1000
 IMAGE_SCN_CNT_INITIALIZED_DATA = 0x00000040
 IMAGE_SCN_CNT_UNINITIALIZED_DATA = 0x00000080
@@ -63,6 +85,7 @@ class Pe:
             name = bytes(data[o:o + 8]).rstrip(b"\0").decode("latin-1")
             vsize, va, rawsize, rawptr = struct.unpack_from("<IIII", data, o + 8)
             self.sections.append(dict(name=name, off=o, vsize=vsize, va=va, rawsize=rawsize, rawptr=rawptr))
+        self.arena_log = []
 
     def offset_of(self, va: int):
         """File offset for a virtual address, or None when the VA is not backed by file bytes."""
@@ -129,7 +152,8 @@ class Pe:
         name_at = hint_at + align(2 + len(func_b), 2)
         total = name_at + len(dll_b)
 
-        base_va = self.append_bss_section(section, total, materialise=True)
+        base_va = self.reserve(total, materialise=True, label="import descriptors")
+        where = ARENA_DATA
         base_rva = base_va - self.image_base
         o = self.offset_of(base_va)
         for i, fields in enumerate(old):            # copy the originals verbatim
@@ -143,7 +167,7 @@ class Pe:
         self.d[o + hint_at + 2:o + hint_at + 2 + len(func_b)] = func_b
         self.d[o + name_at:o + name_at + len(dll_b)] = dll_b
         struct.pack_into("<II", self.d, imp_at, base_rva, desc_len)
-        return dict(section=section, va=base_va, descriptors=len(old) + 1, bytes=total,
+        return dict(section=where, va=base_va, descriptors=len(old) + 1, bytes=total,
                     old_directory=(imp_rva, imp_size), new_directory=(base_rva, desc_len))
 
     def append_bss_section(self, name: str, size: int, materialise: bool = False,
@@ -193,6 +217,186 @@ class Pe:
                                   rawsize=rawsize, rawptr=rawptr))
         return self.image_base + rva
 
+    def reserve(self, size: int, materialise: bool = False, execute: bool = False, label: str = ""):
+        """Carve `size` bytes out of a SHARED arena section and return their virtual address.
+
+        Every recipe that needed somewhere to put a relocated object used to append a section of its own.
+        That is one PE section header each, and the section table grows towards the first section's raw
+        data: after eight of them the table was exactly full at 0x400, where .text begins, and the ninth
+        recipe could not be applied at all. Nothing about those recipes wanted a whole section - they
+        wanted a REGION of a given size at a known address.
+
+        TWO arenas, because page protection is a property of the section and code caves need execute.
+        Both are created together, on first use of either, and in this order for a reason:
+
+            .zarenax   executable, FIXED SIZE. Code caves are tiny (0x1000 each, three of them today).
+            .zarena    data, GROWS. Always the last section in the image, so extending it can never
+                       overlap anything.
+
+        Creating them in the other order - or creating the exec arena later, on demand - leaves the data
+        arena with a section after it, and then it cannot grow. That is exactly what happened on the
+        first attempt, at recipe 11 of 12.
+
+        Each arena starts with a 16-byte header holding how much of it is in use, so a CHAIN of separate
+        apply.py runs can keep allocating without being told what came before. Regions are 16-byte
+        aligned and never overlap, and the arena only ever grows at its end, so an address handed out by
+        an earlier recipe stays valid."""
+        self._ensure_arenas(size if not execute else 0)
+        name = ARENA_EXEC if execute else ARENA_DATA
+        sec = next(s for s in self.sections if s["name"] == name)
+
+        used = self._arena_used(sec)
+        off = align(used, 16)
+        need = off + size
+
+        if need > sec["vsize"]:
+            if execute:
+                raise ValueError(
+                    "%s is full: %d bytes reserved, %d needed. Raise ARENA_EXEC_SIZE and rebuild the "
+                    "chain from the stock exe - it cannot be grown in place, because the data arena "
+                    "sits after it." % (name, sec["vsize"], need))
+            self._grow_data_arena(sec, need, materialise or bool(sec["rawsize"]))
+
+        self._arena_set_used(sec, need)
+        self._arena_record(label, off, size, execute)
+        base = self.image_base + sec["va"] + off
+        self._arena_note(label, base, size, name, fresh=False)
+        return base
+
+    def _ensure_arenas(self, data_hint: int):
+        """Create both arenas, exec first, if neither exists yet."""
+        have_x = any(s["name"] == ARENA_EXEC for s in self.sections)
+        have_d = any(s["name"] == ARENA_DATA for s in self.sections)
+        if have_x and have_d:
+            return
+        if have_x != have_d:
+            raise ValueError("only one arena exists; the image was built by an older apply.py - rebuild "
+                             "the chain from the stock exe")
+        self.append_bss_section(ARENA_EXEC, ARENA_EXEC_SIZE, materialise=True, execute=True)
+        self._arena_init(next(s for s in self.sections if s["name"] == ARENA_EXEC))
+        self.append_bss_section(ARENA_DATA, max(data_hint, 0) + ARENA_HEADER, materialise=True)
+        self._arena_init(next(s for s in self.sections if s["name"] == ARENA_DATA))
+        # Both arenas' directories live in the data arena, so the exec arena's high-water mark starts
+        # after its own small header and its regions are recorded here.
+        self._arena_set_used(next(s for s in self.sections if s["name"] == ARENA_DATA), ARENA_HEADER)
+
+    def _grow_data_arena(self, sec, need: int, materialise: bool):
+        if any(s["va"] > sec["va"] for s in self.sections):
+            raise ValueError("%s is not the last section in memory; cannot grow it" % sec["name"])
+        if sec["rawsize"] and sec["rawptr"] + sec["rawsize"] != len(self.d):
+            raise ValueError("%s's raw data is not at the end of the file; cannot grow it" % sec["name"])
+
+        new_rawsize = sec["rawsize"]
+        if materialise:
+            # Once an arena carries real bytes it must carry them all the way to its end: a region past
+            # SizeOfRawData reads as the loader's zero-fill, and offset_of() would rightly refuse to back
+            # it with file bytes.
+            if not sec["rawptr"]:
+                sec["rawptr"] = align(len(self.d), self.file_alignment)
+                self.d.extend(bytes(sec["rawptr"] - len(self.d)))
+                struct.pack_into("<I", self.d, sec["off"] + 20, sec["rawptr"])
+            new_rawsize = align(need, self.file_alignment)
+            want = sec["rawptr"] + new_rawsize
+            if want > len(self.d):
+                self.d.extend(bytes(want - len(self.d)))
+
+        struct.pack_into("<I", self.d, sec["off"] + 8, need)            # VirtualSize
+        struct.pack_into("<I", self.d, sec["off"] + 16, new_rawsize)    # SizeOfRawData
+        sec["vsize"], sec["rawsize"] = need, new_rawsize
+        self.size_of_image = max(self.size_of_image,
+                                 align(sec["va"] + need, self.section_alignment))
+        struct.pack_into("<I", self.d, self.size_of_image_off, self.size_of_image)
+
+    # The arena header: a magic so a stray pointer into it is recognisable in a dump, and the high-water
+    # mark so the next apply.py run knows where to continue.
+    def _arena_init(self, sec):
+        o = sec["rawptr"]
+        self.d[o:o + 8] = ARENA_MAGIC
+        struct.pack_into("<II", self.d, o + 8, ARENA_DIR_AT if sec["name"] == ARENA_EXEC else ARENA_HEADER,
+                         sec["vsize"])
+
+    def _dir_base(self):
+        sec = next(s for s in self.sections if s["name"] == ARENA_DATA)
+        return sec["rawptr"] + ARENA_DIR_AT
+
+    def _arena_record(self, label, off, size, execute):
+        """Add one region to the directory. A repeated label replaces its entry, so re-running a recipe
+        over an image does not leave a stale duplicate."""
+        base = self._dir_base()
+        key = (label or "?").encode("latin-1")[:19]
+        free = None
+        for i in range(ARENA_DIR_MAX):
+            at = base + i * ARENA_DIR_ENTRY
+            name = bytes(self.d[at:at + 20]).rstrip(b"\0")
+            if not name and free is None:
+                free = at
+            if name == key:
+                free = at
+                break
+        if free is None:
+            raise ValueError("arena directory is full (%d regions)" % ARENA_DIR_MAX)
+        self.d[free:free + 20] = key.ljust(20, b"\0")
+        struct.pack_into("<III", self.d, free + 20, off, size, ARENA_FLAG_EXEC if execute else 0)
+
+    def arena_lookup(self, label):
+        """(virtual address, size) of a region a recipe reserved earlier, or None."""
+        try:
+            base = self._dir_base()
+        except StopIteration:
+            return None
+        key = (label or "?").encode("latin-1")[:19]
+        for i in range(ARENA_DIR_MAX):
+            at = base + i * ARENA_DIR_ENTRY
+            name = bytes(self.d[at:at + 20]).rstrip(b"\0")
+            if name != key:
+                continue
+            off, size, flags = struct.unpack_from("<III", self.d, at + 20)
+            which = ARENA_EXEC if flags & ARENA_FLAG_EXEC else ARENA_DATA
+            sec = next((s for s in self.sections if s["name"] == which), None)
+            if not sec:
+                return None
+            return self.image_base + sec["va"] + off, size
+        return None
+
+    def _arena_used(self, sec):
+        o = sec["rawptr"]
+        if bytes(self.d[o:o + 8]) != ARENA_MAGIC:
+            raise ValueError("%s has no arena header - the image was not built by this apply.py"
+                             % sec["name"])
+        return struct.unpack_from("<I", self.d, o + 8)[0]
+
+    def _arena_set_used(self, sec, used):
+        struct.pack_into("<I", self.d, sec["rawptr"] + 8, used)
+
+    def _arena_note(self, label, base, size, name, fresh):
+        self.arena_log.append(dict(label=label, va=base, size=size, section=name, fresh=fresh))
+
+    def make_header_room(self):
+        """Push every section's raw data down by one file-alignment block so another section header fits.
+
+        The section table grows towards the first section's raw data, and this image is exactly full: 13
+        headers end at 0x400, which is where .text begins. Squeezing the new data into a neighbouring
+        section instead LOOKS like it works and does not - tried first, and it produced a .qend whose
+        grown virtual range overlapped .npct's start, so two sections claimed one RVA and the loader
+        mapped the BSS over the import table. pefile could not resolve the imports either, which is how
+        it was caught.
+
+        Only file offsets move. Every RVA, and therefore every address in the PDB and in every recipe,
+        is untouched."""
+        step = self.file_alignment
+        first_raw = min((s["rawptr"] for s in self.sections if s["rawptr"]), default=0)
+        if not first_raw:
+            raise ValueError("no section has raw data; nothing to move")
+        self.d[first_raw:first_raw] = bytes(step)
+        for s in self.sections:
+            if s["rawptr"]:
+                s["rawptr"] += step
+                struct.pack_into("<I", self.d, s["off"] + 20, s["rawptr"])
+        size_of_headers_off = self.e_lfanew + 24 + 60
+        soh = struct.unpack_from("<I", self.d, size_of_headers_off)[0]
+        struct.pack_into("<I", self.d, size_of_headers_off, soh + step)
+        # Any data directory pointing at a file-backed structure still resolves: directories are RVAs.
+        return step
 
 def align(v, a):
     return (v + a - 1) & ~(a - 1)
@@ -326,17 +530,24 @@ def main():
         size = evaluate(ns["size"], env)
         if a.verify:
             tgt = Pe(bytearray(open(a.verify, "rb").read()))
-            found = [s for s in tgt.sections if s["name"] == ns["name"]]
+            # Regions share the arenas, so a region's address depends on which recipes ran before it.
+            # The image records it: read it back rather than recomputing something that cannot be known
+            # from this recipe alone.
+            found = tgt.arena_lookup(ns["name"])
             if not found:
-                raise SystemExit(f"VERIFY FAILED: no section named {ns['name']} in {a.verify}")
-            newbase = tgt.image_base + found[0]["va"]
-            print(f"section: {ns['name']} present at VA 0x{newbase:08X} "
-                  f"({found[0]['vsize']:,} bytes virtual)")
+                raise SystemExit(f"VERIFY FAILED: {a.verify} has no arena region named {ns['name']}")
+            newbase, got_size = found
+            if got_size < size:
+                raise SystemExit(f"VERIFY FAILED: region {ns['name']} is {got_size:,} bytes, "
+                                 f"recipe wants {size:,}")
+            print(f"region : {ns['name']} at VA 0x{newbase:08X} ({got_size:,} bytes, from the "
+                  f"arena directory)")
         else:
-            newbase = pe.append_bss_section(ns["name"], size, bool(ns.get("materialise")),
-                                            bool(ns.get("execute")))
-            print(f"section: +{ns['name']} at VA 0x{newbase:08X}, {align(size, pe.section_alignment):,} "
-                  f"bytes virtual (0 on disk); SizeOfImage -> 0x{pe.size_of_image:08X}")
+            newbase = pe.reserve(size, bool(ns.get("materialise")), bool(ns.get("execute")),
+                                 label=ns["name"])
+            note = pe.arena_log[-1]
+            print(f"region : {ns['name']} at VA 0x{newbase:08X}, {size:,} bytes in {note['section']}"
+                  f"{' (new)' if note['fresh'] else ''}; SizeOfImage -> 0x{pe.size_of_image:08X}")
         env["@newbase"] = newbase
 
     # -- an extra import, so the zone can be extended in C++ instead of hand-assembled bytes -----------

@@ -6,16 +6,16 @@
 // (the exe sets DYNAMIC_BASE), so every address is rebased at runtime against the real module base:
 // see zone::rebase() in hook.h. Never use one of these as a raw pointer.
 #pragma once
-// no CRT: the fixed-width names come from hook.h
+// Self-contained: plain `unsigned int`, so this can be included before anything else.
 
 namespace zone {
 
-static const uint32_t kImageBase = 0x00400000u;
+static const unsigned int kImageBase = 0x00400000u;
 static const char kExeSha256[] = "7ef3532da08194a377558322ca2bd06d1ce5bdb2813796e033173b72d9ff883d";
 
 // ShinePlayer::sp_NC_<NAME>(TNETCOMMAND*, int, unsigned short) - the packet handlers.
 // void __thiscall, so a detour must preserve ECX (the ShinePlayer*).
-struct Handler { const char* name; uint32_t va; };
+struct Handler { const char* name; unsigned int va; };
 static const Handler kHandlers[] = {
     { "sp_NC_ACT_ACTIONBYITEM_REQ", 0x00458440u },
     { "sp_NC_ACT_AUTO_WAY_FINDING_USE_GATE_REQ", 0x00562340u },
@@ -267,12 +267,12 @@ static const Handler kHandlers[] = {
 static const int kHandlerCount = 246;
 
 // Anchors - see ANCHORS in mk_symbols.py for why the service thread, and not WinMain.
-static const uint32_t kVaStartDispatcher = 0x006535B0u;
-static const uint32_t kVaWinMain = 0x0049D910u;
-static const uint32_t kVaZoneServiceThread = 0x005A9D90u;
+static const unsigned int kVaStartDispatcher = 0x006535B0u;
+static const unsigned int kVaWinMain = 0x0049D910u;
+static const unsigned int kVaZoneServiceThread = 0x005A9D90u;
 
 // vtables, for the cases where swapping a slot is the right tool
-struct Vtable { const char* name; uint32_t va; };
+struct Vtable { const char* name; unsigned int va; };
 static const Vtable kVtables[] = {
     { "??_7?$PROTOCOLFUNCTIONTEMPLETE@P8ShinePlayer@ShineObjectClass@@AEXPATNETCOMMAND@@HG@Z@@6B@", 0x006C9A94u },
     { "??_7ShinePlayer@ShineObjectClass@@6B@", 0x006EA61Cu },

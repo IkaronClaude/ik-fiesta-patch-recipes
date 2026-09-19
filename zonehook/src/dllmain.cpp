@@ -1,57 +1,63 @@
-// zonehook.dll - loaded by Zone.exe through an injected import (recipes/dll-loader.json).
+// zonehook.dll - the LOADER. Zone.exe is patched to import it (recipes/dll-loader.json), and everything
+// else lives in hooks/*.dll, which this loads.
 //
-// TWO-STAGE START-UP, and the reason for it:
+// TWO STAGES, and the reason for it:
 //
-//   stage 1, DllMain      Runs during loader init, BEFORE the exe's entry point and its CRT, on a stack
-//                         with very little committed. Measured 2026-09-19 under Wine: a DLL carrying the
-//                         static CRT dies right here ("stack overflow 824 bytes") before DllMain is even
-//                         reached. So stage 1 does the minimum that is safe - install ONE hook - and
-//                         nothing else. No allocation, no file I/O, no zone code.
+//   stage 1, DllMain        Runs during loader init, before the exe's entry point and its CRT, on a stack
+//                           with very little committed. Measured 2026-09-19 under Wine, a DLL carrying the
+//                           STATIC CRT dies right here ("stack overflow 824 bytes") before DllMain is even
+//                           reached; the dynamic CRT was fine in the same position. Stage 1 therefore does
+//                           exactly one thing - rewrite one IAT slot - and nothing else.
 //
-//   stage 2, the service  These exes are Windows SERVICES. WinMain runs, calls StartServiceCtrlDispatcher,
-//   thread                and that BLOCKS; the SCM then calls the service routine on another thread, and
-//                         that is where the zone actually starts. ZoneServer::zs_ServiceThreadFunction is
-//                         that thread. By the time it runs the process is fully initialised and we are on
-//                         a normal 1 MB stack, so everything real happens here.
+//   stage 2, ServiceMain    These exes are Windows SERVICES. The zone starts when the SCM calls the
+//                           service routine, which we get in front of by hooking the
+//                           StartServiceCtrlDispatcherA import and rewriting the SERVICE_TABLE_ENTRY it is
+//                           handed (see service_hook.h). Here the process is fully initialised, the stack
+//                           is a normal 1 MB, no loader lock is held, and the zone has not started - so
+//                           this is where the plugins are loaded and where hooks are installed.
 //
-// Run by hand, the exe only registers a service and exits - stage 2 never fires, and that is expected.
+// Run by hand, the exe only registers a service and exits: stage 2 never fires, and that is expected.
 // Stage 1 still logs, which is how you tell the DLL loaded at all.
-#include "packet_hook.h"
+#include "../include/zonehook.h"
+#include "plugins.h"
+#include "service_hook.h"
 
-// ---- stage 2 ---------------------------------------------------------------------------------------
+// Plugins may register a callback instead of doing their work in DllMain. Both run at the same moment;
+// the callback exists so a plugin can keep its DllMain trivial. The list is fixed-size on purpose - no
+// allocation anywhere in the start-up path.
+namespace {
+enum { kMaxCallbacks = 32 };
+zone::ServiceInitFn g_callbacks[kMaxCallbacks];
+int g_callback_count = 0;
+}  // namespace
 
-// NC_ITEM_RELOC_REQ is the packet the void bag needs: moving an item between inventories is exactly what
-// inven 18 does on the 2026 wire, two ITEM_INVEN u16 of (inven << 10) | slot. Logging it first proves the
-// detour fires with the right `this` before anything is changed.
-ZONE_HOOK_PACKET(NC_ITEM_RELOC_REQ, {
-    const unsigned char* p = (const unsigned char*)cmd;
-    if (p) {
-        unsigned short from = *(const unsigned short*)(p + 2);   // past the opcode
-        unsigned short to = *(const unsigned short*)(p + 4);
-        zone::log("[reloc] self=%x  %u:%u -> %u:%u", self,
-                  from >> 10, from & 0x3FF, to >> 10, to & 0x3FF);
-    }
-    ZONE_CALL_ORIGINAL_OF(NC_ITEM_RELOC_REQ);
-});
-
-static void install_features() {
-    zone::log("[zonehook] service thread up; installing features");
-    if (!ZONE_INSTALL_PACKET(NC_ITEM_RELOC_REQ)) {
-        zone::log("[zonehook] NO FEATURE HOOKS INSTALLED - the zone runs unchanged");
-        return;
-    }
-    zone::log("[zonehook] %d feature hook(s) installed", zone::installed_count());
+extern "C" __declspec(dllexport) int ZoneHookRegister(zone::ServiceInitFn fn) {
+    if (!fn || g_callback_count >= kMaxCallbacks) return 0;
+    g_callbacks[g_callback_count++] = fn;
+    return 1;
 }
 
-// ---- stage 1 ---------------------------------------------------------------------------------------
+// ---- stage 2: on the service thread, before the zone's own ServiceMain ------------------------------
 
-static zone::Detour g_service_detour;
-typedef DWORD(WINAPI* ServiceThreadFn)(void*);
+static void start_plugins() {
+    zone::log("service starting - loading plugins before the zone's ServiceMain");
 
-static DWORD WINAPI service_thread_hook(void* arg) {
-    install_features();                                   // stage 2, on a real thread with a real stack
-    return ((ServiceThreadFn)g_service_detour.trampoline)(arg);
+    int loaded = zone::load_plugins();
+    for (int i = 0; i < g_callback_count; i++) {
+        zone::log("plugin callback %d of %d", i + 1, g_callback_count);
+        g_callbacks[i]();
+    }
+
+    if (!loaded) {
+        // Not an error: a stock server has no plugins. Say so plainly rather than leaving the log silent,
+        // because "no hooks ran" and "no hooks exist" look identical otherwise.
+        zone::log("no plugins in hooks/ - the zone runs exactly as it would unpatched");
+    } else {
+        zone::log("%d plugin(s) up, %d callback(s) run", loaded, g_callback_count);
+    }
 }
+
+// ---- stage 1: loader init ---------------------------------------------------------------------------
 
 extern "C" __declspec(dllexport) void ZoneHookInit() {
     // Imported by name from Zone.exe so a missing or mismatched DLL fails loudly at load. Nothing calls
@@ -61,14 +67,14 @@ extern "C" __declspec(dllexport) void ZoneHookInit() {
 BOOL APIENTRY DllMain(HMODULE module, DWORD reason, LPVOID) {
     if (reason == DLL_PROCESS_ATTACH) {
         DisableThreadLibraryCalls(module);
-        zone::log_init(L"zonehook.log");
-        zone::log("[zonehook] loaded; exe base %x, %d known handlers",
+        zone::log_init("loader");
+        zone::log("loaded; exe base %x, %d known packet handlers",
                   zone::module_base(), zone::kHandlerCount);
-        void* svc = zone::rebase(zone::kVaZoneServiceThread);
-        if (zone::detour(svc, (void*)service_thread_hook, &g_service_detour)) {
-            zone::log("[zonehook] waiting for the service thread at %x", svc);
+
+        if (zone::hook_service_main(start_plugins)) {
+            zone::log("waiting for ServiceMain");
         } else {
-            zone::log("[zonehook] COULD NOT HOOK the service thread at %x - nothing will install", svc);
+            zone::log("NOT A SERVICE (no StartServiceCtrlDispatcherA import) - nothing will be loaded");
         }
     } else if (reason == DLL_PROCESS_DETACH) {
         zone::uninstall_all();
