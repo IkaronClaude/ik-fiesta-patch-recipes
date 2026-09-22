@@ -148,7 +148,7 @@ def main():
     recipe = {
         'name': 'abstate-index-cap',
         'summary': 'Lift the 792-slot AbStataIndex list of the abstate dictionary (2026 AbState needs 1083): the whole dic_abstate object moves to a new section sized for `slots`.',
-        'status': 'GENERATED 2026-09-22 and verified to apply on the stock exe and on top of the full chain. NOT yet booted.',
+        'status': 'GENERATED 2026-09-22; BOOTED the same day on zone03 (2016 abstate data), then on every zone of the stack as part of build/Zone.hooked.exe. The 2026 AbState / SubAbState / AbStateView tables are not switched in yet.',
         'target': {'file': 'Zone00/Zone.exe', 'sha256': '7ef3532da08194a377558322ca2bd06d1ce5bdb2813796e033173b72d9ff883d', 'size': 4673536},
         'params': {'slots': a.slots},
         'consts': {},
