@@ -1,0 +1,63 @@
+{
+  "name": "linkto-no-kick",
+  "summary": "A same-zone link (GM &linkto, a gate, a scroll) whose destination has no standable spot DISCONNECTS the player (error 1669). Make it a no-op instead: the exe already restores the old position right after the kick.",
+  "status": "BUILT 2026-09-23 from the wire + asm below; boot on one zone, then everywhere (operator rule).",
+  "target": {
+    "file": "Zone00/Zone.exe",
+    "sha256": "7ef3532da08194a377558322ca2bd06d1ce5bdb2813796e033173b72d9ff883d",
+    "size": 4673536
+  },
+  "params": {},
+  "consts": {
+    "kick_site":    "0x0049B1DB",
+    "old_bytes":    "0x138B",
+    "jmp_over":     "0x13EB"
+  },
+  "why": [
+    "Operator, 2026-09-22: '&linkto FroTundra 3200 3200' got the character kicked. Reproduced on the stack with a",
+    "bot (Fiesta2026on2016 tickets.md): 24 ms after the chat command the zone sends NC_USER_CONNECTCUT_CMD err",
+    "0x0685 (1669). The same command to a WALKABLE spot works, the same blocked spot reached from ANOTHER zone",
+    "(LINKOTHER) lands you at the map's spawn point - only the same-zone path kicks. (3200,3200) on FroTundra is",
+    "a blocked tile with nothing standable for 450 units; Valtara (6000,6000) kicks the same way.",
+    "",
+    "ShinePlayer::so_LinkTo (0x49AD30, vtable slot 384), same-zone branch:",
+    "",
+    "    0x49B1A5   [player.pos] = link->coordx / coordy        ; the new position, written first",
+    "    0x49B1C3   call vtable+0x4C0                           ; sector update",
+    "    0x49B1D2   call ShineObject::so_MapMarking(0)          ; 0x466470 -> FieldMap::fm_Marking",
+    "    0x49B1D7   test eax, eax                               ; FM_MarkingError: 0 = placed",
+    "    0x49B1D9   je   0x49B225                               ; placed: send LINKSAME, return 1",
+    "    0x49B1DB   mov  edx, [ebx]                             ; <-- not placed:",
+    "    0x49B1DD   mov  eax, [edx+0x5F8]                       ;     vtable slot 382 = ShinePlayer::so_Disconnect (0x54F340)",
+    "    0x49B1E3   push 0 / push 0 / push 0x685                ;     so_Disconnect(1669, RemoveWhen 0, 0)",
+    "    0x49B1EC   mov  ecx, ebx / call eax                    ;     the kick",
+    "    0x49B1F0   mov  eax, [ebp-0x2C] ...                    ; restore the OLD position and re-mark it",
+    "    0x49B220   jmp  0x49AE61                               ; return 0 (the 'link did not happen' value)",
+    "",
+    "fm_Marking (0x452FD0) with force=0 first tries the exact spot, then up to 32 candidate spots around it",
+    "(the search that turned Valtara (100,100) into (125,100) on the cross-zone path); when none is free it",
+    "returns an error and so_LinkTo answers with the disconnect. Every caller of so_LinkTo takes the 0 return as",
+    "'no link' already (ac_LinkTo ignores it; the gate menu and the scroll do nothing more), so the kick adds",
+    "nothing but the disconnect itself.",
+    "",
+    "THE PATCH: the two bytes at 0x49B1DB (8B 13, mov edx,[ebx]) become EB 13 (jmp short +0x13 -> 0x49B1F0):",
+    "the disconnect is skipped and execution lands on the exe's own restore of the old position, then the",
+    "normal return 0. Nothing is sent to the client. The 19 bytes between are dead code.",
+    "",
+    "The zonehook quest_gate plugin wraps so_LinkTo and, when the original returns 0 for a link it let",
+    "through, logs 'link to <map> (<x>,<y>) did not happen' and sends the player a notice - so a GM sees why",
+    "&linkto did nothing instead of being disconnected.",
+    "",
+    "HOW TO PROVE IT: as GM on FroTundra, '&linkto FroTundra 3200 3200' - stock: CONNECTCUT 1669 and a relog;",
+    "patched: nothing on the wire but the notice, the character stays where it was."
+  ],
+  "edits": [
+    {
+      "why": "so_LinkTo: skip the so_Disconnect(0x685) when the destination cannot be marked; fall into the position restore",
+      "at": "kick_site",
+      "width": 2,
+      "expect": "old_bytes",
+      "write": "jmp_over"
+    }
+  ]
+}

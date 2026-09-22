@@ -41,6 +41,12 @@
 //
 // GM bypass: a character with so_AdministratorLevel() > 0 is let through with a log line, so &linkto and the
 // operator's map checks keep working.
+//
+// ---- A LINK THAT DID NOT HAPPEN ---------------------------------------------------------------------------
+//
+// so_LinkTo returns 0 when it did not link. The stock exe disconnects the player (error 1669) when a same-zone
+// destination has no standable spot; recipe linkto-no-kick turns that into the plain 0 return, and this plugin
+// logs it and tells a GM (regular players see nothing, as the operator asked).
 
 #include <zonehook.h>
 #include <zone_functions.h>
@@ -159,7 +165,21 @@ unsigned char __fastcall linkto_hook(void* self, void* edx, NPCManager__LinkInfo
             }
         }
     }
-    return g_orig_linkto(self, edx, link, a2, a3, a4);
+    unsigned char ok = g_orig_linkto(self, edx, link, a2, a3, a4);
+    if (!ok && link) {
+        // 0 = the exe did not link: with recipe linkto-no-kick a same-zone destination that cannot be marked (no
+        // standable spot near the coordinates - fm_Marking tries the spot and 32 around it) ends here instead of
+        // in so_Disconnect(1669). A player sees nothing (as asked); a GM gets told why &linkto did nothing.
+        char map[34] = {0};
+        std::memcpy(map, link->linktoserver, 33);
+        zone::log("-> %s (%d,%d): the zone did not link (no standable spot there, or not linkable now)", map, (int)link->coordx, (int)link->coordy);
+        if (zone::fn::ShineObjectClass__ShinePlayer__so_AdministratorLevel()(self, nullptr) > 0) {
+            char text[128];
+            std::snprintf(text, sizeof(text), "Cannot link to %s (%d,%d): no standable spot there.", map, (int)link->coordx, (int)link->coordy);
+            zone::fn::ShineObjectClass__ShinePlayer__so_ply_Notice()(self, nullptr, text);
+        }
+    }
+    return ok;
 }
 
 }  // namespace

@@ -198,6 +198,9 @@ exe without its plugin behaves exactly as unpatched. `void-bag-reloc` + `void_ba
 `char_void` are built that way. `quest_gate` needs no recipe at all: it swaps one vtable slot
 (`ShinePlayer::so_LinkTo`, the funnel of every map transfer) and reads its table with the zone's own `CDataReader`
 - a plugin that reuses the exe's readers cannot drift from what the exe accepts, so never hand-write a parser.
+`linkto-no-kick` + `quest_gate` is the other pairing: the recipe turns the disconnect that a same-zone link onto
+an unmarkable spot used to cause (error 1669, a GM `&linkto` onto a blocked tile) into the plain "did not link"
+return, and the plugin logs that return and tells a GM why.
 
 ### Live
 
