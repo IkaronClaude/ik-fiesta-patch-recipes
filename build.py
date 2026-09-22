@@ -57,6 +57,9 @@ EXPERIMENTAL = [
     # table needs 1083; the 1032 / 1040 `Invalid skill idx` asserts). Data stays 2016 until AbState / SubAbState /
     # AbStateView switch to 2026 in Fiesta2026on2016; the relocation itself is inert with the 2016 tables.
     ('abstate-index-cap', []),
+    # A same-zone link whose destination has no standable spot (GM &linkto onto a blocked tile) disconnected the
+    # player with 1669; now it simply does not happen (the quest_gate plugin tells a GM why).
+    ('linkto-no-kick', []),
 ]
 
 # Character.exe (--target character): the same loader, and bag 18 in NC_CHAR_GET_ITEMLIST_BY_TYPE_REQ. Both are
