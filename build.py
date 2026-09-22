@@ -57,9 +57,9 @@ EXPERIMENTAL = [
     # table needs 1083; the 1032 / 1040 `Invalid skill idx` asserts). Data stays 2016 until AbState / SubAbState /
     # AbStateView switch to 2026 in Fiesta2026on2016; the relocation itself is inert with the 2016 tables.
     ('abstate-index-cap', []),
-    # A same-zone link whose destination has no standable spot (GM &linkto onto a blocked tile) disconnected the
-    # player with 1669; now it simply does not happen (the quest_gate plugin tells a GM why).
-    ('linkto-no-kick', []),
+    # NOT a recipe: the disconnect a same-zone link onto an unmarkable spot causes (error 1669) cannot be skipped -
+    # so_Unmark has already run and the exe never re-marks, so the player ends up in limbo (tried 2026-09-23,
+    # withdrawn). The quest_gate plugin pre-checks a GM &linkto destination instead.
 ]
 
 # Character.exe (--target character): the same loader, and bag 18 in NC_CHAR_GET_ITEMLIST_BY_TYPE_REQ. Both are

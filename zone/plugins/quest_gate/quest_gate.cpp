@@ -39,18 +39,33 @@
 // never a second parser). The columns are located by NAME from the file's field list, so a reordered table still
 // reads; a missing file or column logs and leaves every map open (nothing is gated by accident).
 //
-// GM bypass: a character with so_AdministratorLevel() > 0 is let through with a log line, so &linkto and the
-// operator's map checks keep working.
+// GM bypass: a character with so_AdministratorLevel() > 0 is let through with a log line - but only for the
+// &linkto command (see below), so the operator's map checks keep working and gates stay testable.
 //
-// ---- A LINK THAT DID NOT HAPPEN ---------------------------------------------------------------------------
+// ---- GM &linkto ONTO A SPOT NOBODY CAN STAND ON ---------------------------------------------------------
 //
-// so_LinkTo returns 0 when it did not link. The stock exe disconnects the player (error 1669) when a same-zone
-// destination has no standable spot; recipe linkto-no-kick turns that into the plain 0 return, and this plugin
-// logs it and tells a GM (regular players see nothing, as the operator asked).
+// Operator, 2026-09-22: "&linkto FroTundra 3200 3200" got the character kicked. so_LinkTo's same-zone branch
+// (0x49B117..) calls so_Unmark, writes the new coordinates, then so_MapMarking(0) -> FieldMap::fm_Marking, which
+// tries the spot and a cluster of spots around it; when none is free it returns an error and so_LinkTo calls
+// so_Disconnect(0x685) (error 1669). Skipping that disconnect is NOT a fix: the object is already unmarked and
+// the exe only restores the coordinates, so the player stays out of every sector - no chat, no abstate ticks,
+// no second link (tried 2026-09-23, withdrawn). The check has to happen BEFORE the exe unwinds anything, so for
+// a link that comes from the GM command (the return address is ac_LinkTo's call site, 0x41AA0A) this plugin
+// tests the destination with the zone's own block map first: FieldContainer::fc_FindMap(name) gives the FieldMap
+// when this zone hosts it (a map hosted elsewhere goes through the WorldManager and lands on its spawn point
+// when the spot is blocked - the cross-zone path never kicked), fm_InMap(x,y) and fm_IsBlock(x,y,mbi_IsMoveBlock)
+// are what fm_Marking asks first. A blocked spot -> a notice to the GM and return 0, nothing else happens.
+// Only the GM command is pre-checked: a gate / scroll / portal keeps the exe's behaviour (its coordinates come
+// from data and fm_Marking's nudge handles a slightly-off row).
+//
+// The GM bypass of the quest condition is scoped to the same caller: a GM walking through a gate is refused
+// like everyone else (otherwise a GM cannot test the gate at all), &linkto still goes anywhere.
 
 #include <zonehook.h>
 #include <zone_functions.h>
 #include <zone_globals.h>
+
+#include <intrin.h>
 
 #include <cstddef>
 #include <cstdio>
@@ -66,8 +81,10 @@ using zone::types::CDataReader;
 using zone::types::CDataReader__FIELD;
 using zone::types::CDataReader__HEAD;
 using zone::types::ShineObjectClass__ShinePlayer;
+using zone::types::FieldMap;
 
-const int kLinkToSlot = 384;                 // ShinePlayer vtable: so_LinkTo (0x49AD30 in the stock exe)
+const int kLinkToSlot = 384;
+const unsigned int kVaAcLinkToReturn = 0x0041AA0Au;   // AmpersandCommand::ac_LinkTo, the instruction after its call to so_LinkTo                 // ShinePlayer vtable: so_LinkTo (0x49AD30 in the stock exe)
 const unsigned char kStatusDone = 2;         // PLAYER_QUEST_STATUS::PQS_DONE
 const unsigned char kStatusRepeatDone = 4;   // PLAYER_QUEST_STATUS::PQS_REPEAT
 const char* kTablePath = "../9Data/Shine/FieldQuestCondition.shn";
@@ -144,40 +161,55 @@ const char* message_for(const char* map) {
     return dungeon ? kFallbackDungeon : kFallbackGate;
 }
 
+bool from_gm_command() {
+    return _ReturnAddress() == (void*)zone::rebase(kVaAcLinkToReturn);
+}
+
+// The GM command's destination, tested the way fm_Marking starts: hosted here, inside the map, not a move-blocked
+// tile. Returns false when the exe would fail to place the player there.
+bool standable_here(const char* map, unsigned long x, unsigned long y) {
+    FieldMap* field = zone::fn::FieldContainer__fc_FindMap()(zone::global::fieldlist(), nullptr, (char*)map);
+    if (!field) return true;   // not hosted by this zone: the destination zone places the player (spawn point if blocked)
+    if (!zone::fn::FieldMap__fm_InMap()(field, nullptr, (int)x, (int)y)) return false;
+    return !zone::fn::FieldMap__fm_IsBlock()(field, nullptr, x, y, (void*)zone::fn::MapBlock__MapBlockInformation__mbi_IsMoveBlock());
+}
+
 unsigned char __fastcall linkto_hook(void* self, void* edx, NPCManager__LinkInformTemplete* link, int a2, int a3, int a4) {
-    if (link && g_gates) {
+    if (link) {
         char map[34] = {0};
         std::memcpy(map, link->linktoserver, 33);
-        auto it = g_gates->find(map);
-        if (it != g_gates->end()) {
-            ShineObjectClass__ShinePlayer* player = (ShineObjectClass__ShinePlayer*)self;
-            unsigned short qid = it->second;
-            if (quest_done(player, qid)) {
-                zone::log("-> %s: quest %u done, entering", map, qid);
-            } else if (zone::fn::ShineObjectClass__ShinePlayer__so_AdministratorLevel()(self, nullptr) > 0) {
-                zone::log("-> %s: quest %u NOT done, GM (admin level %u) let through", map, qid,
-                          zone::fn::ShineObjectClass__ShinePlayer__so_AdministratorLevel()(self, nullptr));
-            } else {
-                const char* text = message_for(map);
-                zone::log("-> %s REFUSED: quest %u not done - \"%s\"", map, qid, text);
-                zone::fn::ShineObjectClass__ShinePlayer__so_ply_Notice()(self, nullptr, (char*)text);
-                return 0;
+        bool gm_command = from_gm_command();
+        if (gm_command && !standable_here(map, link->coordx, link->coordy)) {
+            char text[128];
+            std::snprintf(text, sizeof(text), "Cannot link to %s (%lu,%lu): nobody can stand there.", map, link->coordx, link->coordy);
+            zone::log("-> %s (%lu,%lu) REFUSED: &linkto onto a blocked spot (the exe would have disconnected the player)", map, link->coordx, link->coordy);
+            zone::fn::ShineObjectClass__ShinePlayer__so_ply_Notice()(self, nullptr, text);
+            return 0;
+        }
+        if (g_gates) {
+            auto it = g_gates->find(map);
+            if (it != g_gates->end()) {
+                ShineObjectClass__ShinePlayer* player = (ShineObjectClass__ShinePlayer*)self;
+                unsigned short qid = it->second;
+                if (quest_done(player, qid)) {
+                    zone::log("-> %s: quest %u done, entering", map, qid);
+                } else if (gm_command && zone::fn::ShineObjectClass__ShinePlayer__so_AdministratorLevel()(self, nullptr) > 0) {
+                    zone::log("-> %s: quest %u NOT done, &linkto by a GM (admin level %u) let through", map, qid,
+                              zone::fn::ShineObjectClass__ShinePlayer__so_AdministratorLevel()(self, nullptr));
+                } else {
+                    const char* text = message_for(map);
+                    zone::log("-> %s REFUSED: quest %u not done - \"%s\"", map, qid, text);
+                    zone::fn::ShineObjectClass__ShinePlayer__so_ply_Notice()(self, nullptr, (char*)text);
+                    return 0;
+                }
             }
         }
     }
     unsigned char ok = g_orig_linkto(self, edx, link, a2, a3, a4);
     if (!ok && link) {
-        // 0 = the exe did not link: with recipe linkto-no-kick a same-zone destination that cannot be marked (no
-        // standable spot near the coordinates - fm_Marking tries the spot and 32 around it) ends here instead of
-        // in so_Disconnect(1669). A player sees nothing (as asked); a GM gets told why &linkto did nothing.
         char map[34] = {0};
         std::memcpy(map, link->linktoserver, 33);
-        zone::log("-> %s (%d,%d): the zone did not link (no standable spot there, or not linkable now)", map, (int)link->coordx, (int)link->coordy);
-        if (zone::fn::ShineObjectClass__ShinePlayer__so_AdministratorLevel()(self, nullptr) > 0) {
-            char text[128];
-            std::snprintf(text, sizeof(text), "Cannot link to %s (%d,%d): no standable spot there.", map, (int)link->coordx, (int)link->coordy);
-            zone::fn::ShineObjectClass__ShinePlayer__so_ply_Notice()(self, nullptr, text);
-        }
+        zone::log("-> %s (%lu,%lu): the zone did not link (a same-zone spot fm_Marking could not use = the player was disconnected)", map, link->coordx, link->coordy);
     }
     return ok;
 }
