@@ -53,6 +53,10 @@ EXPERIMENTAL = [
     # Bag 18 (the 2026 Void Inventory) in item moves: widens sp_ItemReloc's two bag switches and hands case 18
     # to the void_bag plugin through a slot. Inert without the plugin (a null slot takes the default).
     ('void-bag-reloc', []),
+    # AbStataIndex list 792 -> 2048 slots: the whole dic_abstate global moves to its own section (the 2026 AbState
+    # table needs 1083; the 1032 / 1040 `Invalid skill idx` asserts). Data stays 2016 until AbState / SubAbState /
+    # AbStateView switch to 2026 in Fiesta2026on2016; the relocation itself is inert with the 2016 tables.
+    ('abstate-index-cap', []),
 ]
 
 # Character.exe (--target character): the same loader, and bag 18 in NC_CHAR_GET_ITEMLIST_BY_TYPE_REQ. Both are

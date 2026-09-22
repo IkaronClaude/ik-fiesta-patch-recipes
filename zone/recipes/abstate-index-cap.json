@@ -1,0 +1,1116 @@
+{
+  "name": "abstate-index-cap",
+  "summary": "Lift the 792-slot AbStataIndex list of the abstate dictionary (2026 AbState needs 1083): the whole dic_abstate object moves to a new section sized for `slots`.",
+  "status": "GENERATED 2026-09-22 and verified to apply on the stock exe and on top of the full chain. NOT yet booted.",
+  "target": {
+    "file": "Zone00/Zone.exe",
+    "sha256": "7ef3532da08194a377558322ca2bd06d1ce5bdb2813796e033173b72d9ff883d",
+    "size": 4673536
+  },
+  "params": {
+    "slots": 2048
+  },
+  "consts": {},
+  "why": [
+    "AbnormalStateDictionary::AbState (global ?dic_abstate at 0x0087AEA8, 0x1620 bytes, zero-fill tail of .data) is laid out as",
+    "",
+    "    +0x0000  as_BinData[356], as_SaveTypeBinData[72]",
+    "    +0x01AC  AbStateStr* as_AbstateArray; u32 as_Number; u32 as_maxhandle",
+    "    +0x01B8  AbStateStr* as_StateIndexList[792]   the AbStataIndex -> row lookup",
+    "    +0x0E18  BTree as_BTreeID                      by AbState ID",
+    "    +0x121C  BTree as_BTreeIndex                   by AbStataIndex",
+    "",
+    "as_Load (0x416E80) fills the list from AbState.shn and refuses an AbStataIndex >= 792 (cmp ..., 0x318);",
+    "as_FromIndex (0x401420) asserts `AbState::as_FromIndex : Invalid skill idx[N]` on one. The 2026 AbState",
+    "table needs 1083 slots, which is the 1032 / 1040 assert burst seen on zone04 whenever a player is on a",
+    "2026 map, and why AbState / SubAbState / AbStateView are kept at 2016 with 129 skill status references",
+    "blanked (Fiesta2026on2016 invented.json skills_clamped).",
+    "",
+    "The list cannot grow in place (?g_AbstateNeverShelter follows at 0x0087C4C8), so the whole object moves to a",
+    "new zero-filled section of 0x1620 + (slots - 792) * 4 bytes, and three kinds of site move with it, all found",
+    "by decoding the stock exe (zone/tools/mk_abstate_cap.py - rerun it to reproduce this file):",
+    "",
+    "  - every absolute reference into the object (166): the same offset in the new section; the two BTrees",
+    "    behind the list (as_BTreeID +0xE18, as_BTreeIndex +0x121C, reached as `mov ecx, offset` for every",
+    "    lookup by id or index) also move by the growth",
+    "  - every [this + 0xE18] / [this + 0x121C] inside the six AbState methods (7)      -> + the growth",
+    "  - every `0x318` the methods compare an index against (4)                          -> slots",
+    "",
+    "The old 0x1620 bytes of .data are simply no longer referenced. No other section holds an address into the",
+    "object (checked). The list is indexed by AbStataIndex, the id the client sends and receives, so it cannot",
+    "be renumbered instead.",
+    "",
+    "This lifts the INDEX cap only. AbStateStr::subabstate[40] (sub-actions per state) is a separate, per-row",
+    "limit; the 2026 SubAbState table must be checked against it before the data switches to 2026."
+  ],
+  "new_section": {
+    "name": ".abst",
+    "size": "0x1620 + (slots - 792) * 4",
+    "materialise": false,
+    "note": "Zero-filled data, exactly as the original lives in the BSS tail of .data. The BTree constructors run at start-up through the rewritten absolute references."
+  },
+  "edits": [
+    {
+      "why": "as_FromIndex: the slot bound  (cmp eax, 0x318)",
+      "at": "0x00401429",
+      "expect": "0x318",
+      "write": "slots"
+    },
+    {
+      "why": "&as_maxhandle  (cmp dword ptr [0x87b05c], ecx at 0x00401C6B)",
+      "at": "0x00401C6D",
+      "expect": "0x87B05C",
+      "write": "@newbase + 0x1B4"
+    },
+    {
+      "why": "&as_AbstateArray  (add ecx, dword ptr [0x87b054] at 0x00401C7C)",
+      "at": "0x00401C7E",
+      "expect": "0x87B054",
+      "write": "@newbase + 0x1AC"
+    },
+    {
+      "why": "&as_BTreeID+0x0  (mov ecx, 0x87bcc0 at 0x004052E7)",
+      "at": "0x004052E8",
+      "expect": "0x87BCC0",
+      "write": "@newbase + 0xE18 + (slots - 792) * 4"
+    },
+    {
+      "why": "&as_maxhandle  (cmp dword ptr [0x87b05c], eax at 0x0040532C)",
+      "at": "0x0040532E",
+      "expect": "0x87B05C",
+      "write": "@newbase + 0x1B4"
+    },
+    {
+      "why": "&as_AbstateArray  (add eax, dword ptr [0x87b054] at 0x00405351)",
+      "at": "0x00405353",
+      "expect": "0x87B054",
+      "write": "@newbase + 0x1AC"
+    },
+    {
+      "why": "&as_BTreeID+0x0  (mov ecx, 0x87bcc0 at 0x00405427)",
+      "at": "0x00405428",
+      "expect": "0x87BCC0",
+      "write": "@newbase + 0xE18 + (slots - 792) * 4"
+    },
+    {
+      "why": "&as_maxhandle  (cmp dword ptr [0x87b05c], eax at 0x0040546C)",
+      "at": "0x0040546E",
+      "expect": "0x87B05C",
+      "write": "@newbase + 0x1B4"
+    },
+    {
+      "why": "&as_AbstateArray  (add eax, dword ptr [0x87b054] at 0x00405491)",
+      "at": "0x00405493",
+      "expect": "0x87B054",
+      "write": "@newbase + 0x1AC"
+    },
+    {
+      "why": "&as_BTreeID+0x0  (mov ecx, 0x87bcc0 at 0x004066D7)",
+      "at": "0x004066D8",
+      "expect": "0x87BCC0",
+      "write": "@newbase + 0xE18 + (slots - 792) * 4"
+    },
+    {
+      "why": "&as_maxhandle  (cmp dword ptr [0x87b05c], eax at 0x0040671C)",
+      "at": "0x0040671E",
+      "expect": "0x87B05C",
+      "write": "@newbase + 0x1B4"
+    },
+    {
+      "why": "&as_AbstateArray  (add eax, dword ptr [0x87b054] at 0x00406741)",
+      "at": "0x00406743",
+      "expect": "0x87B054",
+      "write": "@newbase + 0x1AC"
+    },
+    {
+      "why": "&dic_abstate  (mov ecx, 0x87aea8 at 0x0040907B)",
+      "at": "0x0040907C",
+      "expect": "0x87AEA8",
+      "write": "@newbase"
+    },
+    {
+      "why": "&dic_abstate  (mov ecx, 0x87aea8 at 0x0040931B)",
+      "at": "0x0040931C",
+      "expect": "0x87AEA8",
+      "write": "@newbase"
+    },
+    {
+      "why": "&as_StateIndexList[0]  (mov eax, dword ptr [esi*4 + 0x87b060] at 0x0040A9CB)",
+      "at": "0x0040A9CE",
+      "expect": "0x87B060",
+      "write": "@newbase + 0x1B8"
+    },
+    {
+      "why": "&as_StateIndexList[0]  (mov eax, dword ptr [eax*4 + 0x87b060] at 0x0040ACB5)",
+      "at": "0x0040ACB8",
+      "expect": "0x87B060",
+      "write": "@newbase + 0x1B8"
+    },
+    {
+      "why": "&as_StateIndexList[0]  (mov eax, dword ptr [eax*4 + 0x87b060] at 0x0040AE45)",
+      "at": "0x0040AE48",
+      "expect": "0x87B060",
+      "write": "@newbase + 0x1B8"
+    },
+    {
+      "why": "&as_maxhandle  (cmp dword ptr [0x87b05c], edi at 0x0040B0D5)",
+      "at": "0x0040B0D7",
+      "expect": "0x87B05C",
+      "write": "@newbase + 0x1B4"
+    },
+    {
+      "why": "&as_AbstateArray  (add edi, dword ptr [0x87b054] at 0x0040B15F)",
+      "at": "0x0040B161",
+      "expect": "0x87B054",
+      "write": "@newbase + 0x1AC"
+    },
+    {
+      "why": "&as_maxhandle  (cmp dword ptr [0x87b05c], ecx at 0x0040B6F1)",
+      "at": "0x0040B6F3",
+      "expect": "0x87B05C",
+      "write": "@newbase + 0x1B4"
+    },
+    {
+      "why": "&as_AbstateArray  (add ecx, dword ptr [0x87b054] at 0x0040B706)",
+      "at": "0x0040B708",
+      "expect": "0x87B054",
+      "write": "@newbase + 0x1AC"
+    },
+    {
+      "why": "&as_StateIndexList[0]  (mov edx, dword ptr [eax*4 + 0x87b060] at 0x0040BAD3)",
+      "at": "0x0040BAD6",
+      "expect": "0x87B060",
+      "write": "@newbase + 0x1B8"
+    },
+    {
+      "why": "&as_StateIndexList[0]  (mov edi, dword ptr [edi*4 + 0x87b060] at 0x0040C023)",
+      "at": "0x0040C026",
+      "expect": "0x87B060",
+      "write": "@newbase + 0x1B8"
+    },
+    {
+      "why": "&dic_abstate  (mov ecx, 0x87aea8 at 0x0040C2AD)",
+      "at": "0x0040C2AE",
+      "expect": "0x87AEA8",
+      "write": "@newbase"
+    },
+    {
+      "why": "&as_StateIndexList[0]  (mov esi, dword ptr [eax*4 + 0x87b060] at 0x0040CB54)",
+      "at": "0x0040CB57",
+      "expect": "0x87B060",
+      "write": "@newbase + 0x1B8"
+    },
+    {
+      "why": "&as_StateIndexList[0]  (mov esi, dword ptr [eax*4 + 0x87b060] at 0x00416400)",
+      "at": "0x00416403",
+      "expect": "0x87B060",
+      "write": "@newbase + 0x1B8"
+    },
+    {
+      "why": "&as_StateIndexList[0]  (mov edi, dword ptr [eax*4 + 0x87b060] at 0x004164F0)",
+      "at": "0x004164F3",
+      "expect": "0x87B060",
+      "write": "@newbase + 0x1B8"
+    },
+    {
+      "why": "&as_maxhandle  (cmp dword ptr [0x87b05c], eax at 0x0041688A)",
+      "at": "0x0041688C",
+      "expect": "0x87B05C",
+      "write": "@newbase + 0x1B4"
+    },
+    {
+      "why": "&as_AbstateArray  (add eax, dword ptr [0x87b054] at 0x004168B7)",
+      "at": "0x004168B9",
+      "expect": "0x87B054",
+      "write": "@newbase + 0x1AC"
+    },
+    {
+      "why": "AbState::AbState: as_BTreeID  (lea ecx, [esi + 0xe18])",
+      "at": "0x00416DAB",
+      "expect": "0xE18",
+      "write": "0xE18 + (slots - 792) * 4"
+    },
+    {
+      "why": "AbState::AbState: as_BTreeIndex  (lea ecx, [esi + 0x121c])",
+      "at": "0x00416DBA",
+      "expect": "0x121C",
+      "write": "0x121C + (slots - 792) * 4"
+    },
+    {
+      "why": "AbState::~AbState: as_BTreeIndex  (lea ecx, [esi + 0x121c])",
+      "at": "0x00416E21",
+      "expect": "0x121C",
+      "write": "0x121C + (slots - 792) * 4"
+    },
+    {
+      "why": "AbState::~AbState: as_BTreeID  (lea ecx, [esi + 0xe18])",
+      "at": "0x00416E2C",
+      "expect": "0xE18",
+      "write": "0xE18 + (slots - 792) * 4"
+    },
+    {
+      "why": "as_Load: the slot bound  (mov ecx, 0x318)",
+      "at": "0x00416FA4",
+      "expect": "0x318",
+      "write": "slots"
+    },
+    {
+      "why": "as_Load: as_BTreeID  (lea ecx, [esi + 0xe18])",
+      "at": "0x00417006",
+      "expect": "0xE18",
+      "write": "0xE18 + (slots - 792) * 4"
+    },
+    {
+      "why": "as_Load: as_BTreeIndex  (lea ecx, [esi + 0x121c])",
+      "at": "0x00417045",
+      "expect": "0x121C",
+      "write": "0x121C + (slots - 792) * 4"
+    },
+    {
+      "why": "as_Load: the slot bound  (cmp esi, 0x318)",
+      "at": "0x004172A4",
+      "expect": "0x318",
+      "write": "slots"
+    },
+    {
+      "why": "as_Load: the slot bound  (cmp esi, 0x318)",
+      "at": "0x00417318",
+      "expect": "0x318",
+      "write": "slots"
+    },
+    {
+      "why": "&dic_abstate  (mov ecx, 0x87aea8 at 0x00417723)",
+      "at": "0x00417724",
+      "expect": "0x87AEA8",
+      "write": "@newbase"
+    },
+    {
+      "why": "&dic_abstate  (mov ecx, 0x87aea8 at 0x0041798E)",
+      "at": "0x0041798F",
+      "expect": "0x87AEA8",
+      "write": "@newbase"
+    },
+    {
+      "why": "&dic_abstate  (mov ecx, 0x87aea8 at 0x00417BDB)",
+      "at": "0x00417BDC",
+      "expect": "0x87AEA8",
+      "write": "@newbase"
+    },
+    {
+      "why": "as_FromName: as_BTreeID  (lea ecx, [esi + 0xe18])",
+      "at": "0x00418F8C",
+      "expect": "0xE18",
+      "write": "0xE18 + (slots - 792) * 4"
+    },
+    {
+      "why": "&as_StateIndexList[288]  (mov eax, dword ptr [0x87b4e0] at 0x0041A469)",
+      "at": "0x0041A46A",
+      "expect": "0x87B4E0",
+      "write": "@newbase + 0x638"
+    },
+    {
+      "why": "&as_BTreeID+0x0  (mov ecx, 0x87bcc0 at 0x0041C496)",
+      "at": "0x0041C497",
+      "expect": "0x87BCC0",
+      "write": "@newbase + 0xE18 + (slots - 792) * 4"
+    },
+    {
+      "why": "&as_maxhandle  (cmp dword ptr [0x87b05c], eax at 0x0041C4B1)",
+      "at": "0x0041C4B3",
+      "expect": "0x87B05C",
+      "write": "@newbase + 0x1B4"
+    },
+    {
+      "why": "&as_AbstateArray  (add eax, dword ptr [0x87b054] at 0x0041C4DA)",
+      "at": "0x0041C4DC",
+      "expect": "0x87B054",
+      "write": "@newbase + 0x1AC"
+    },
+    {
+      "why": "&dic_abstate  (mov ecx, 0x87aea8 at 0x0041C777)",
+      "at": "0x0041C778",
+      "expect": "0x87AEA8",
+      "write": "@newbase"
+    },
+    {
+      "why": "&as_StateIndexList[346]  (mov edi, dword ptr [0x87b5c8] at 0x004203CE)",
+      "at": "0x004203D0",
+      "expect": "0x87B5C8",
+      "write": "@newbase + 0x720"
+    },
+    {
+      "why": "&dic_abstate  (mov ecx, 0x87aea8 at 0x00423C2E)",
+      "at": "0x00423C2F",
+      "expect": "0x87AEA8",
+      "write": "@newbase"
+    },
+    {
+      "why": "&as_StateIndexList[0]  (mov eax, dword ptr [edi*4 + 0x87b060] at 0x0042ACEB)",
+      "at": "0x0042ACEE",
+      "expect": "0x87B060",
+      "write": "@newbase + 0x1B8"
+    },
+    {
+      "why": "&as_StateIndexList[0]  (mov edi, dword ptr [esi*4 + 0x87b060] at 0x0042B976)",
+      "at": "0x0042B979",
+      "expect": "0x87B060",
+      "write": "@newbase + 0x1B8"
+    },
+    {
+      "why": "&dic_abstate  (mov ecx, 0x87aea8 at 0x0042B9D1)",
+      "at": "0x0042B9D2",
+      "expect": "0x87AEA8",
+      "write": "@newbase"
+    },
+    {
+      "why": "&as_StateIndexList[0]  (mov eax, dword ptr [eax*4 + 0x87b060] at 0x0042C115)",
+      "at": "0x0042C118",
+      "expect": "0x87B060",
+      "write": "@newbase + 0x1B8"
+    },
+    {
+      "why": "&as_StateIndexList[0]  (mov edi, dword ptr [eax*4 + 0x87b060] at 0x0042C282)",
+      "at": "0x0042C285",
+      "expect": "0x87B060",
+      "write": "@newbase + 0x1B8"
+    },
+    {
+      "why": "&as_StateIndexList[0]  (mov eax, dword ptr [eax*4 + 0x87b060] at 0x0042C58B)",
+      "at": "0x0042C58E",
+      "expect": "0x87B060",
+      "write": "@newbase + 0x1B8"
+    },
+    {
+      "why": "&as_StateIndexList[0]  (mov eax, dword ptr [ecx*4 + 0x87b060] at 0x0042EB3B)",
+      "at": "0x0042EB3E",
+      "expect": "0x87B060",
+      "write": "@newbase + 0x1B8"
+    },
+    {
+      "why": "&dic_abstate  (mov ecx, 0x87aea8 at 0x00431EAB)",
+      "at": "0x00431EAC",
+      "expect": "0x87AEA8",
+      "write": "@newbase"
+    },
+    {
+      "why": "&dic_abstate  (mov ecx, 0x87aea8 at 0x00431F93)",
+      "at": "0x00431F94",
+      "expect": "0x87AEA8",
+      "write": "@newbase"
+    },
+    {
+      "why": "&as_StateIndexList[345]  (mov esi, dword ptr [0x87b5c4] at 0x00432476)",
+      "at": "0x00432478",
+      "expect": "0x87B5C4",
+      "write": "@newbase + 0x71C"
+    },
+    {
+      "why": "&as_StateIndexList[0]  (mov ebx, dword ptr [edx*4 + 0x87b060] at 0x0043333F)",
+      "at": "0x00433342",
+      "expect": "0x87B060",
+      "write": "@newbase + 0x1B8"
+    },
+    {
+      "why": "&as_StateIndexList[0]  (mov eax, dword ptr [eax*4 + 0x87b060] at 0x00434018)",
+      "at": "0x0043401B",
+      "expect": "0x87B060",
+      "write": "@newbase + 0x1B8"
+    },
+    {
+      "why": "&as_StateIndexList[0]  (mov eax, dword ptr [eax*4 + 0x87b060] at 0x0043416C)",
+      "at": "0x0043416F",
+      "expect": "0x87B060",
+      "write": "@newbase + 0x1B8"
+    },
+    {
+      "why": "&as_StateIndexList[295]  (mov esi, dword ptr [0x87b4fc] at 0x0043420A)",
+      "at": "0x0043420C",
+      "expect": "0x87B4FC",
+      "write": "@newbase + 0x654"
+    },
+    {
+      "why": "&as_BTreeIndex+0x0  (mov ecx, 0x87c0c4 at 0x00434E63)",
+      "at": "0x00434E64",
+      "expect": "0x87C0C4",
+      "write": "@newbase + 0x121C + (slots - 792) * 4"
+    },
+    {
+      "why": "&as_StateIndexList[288]  (mov eax, dword ptr [0x87b4e0] at 0x0044280E)",
+      "at": "0x0044280F",
+      "expect": "0x87B4E0",
+      "write": "@newbase + 0x638"
+    },
+    {
+      "why": "&as_StateIndexList[291]  (mov eax, dword ptr [0x87b4ec] at 0x004438A6)",
+      "at": "0x004438A7",
+      "expect": "0x87B4EC",
+      "write": "@newbase + 0x644"
+    },
+    {
+      "why": "&dic_abstate  (mov ecx, 0x87aea8 at 0x00446B59)",
+      "at": "0x00446B5A",
+      "expect": "0x87AEA8",
+      "write": "@newbase"
+    },
+    {
+      "why": "&dic_abstate  (mov ecx, 0x87aea8 at 0x004479C6)",
+      "at": "0x004479C7",
+      "expect": "0x87AEA8",
+      "write": "@newbase"
+    },
+    {
+      "why": "&as_StateIndexList[0]  (mov eax, dword ptr [eax*4 + 0x87b060] at 0x00454BA4)",
+      "at": "0x00454BA7",
+      "expect": "0x87B060",
+      "write": "@newbase + 0x1B8"
+    },
+    {
+      "why": "&dic_abstate  (mov ecx, 0x87aea8 at 0x004599C3)",
+      "at": "0x004599C4",
+      "expect": "0x87AEA8",
+      "write": "@newbase"
+    },
+    {
+      "why": "&dic_abstate  (mov ecx, 0x87aea8 at 0x00459A38)",
+      "at": "0x00459A39",
+      "expect": "0x87AEA8",
+      "write": "@newbase"
+    },
+    {
+      "why": "&dic_abstate  (mov ecx, 0x87aea8 at 0x0045AF86)",
+      "at": "0x0045AF87",
+      "expect": "0x87AEA8",
+      "write": "@newbase"
+    },
+    {
+      "why": "&dic_abstate  (mov ecx, 0x87aea8 at 0x00464620)",
+      "at": "0x00464621",
+      "expect": "0x87AEA8",
+      "write": "@newbase"
+    },
+    {
+      "why": "&as_BTreeIndex+0x0  (mov ecx, 0x87c0c4 at 0x00464A6B)",
+      "at": "0x00464A6C",
+      "expect": "0x87C0C4",
+      "write": "@newbase + 0x121C + (slots - 792) * 4"
+    },
+    {
+      "why": "&dic_abstate  (mov ecx, 0x87aea8 at 0x0046726C)",
+      "at": "0x0046726D",
+      "expect": "0x87AEA8",
+      "write": "@newbase"
+    },
+    {
+      "why": "&dic_abstate  (mov ecx, 0x87aea8 at 0x0046D3E8)",
+      "at": "0x0046D3E9",
+      "expect": "0x87AEA8",
+      "write": "@newbase"
+    },
+    {
+      "why": "&as_BTreeID+0x0  (mov ecx, 0x87bcc0 at 0x0046E09D)",
+      "at": "0x0046E09E",
+      "expect": "0x87BCC0",
+      "write": "@newbase + 0xE18 + (slots - 792) * 4"
+    },
+    {
+      "why": "&as_maxhandle  (cmp dword ptr [0x87b05c], eax at 0x0046E0C9)",
+      "at": "0x0046E0CB",
+      "expect": "0x87B05C",
+      "write": "@newbase + 0x1B4"
+    },
+    {
+      "why": "&as_AbstateArray  (add eax, dword ptr [0x87b054] at 0x0046E0EE)",
+      "at": "0x0046E0F0",
+      "expect": "0x87B054",
+      "write": "@newbase + 0x1AC"
+    },
+    {
+      "why": "&as_BTreeID+0x0  (mov ecx, 0x87bcc0 at 0x0046E378)",
+      "at": "0x0046E379",
+      "expect": "0x87BCC0",
+      "write": "@newbase + 0xE18 + (slots - 792) * 4"
+    },
+    {
+      "why": "&as_maxhandle  (cmp dword ptr [0x87b05c], eax at 0x0046E394)",
+      "at": "0x0046E396",
+      "expect": "0x87B05C",
+      "write": "@newbase + 0x1B4"
+    },
+    {
+      "why": "&as_AbstateArray  (add eax, dword ptr [0x87b054] at 0x0046E3B7)",
+      "at": "0x0046E3B9",
+      "expect": "0x87B054",
+      "write": "@newbase + 0x1AC"
+    },
+    {
+      "why": "&dic_abstate  (mov ecx, 0x87aea8 at 0x0047976E)",
+      "at": "0x0047976F",
+      "expect": "0x87AEA8",
+      "write": "@newbase"
+    },
+    {
+      "why": "&dic_abstate  (mov ecx, 0x87aea8 at 0x0047B0DE)",
+      "at": "0x0047B0DF",
+      "expect": "0x87AEA8",
+      "write": "@newbase"
+    },
+    {
+      "why": "&dic_abstate  (mov ecx, 0x87aea8 at 0x0047C3CC)",
+      "at": "0x0047C3CD",
+      "expect": "0x87AEA8",
+      "write": "@newbase"
+    },
+    {
+      "why": "&dic_abstate  (mov ecx, 0x87aea8 at 0x0047C3E6)",
+      "at": "0x0047C3E7",
+      "expect": "0x87AEA8",
+      "write": "@newbase"
+    },
+    {
+      "why": "&dic_abstate  (mov ecx, 0x87aea8 at 0x004804FC)",
+      "at": "0x004804FD",
+      "expect": "0x87AEA8",
+      "write": "@newbase"
+    },
+    {
+      "why": "&dic_abstate  (mov ecx, 0x87aea8 at 0x004A3245)",
+      "at": "0x004A3246",
+      "expect": "0x87AEA8",
+      "write": "@newbase"
+    },
+    {
+      "why": "&as_BTreeIndex+0x0  (mov ecx, 0x87c0c4 at 0x004A3716)",
+      "at": "0x004A3717",
+      "expect": "0x87C0C4",
+      "write": "@newbase + 0x121C + (slots - 792) * 4"
+    },
+    {
+      "why": "&as_BTreeID+0x0  (mov ecx, 0x87bcc0 at 0x004A3FB7)",
+      "at": "0x004A3FB8",
+      "expect": "0x87BCC0",
+      "write": "@newbase + 0xE18 + (slots - 792) * 4"
+    },
+    {
+      "why": "&dic_abstate  (mov ecx, 0x87aea8 at 0x004A58A7)",
+      "at": "0x004A58A8",
+      "expect": "0x87AEA8",
+      "write": "@newbase"
+    },
+    {
+      "why": "&dic_abstate  (mov ecx, 0x87aea8 at 0x004A5B1B)",
+      "at": "0x004A5B1C",
+      "expect": "0x87AEA8",
+      "write": "@newbase"
+    },
+    {
+      "why": "&dic_abstate  (mov ecx, 0x87aea8 at 0x004A621A)",
+      "at": "0x004A621B",
+      "expect": "0x87AEA8",
+      "write": "@newbase"
+    },
+    {
+      "why": "&as_BTreeIndex+0x0  (mov ecx, 0x87c0c4 at 0x004A69A8)",
+      "at": "0x004A69A9",
+      "expect": "0x87C0C4",
+      "write": "@newbase + 0x121C + (slots - 792) * 4"
+    },
+    {
+      "why": "&dic_abstate  (mov ecx, 0x87aea8 at 0x004A7886)",
+      "at": "0x004A7887",
+      "expect": "0x87AEA8",
+      "write": "@newbase"
+    },
+    {
+      "why": "&as_BTreeID+0x0  (mov ecx, 0x87bcc0 at 0x004A9332)",
+      "at": "0x004A9333",
+      "expect": "0x87BCC0",
+      "write": "@newbase + 0xE18 + (slots - 792) * 4"
+    },
+    {
+      "why": "&dic_abstate  (mov ecx, 0x87aea8 at 0x004A936B)",
+      "at": "0x004A936C",
+      "expect": "0x87AEA8",
+      "write": "@newbase"
+    },
+    {
+      "why": "&as_StateIndexList[291]  (mov eax, dword ptr [0x87b4ec] at 0x004B4437)",
+      "at": "0x004B4438",
+      "expect": "0x87B4EC",
+      "write": "@newbase + 0x644"
+    },
+    {
+      "why": "&as_BTreeIndex+0x0  (mov ecx, 0x87c0c4 at 0x004B44DF)",
+      "at": "0x004B44E0",
+      "expect": "0x87C0C4",
+      "write": "@newbase + 0x121C + (slots - 792) * 4"
+    },
+    {
+      "why": "&as_StateIndexList[0]  (mov eax, dword ptr [esi*4 + 0x87b060] at 0x004B4511)",
+      "at": "0x004B4514",
+      "expect": "0x87B060",
+      "write": "@newbase + 0x1B8"
+    },
+    {
+      "why": "&as_StateIndexList[291]  (mov eax, dword ptr [0x87b4ec] at 0x004B4AA1)",
+      "at": "0x004B4AA2",
+      "expect": "0x87B4EC",
+      "write": "@newbase + 0x644"
+    },
+    {
+      "why": "&as_BTreeIndex+0x0  (mov ecx, 0x87c0c4 at 0x004C0848)",
+      "at": "0x004C0849",
+      "expect": "0x87C0C4",
+      "write": "@newbase + 0x121C + (slots - 792) * 4"
+    },
+    {
+      "why": "&dic_abstate  (mov ecx, 0x87aea8 at 0x004C086C)",
+      "at": "0x004C086D",
+      "expect": "0x87AEA8",
+      "write": "@newbase"
+    },
+    {
+      "why": "&as_BTreeIndex+0x0  (mov ecx, 0x87c0c4 at 0x004C1334)",
+      "at": "0x004C1335",
+      "expect": "0x87C0C4",
+      "write": "@newbase + 0x121C + (slots - 792) * 4"
+    },
+    {
+      "why": "&dic_abstate  (mov ecx, 0x87aea8 at 0x004C1C2E)",
+      "at": "0x004C1C2F",
+      "expect": "0x87AEA8",
+      "write": "@newbase"
+    },
+    {
+      "why": "&as_BTreeIndex+0x0  (mov ecx, 0x87c0c4 at 0x004F112E)",
+      "at": "0x004F112F",
+      "expect": "0x87C0C4",
+      "write": "@newbase + 0x121C + (slots - 792) * 4"
+    },
+    {
+      "why": "&dic_abstate  (mov ecx, 0x87aea8 at 0x004F11FE)",
+      "at": "0x004F11FF",
+      "expect": "0x87AEA8",
+      "write": "@newbase"
+    },
+    {
+      "why": "&as_BTreeIndex+0x0  (mov ecx, 0x87c0c4 at 0x004F15A3)",
+      "at": "0x004F15A4",
+      "expect": "0x87C0C4",
+      "write": "@newbase + 0x121C + (slots - 792) * 4"
+    },
+    {
+      "why": "&as_BTreeIndex+0x0  (mov ecx, 0x87c0c4 at 0x004FA0B5)",
+      "at": "0x004FA0B6",
+      "expect": "0x87C0C4",
+      "write": "@newbase + 0x121C + (slots - 792) * 4"
+    },
+    {
+      "why": "&dic_abstate  (mov ecx, 0x87aea8 at 0x005000BE)",
+      "at": "0x005000BF",
+      "expect": "0x87AEA8",
+      "write": "@newbase"
+    },
+    {
+      "why": "&as_BTreeIndex+0x0  (mov ecx, 0x87c0c4 at 0x005425A3)",
+      "at": "0x005425A4",
+      "expect": "0x87C0C4",
+      "write": "@newbase + 0x121C + (slots - 792) * 4"
+    },
+    {
+      "why": "&dic_abstate  (mov ecx, 0x87aea8 at 0x005425B6)",
+      "at": "0x005425B7",
+      "expect": "0x87AEA8",
+      "write": "@newbase"
+    },
+    {
+      "why": "&as_StateIndexList[290]  (mov edi, dword ptr [0x87b4e8] at 0x00544D09)",
+      "at": "0x00544D0B",
+      "expect": "0x87B4E8",
+      "write": "@newbase + 0x640"
+    },
+    {
+      "why": "&as_StateIndexList[290]  (mov edi, dword ptr [0x87b4e8] at 0x00544E5C)",
+      "at": "0x00544E5E",
+      "expect": "0x87B4E8",
+      "write": "@newbase + 0x640"
+    },
+    {
+      "why": "&dic_abstate  (mov ecx, 0x87aea8 at 0x0055FA77)",
+      "at": "0x0055FA78",
+      "expect": "0x87AEA8",
+      "write": "@newbase"
+    },
+    {
+      "why": "&dic_abstate  (mov ecx, 0x87aea8 at 0x0055FAEB)",
+      "at": "0x0055FAEC",
+      "expect": "0x87AEA8",
+      "write": "@newbase"
+    },
+    {
+      "why": "&dic_abstate  (mov ecx, 0x87aea8 at 0x0056850B)",
+      "at": "0x0056850C",
+      "expect": "0x87AEA8",
+      "write": "@newbase"
+    },
+    {
+      "why": "&dic_abstate  (mov ecx, 0x87aea8 at 0x0056D508)",
+      "at": "0x0056D509",
+      "expect": "0x87AEA8",
+      "write": "@newbase"
+    },
+    {
+      "why": "&dic_abstate  (mov ecx, 0x87aea8 at 0x0056D5AB)",
+      "at": "0x0056D5AC",
+      "expect": "0x87AEA8",
+      "write": "@newbase"
+    },
+    {
+      "why": "&as_BTreeIndex+0x0  (mov ecx, 0x87c0c4 at 0x0056EC0F)",
+      "at": "0x0056EC10",
+      "expect": "0x87C0C4",
+      "write": "@newbase + 0x121C + (slots - 792) * 4"
+    },
+    {
+      "why": "&as_StateIndexList[291]  (mov eax, dword ptr [0x87b4ec] at 0x0057D467)",
+      "at": "0x0057D468",
+      "expect": "0x87B4EC",
+      "write": "@newbase + 0x644"
+    },
+    {
+      "why": "&as_StateIndexList[293]  (mov esi, dword ptr [0x87b4f4] at 0x0057D642)",
+      "at": "0x0057D644",
+      "expect": "0x87B4F4",
+      "write": "@newbase + 0x64C"
+    },
+    {
+      "why": "&dic_abstate  (mov ecx, 0x87aea8 at 0x00581674)",
+      "at": "0x00581675",
+      "expect": "0x87AEA8",
+      "write": "@newbase"
+    },
+    {
+      "why": "&as_StateIndexList[392]  (mov eax, dword ptr [0x87b680] at 0x0058213E)",
+      "at": "0x0058213F",
+      "expect": "0x87B680",
+      "write": "@newbase + 0x7D8"
+    },
+    {
+      "why": "&as_StateIndexList[393]  (mov eax, dword ptr [0x87b684] at 0x005821AD)",
+      "at": "0x005821AE",
+      "expect": "0x87B684",
+      "write": "@newbase + 0x7DC"
+    },
+    {
+      "why": "&dic_abstate  (mov ecx, 0x87aea8 at 0x0058253A)",
+      "at": "0x0058253B",
+      "expect": "0x87AEA8",
+      "write": "@newbase"
+    },
+    {
+      "why": "&dic_abstate  (mov ecx, 0x87aea8 at 0x00584B93)",
+      "at": "0x00584B94",
+      "expect": "0x87AEA8",
+      "write": "@newbase"
+    },
+    {
+      "why": "&dic_abstate  (mov ecx, 0x87aea8 at 0x00584C7B)",
+      "at": "0x00584C7C",
+      "expect": "0x87AEA8",
+      "write": "@newbase"
+    },
+    {
+      "why": "&dic_abstate  (mov ecx, 0x87aea8 at 0x00584D47)",
+      "at": "0x00584D48",
+      "expect": "0x87AEA8",
+      "write": "@newbase"
+    },
+    {
+      "why": "&as_BTreeID+0x0  (mov ecx, 0x87bcc0 at 0x005865AE)",
+      "at": "0x005865AF",
+      "expect": "0x87BCC0",
+      "write": "@newbase + 0xE18 + (slots - 792) * 4"
+    },
+    {
+      "why": "&dic_abstate  (mov ecx, 0x87aea8 at 0x005865D1)",
+      "at": "0x005865D2",
+      "expect": "0x87AEA8",
+      "write": "@newbase"
+    },
+    {
+      "why": "&as_BTreeID+0x0  (mov ecx, 0x87bcc0 at 0x005866A5)",
+      "at": "0x005866A6",
+      "expect": "0x87BCC0",
+      "write": "@newbase + 0xE18 + (slots - 792) * 4"
+    },
+    {
+      "why": "&dic_abstate  (mov ecx, 0x87aea8 at 0x005866C8)",
+      "at": "0x005866C9",
+      "expect": "0x87AEA8",
+      "write": "@newbase"
+    },
+    {
+      "why": "&as_BTreeID+0x0  (mov ecx, 0x87bcc0 at 0x0058679E)",
+      "at": "0x0058679F",
+      "expect": "0x87BCC0",
+      "write": "@newbase + 0xE18 + (slots - 792) * 4"
+    },
+    {
+      "why": "&dic_abstate  (mov ecx, 0x87aea8 at 0x005867C1)",
+      "at": "0x005867C2",
+      "expect": "0x87AEA8",
+      "write": "@newbase"
+    },
+    {
+      "why": "&as_BTreeID+0x0  (mov ecx, 0x87bcc0 at 0x00586895)",
+      "at": "0x00586896",
+      "expect": "0x87BCC0",
+      "write": "@newbase + 0xE18 + (slots - 792) * 4"
+    },
+    {
+      "why": "&dic_abstate  (mov ecx, 0x87aea8 at 0x005868B8)",
+      "at": "0x005868B9",
+      "expect": "0x87AEA8",
+      "write": "@newbase"
+    },
+    {
+      "why": "&as_BTreeIndex+0x0  (mov ecx, 0x87c0c4 at 0x0058CA7F)",
+      "at": "0x0058CA80",
+      "expect": "0x87C0C4",
+      "write": "@newbase + 0x121C + (slots - 792) * 4"
+    },
+    {
+      "why": "&dic_abstate  (mov ecx, 0x87aea8 at 0x0058CA93)",
+      "at": "0x0058CA94",
+      "expect": "0x87AEA8",
+      "write": "@newbase"
+    },
+    {
+      "why": "&as_maxhandle  (cmp dword ptr [0x87b05c], eax at 0x00597376)",
+      "at": "0x00597378",
+      "expect": "0x87B05C",
+      "write": "@newbase + 0x1B4"
+    },
+    {
+      "why": "&as_AbstateArray  (add eax, dword ptr [0x87b054] at 0x0059738B)",
+      "at": "0x0059738D",
+      "expect": "0x87B054",
+      "write": "@newbase + 0x1AC"
+    },
+    {
+      "why": "&as_BTreeIndex+0x0  (mov ecx, 0x87c0c4 at 0x0059C3A6)",
+      "at": "0x0059C3A7",
+      "expect": "0x87C0C4",
+      "write": "@newbase + 0x121C + (slots - 792) * 4"
+    },
+    {
+      "why": "&dic_abstate  (mov ecx, 0x87aea8 at 0x0059C40A)",
+      "at": "0x0059C40B",
+      "expect": "0x87AEA8",
+      "write": "@newbase"
+    },
+    {
+      "why": "&dic_abstate  (mov ecx, 0x87aea8 at 0x0059C971)",
+      "at": "0x0059C972",
+      "expect": "0x87AEA8",
+      "write": "@newbase"
+    },
+    {
+      "why": "&as_BTreeIndex+0x0  (mov ecx, 0x87c0c4 at 0x0059D053)",
+      "at": "0x0059D054",
+      "expect": "0x87C0C4",
+      "write": "@newbase + 0x121C + (slots - 792) * 4"
+    },
+    {
+      "why": "&dic_abstate  (mov ecx, 0x87aea8 at 0x0059D60F)",
+      "at": "0x0059D610",
+      "expect": "0x87AEA8",
+      "write": "@newbase"
+    },
+    {
+      "why": "&dic_abstate  (mov ecx, 0x87aea8 at 0x005A21C9)",
+      "at": "0x005A21CA",
+      "expect": "0x87AEA8",
+      "write": "@newbase"
+    },
+    {
+      "why": "&dic_abstate  (mov ecx, 0x87aea8 at 0x005ADEFE)",
+      "at": "0x005ADEFF",
+      "expect": "0x87AEA8",
+      "write": "@newbase"
+    },
+    {
+      "why": "&as_BTreeIndex+0x0  (push 0x87c0c4 at 0x005B67EB)",
+      "at": "0x005B67EC",
+      "expect": "0x87C0C4",
+      "write": "@newbase + 0x121C + (slots - 792) * 4"
+    },
+    {
+      "why": "&dic_abstate  (mov ecx, 0x87aea8 at 0x005BE368)",
+      "at": "0x005BE369",
+      "expect": "0x87AEA8",
+      "write": "@newbase"
+    },
+    {
+      "why": "&dic_abstate  (mov ecx, 0x87aea8 at 0x005BE4AA)",
+      "at": "0x005BE4AB",
+      "expect": "0x87AEA8",
+      "write": "@newbase"
+    },
+    {
+      "why": "&dic_abstate  (mov ecx, 0x87aea8 at 0x005BE558)",
+      "at": "0x005BE559",
+      "expect": "0x87AEA8",
+      "write": "@newbase"
+    },
+    {
+      "why": "&as_BTreeID+0x0  (mov ecx, 0x87bcc0 at 0x005C1957)",
+      "at": "0x005C1958",
+      "expect": "0x87BCC0",
+      "write": "@newbase + 0xE18 + (slots - 792) * 4"
+    },
+    {
+      "why": "&dic_abstate  (mov ecx, 0x87aea8 at 0x005C198D)",
+      "at": "0x005C198E",
+      "expect": "0x87AEA8",
+      "write": "@newbase"
+    },
+    {
+      "why": "&as_BTreeID+0x0  (mov ecx, 0x87bcc0 at 0x005C1A91)",
+      "at": "0x005C1A92",
+      "expect": "0x87BCC0",
+      "write": "@newbase + 0xE18 + (slots - 792) * 4"
+    },
+    {
+      "why": "&dic_abstate  (mov ecx, 0x87aea8 at 0x005C1AC7)",
+      "at": "0x005C1AC8",
+      "expect": "0x87AEA8",
+      "write": "@newbase"
+    },
+    {
+      "why": "&as_BTreeID+0x0  (mov ecx, 0x87bcc0 at 0x005C2A40)",
+      "at": "0x005C2A41",
+      "expect": "0x87BCC0",
+      "write": "@newbase + 0xE18 + (slots - 792) * 4"
+    },
+    {
+      "why": "&dic_abstate  (mov ecx, 0x87aea8 at 0x005C2A76)",
+      "at": "0x005C2A77",
+      "expect": "0x87AEA8",
+      "write": "@newbase"
+    },
+    {
+      "why": "&dic_abstate  (mov ecx, 0x87aea8 at 0x005CA8B8)",
+      "at": "0x005CA8B9",
+      "expect": "0x87AEA8",
+      "write": "@newbase"
+    },
+    {
+      "why": "&dic_abstate  (mov ecx, 0x87aea8 at 0x005CA90E)",
+      "at": "0x005CA90F",
+      "expect": "0x87AEA8",
+      "write": "@newbase"
+    },
+    {
+      "why": "&dic_abstate  (mov ecx, 0x87aea8 at 0x005CFF2E)",
+      "at": "0x005CFF2F",
+      "expect": "0x87AEA8",
+      "write": "@newbase"
+    },
+    {
+      "why": "&dic_abstate  (mov ecx, 0x87aea8 at 0x005D066A)",
+      "at": "0x005D066B",
+      "expect": "0x87AEA8",
+      "write": "@newbase"
+    },
+    {
+      "why": "&as_BTreeIndex+0x0  (mov ecx, 0x87c0c4 at 0x005D46ED)",
+      "at": "0x005D46EE",
+      "expect": "0x87C0C4",
+      "write": "@newbase + 0x121C + (slots - 792) * 4"
+    },
+    {
+      "why": "&dic_abstate  (mov ecx, 0x87aea8 at 0x005D4723)",
+      "at": "0x005D4724",
+      "expect": "0x87AEA8",
+      "write": "@newbase"
+    },
+    {
+      "why": "&as_BTreeIndex+0x0  (mov ecx, 0x87c0c4 at 0x005D4B53)",
+      "at": "0x005D4B54",
+      "expect": "0x87C0C4",
+      "write": "@newbase + 0x121C + (slots - 792) * 4"
+    },
+    {
+      "why": "&dic_abstate  (mov ecx, 0x87aea8 at 0x005D5BA3)",
+      "at": "0x005D5BA4",
+      "expect": "0x87AEA8",
+      "write": "@newbase"
+    },
+    {
+      "why": "&as_BTreeIndex+0x0  (mov ecx, 0x87c0c4 at 0x005D98B9)",
+      "at": "0x005D98BA",
+      "expect": "0x87C0C4",
+      "write": "@newbase + 0x121C + (slots - 792) * 4"
+    },
+    {
+      "why": "&dic_abstate  (mov ecx, 0x87aea8 at 0x005D98F8)",
+      "at": "0x005D98F9",
+      "expect": "0x87AEA8",
+      "write": "@newbase"
+    },
+    {
+      "why": "&as_BTreeIndex+0x0  (mov ecx, 0x87c0c4 at 0x005E2CF9)",
+      "at": "0x005E2CFA",
+      "expect": "0x87C0C4",
+      "write": "@newbase + 0x121C + (slots - 792) * 4"
+    },
+    {
+      "why": "&as_BTreeIndex+0x0  (mov ecx, 0x87c0c4 at 0x005E5F39)",
+      "at": "0x005E5F3A",
+      "expect": "0x87C0C4",
+      "write": "@newbase + 0x121C + (slots - 792) * 4"
+    },
+    {
+      "why": "&as_BTreeIndex+0x0  (mov ecx, 0x87c0c4 at 0x005EF239)",
+      "at": "0x005EF23A",
+      "expect": "0x87C0C4",
+      "write": "@newbase + 0x121C + (slots - 792) * 4"
+    },
+    {
+      "why": "&as_BTreeIndex+0x0  (mov ecx, 0x87c0c4 at 0x005EF847)",
+      "at": "0x005EF848",
+      "expect": "0x87C0C4",
+      "write": "@newbase + 0x121C + (slots - 792) * 4"
+    },
+    {
+      "why": "&as_BTreeIndex+0x0  (mov ecx, 0x87c0c4 at 0x005F2683)",
+      "at": "0x005F2684",
+      "expect": "0x87C0C4",
+      "write": "@newbase + 0x121C + (slots - 792) * 4"
+    },
+    {
+      "why": "&dic_abstate  (mov ecx, 0x87aea8 at 0x005F26B7)",
+      "at": "0x005F26B8",
+      "expect": "0x87AEA8",
+      "write": "@newbase"
+    },
+    {
+      "why": "&as_StateIndexList[419]  (mov edi, dword ptr [0x87b6ec] at 0x00614AAA)",
+      "at": "0x00614AAC",
+      "expect": "0x87B6EC",
+      "write": "@newbase + 0x844"
+    },
+    {
+      "why": "&dic_abstate  (mov ecx, 0x87aea8 at 0x00694EC0)",
+      "at": "0x00694EC1",
+      "expect": "0x87AEA8",
+      "write": "@newbase"
+    },
+    {
+      "why": "&dic_abstate  (mov ecx, 0x87aea8 at 0x0069C330)",
+      "at": "0x0069C331",
+      "expect": "0x87AEA8",
+      "write": "@newbase"
+    }
+  ]
+}
