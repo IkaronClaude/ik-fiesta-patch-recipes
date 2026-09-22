@@ -53,6 +53,7 @@ python build.py --target character --exe Z:/ServerSource/Character/Character.exe
 # the loader and the plugins (Visual Studio, 32-bit toolchain)
 common\loader\build.bat                          # -> build\fiestahook.dll
 common\build_plugin.bat zone void_bag             # -> build\plugins\void_bag.dll
+common\build_plugin.bat zone quest_gate           # -> build\plugins\quest_gate.dll  (quest-gated map entry, the 2026 rule)
 common\build_plugin.bat character char_void       # -> build\plugins\char_void.dll
 
 # the generated headers (after a new exe/pdb)
@@ -194,7 +195,9 @@ and verifiable byte by byte. A plugin when it is behaviour: a new class, a packe
 through **slots**: a recipe reserves a labelled region in the exe's arena (a jump-table case, a function pointer),
 and the plugin finds it with `arena_region(".label")` and fills it. A null slot takes the stock path, so a patched
 exe without its plugin behaves exactly as unpatched. `void-bag-reloc` + `void_bag` and `char-itemlist-void` +
-`char_void` are built that way.
+`char_void` are built that way. `quest_gate` needs no recipe at all: it swaps one vtable slot
+(`ShinePlayer::so_LinkTo`, the funnel of every map transfer) and reads its table with the zone's own `CDataReader`
+- a plugin that reuses the exe's readers cannot drift from what the exe accepts, so never hand-write a parser.
 
 ### Live
 
