@@ -22,9 +22,8 @@
 //   GET_ITEMLIST_BY_TYPE (0x417460): ~116 KB, split into 0x1077 replies of <= 0x1FFB bytes
 // and the packed count is a byte (0x402E6B), so 192 fits.
 //
-// NOT CHANGED: 0x4180B0 (the style-change path, fc_NC_CHAR_SET_STYLE_DB_REQ) reads the inventory through
-// the same 144-limited wrapper into its own 144-sized stack buffer. With more than 144 items it can miss
-// the style item; it cannot overflow.
+// The style-change path (0x4180B0, the coupon scan) has its own 144-record stack list; part 3 below gives
+// it the full 192 through the beauty-coupon-tier6 recipe's slot, coupons first.
 //
 // ---- 2. bag 18 ---------------------------------------------------------------------------------------
 //
@@ -37,6 +36,7 @@
 // over the bag id and already store bag 18 (tItem.nStorageType = 18).
 #include <charhook.h>
 
+#include <cstring>
 #include <vector>
 
 namespace {
@@ -83,6 +83,52 @@ int __fastcall pack_void(void* self, void* /*edx*/, unsigned owner, void* out, i
 
 chr::Detour g_inven_detour;
 
+// ---- 3. the style-change path's inventory read, 144 -> 192 (coupons only) ---------------------------
+//
+// 0x4180B0 (coupon scan of fc_NC_CHAR_SET_STYLE_DB_REQ / _GET_INFO_DB_REQ) reads the inventory through the
+// 144-limited wrapper 0x46A290 into a 144-record stack list, so with more than 144 items a coupon could be
+// missed. The beauty-coupon-tier6 recipe sends that one call through the .beauty6 slot (+kStyleSlot); this
+// reads all 192 cells and hands the scan every COUPON row (the only rows it looks at), then fills the rest of
+// the 144 with the others. Same thiscall shape as the wrapper: ecx = dbf+0x24, (dbf, owner, list), ret 0xC.
+const unsigned kStyleSlot = 0xC0;              // beauty-coupon-tier6.json: consts.style_slot
+const unsigned kStyleTdWord = 0x20;            // beauty-coupon-tier6.json: consts.tdword (HairShop00_TD id)
+const int kStyleListCap = 144;                 // the scan's own stack list
+unsigned char* g_beauty6 = nullptr;
+
+bool is_coupon(unsigned short id) {
+    const unsigned short base = *(unsigned short*)::hook::rebase(0x006EC8B0u, chr::kImageBase);   // HairShop01
+    const unsigned short top = *(unsigned short*)::hook::rebase(0x006EC8BAu, chr::kImageBase);    // HairShop06 with the recipe
+    const unsigned short uni = *(unsigned short*)::hook::rebase(0x006EC8BCu, chr::kImageBase);    // UniChange01
+    const unsigned short td = g_beauty6 ? *(unsigned short*)(g_beauty6 + kStyleTdWord) : 0xFFFF;
+    return (id >= base && id <= top) || id == uni || id == td;
+}
+
+int __fastcall read_for_style(void* rdr, void* /*edx*/, void* dbf, unsigned owner, int* list) {
+    std::vector<unsigned char> all(8 + (size_t)kInventoryCells * kRecordSize, 0);
+    if (!chr::fn::ItemListReader()(rdr, 0, dbf, owner, kInventoryBag, kInventoryCells, (int*)all.data(),
+                                   all.data() + 8)) {
+        chr::log("style: inventory of char %u: the DB read FAILED", owner);
+        return 0;
+    }
+    const int n = *(int*)all.data();
+    unsigned char* out = (unsigned char*)list + 8;
+    int kept = 0, coupons = 0;
+    for (int pass = 0; pass < 2; ++pass) {                 // coupons first, then the rest while room is left
+        for (int i = 0; i < n && kept < kStyleListCap; ++i) {
+            const unsigned char* rec = all.data() + 8 + (size_t)i * kRecordSize;
+            if (is_coupon(*(const unsigned short*)(rec + 0xC)) != (pass == 0)) continue;
+            memcpy(out + (size_t)kept * kRecordSize, rec, kRecordSize);
+            ++kept;
+            if (pass == 0) ++coupons;
+        }
+    }
+    *list = kept;
+    if (n > kStyleListCap)
+        chr::log("style: char %u has %d items (> %d): %d coupon row(s) passed to the scan", owner, n,
+                 kStyleListCap, coupons);
+    return 1;
+}
+
 }  // namespace
 
 HOOK_PLUGIN("char_void") {
@@ -103,5 +149,16 @@ HOOK_PLUGIN("char_void") {
                  (unsigned)kVoidBag, kVoidCells, slot.base);
     } else {
         chr::log("NO .charvoid slot: this Character.exe lacks char-itemlist-void, so bag 18 is still refused");
+    }
+
+    // 3. the style path's inventory read (beauty-coupon-tier6's .beauty6 slot); null = the stock 144 read.
+    chr::ArenaRegion b6 = chr::arena_region(".beauty6");
+    if (b6.base && b6.size >= kStyleSlot + 4) {
+        g_beauty6 = (unsigned char*)b6.base;
+        *(void**)(g_beauty6 + kStyleSlot) = (void*)read_for_style;
+        chr::log("style-change inventory read: %d cells, coupons first, through the .beauty6 slot at %x",
+                 kInventoryCells, g_beauty6 + kStyleSlot);
+    } else {
+        chr::log("NO .beauty6 slot (or an older one): the style path keeps the stock 144-item read");
     }
 }
