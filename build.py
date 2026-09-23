@@ -70,6 +70,9 @@ CHARACTER_CHAIN = [
     ('dll-loader-character', []),
     # bag 18 through the char_void plugin's packer; inert (answers 0x1202 as before) without the plugin
     ('char-itemlist-void', []),
+    # Creation accepts the 2026 starter grade (1) instead of 2016's (0) - the stack uses the 2026 HairInfo /
+    # HairColorInfo / FaceInfo, which have no grade 0, so every 2026-client creation failed with 0x183.
+    ('creation-grade-2026', []),
 ]
 
 # WorldManager.exe (--target worldmanager): the world-wide instance-dungeon cap. Built and statically verified,
