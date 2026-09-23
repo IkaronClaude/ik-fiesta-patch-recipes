@@ -59,6 +59,9 @@ EXPERIMENTAL = [
     ('abstate-index-cap', []),
     # Mob pool 8000 -> 12000 (the 2026 client's mob handle range; needs the player base handle-layout-2026 moved).
     ('mob-object-pool-cap', []),
+    # Title stat bonuses for 2026 title types 128..255 (the state array moved to its own region; the loader wrote
+    # unbounded). Pairs with the title_ext plugin and character-title-types.
+    ('title-state-types', []),
     # NOT a recipe: the disconnect a same-zone link onto an unmarkable spot causes (error 1669) cannot be skipped -
     # so_Unmark has already run and the exe never re-marks, so the player ends up in limbo (tried 2026-09-23,
     # withdrawn). The quest_gate plugin pre-checks a GM &linkto destination instead.

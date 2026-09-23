@@ -1,0 +1,88 @@
+{
+  "name": "title-state-types",
+  "summary": "Title stat bonuses (CharacterTitleStateServer) live in a [128 types][4 levels] array of 0x4C-byte records inline at the start of the one CCharacterTitleDataStateServer object, and its loader does not bound the type: a row for a 2026 title (type 128..149) would be written over the table reader that sits right after the array. Move the array to its own 256-type region and point every user at it.",
+  "status": "BUILT 2026-09-23 with the title_ext plugin (title status past 127) and character-title-types. Statically verified.",
+  "target": {
+    "file": "Zone00/Zone.exe",
+    "sha256": "7ef3532da08194a377558322ca2bd06d1ce5bdb2813796e033173b72d9ff883d",
+    "size": 4673536
+  },
+  "params": {
+    "types": 256
+  },
+  "consts": {
+    "rec_size": "0x4C",
+    "levels": 4,
+    "state_obj": "0x1328C128",
+    "reader_off": "0x9800",
+    "get_state_data": "0x005CA9B0",
+    "set_cur_bound_a": "0x005CB3AB",
+    "set_cur_base_a": "0x005CB3CB",
+    "set_cur_bound_b": "0x005CB4BD",
+    "set_cur_base_b": "0x005CB4DD",
+    "read_base_a": "0x005CA887",
+    "read_base_b": "0x005CA92B",
+    "read_reader": "0x005CA86C"
+  },
+  "why": [
+    "CCharacterTitleDataStateServer (one global, 0x1328C128; loaded by zs_start_moon) = CT_DataState rec[128][4]",
+    "(0x4C bytes each: count u8, then up to 6 {abstate, strength} slots) followed at +0x9800 by the CDataReader of",
+    "CharacterTitleStateServer.shn. Users of the array:",
+    "",
+    "  Read            0x5CA790  row -> rec[Type*4 + TitleLV], NO bound on Type; base = [ebp-0x90] (this) at 0x5CA887",
+    "                            and 0x5CA92B, and the loop head's mov esi,ecx then uses this + 0x9800 as the reader",
+    "  GetStateData    0x5CA9B0  cmp al, 0x7F ; ... ; add eax, ecx     (callers: map-login-complete, revive)",
+    "  sp_NC_CT_SET_CURRENT_REQ  two inlined copies: cmp al, 0x7F and add eax, 0x1328C128 (old + new title)",
+    "",
+    "So 2016 simply had no rows past 127; a row for 2026's new titles (the 2026 client describes 78 bonuses for types",
+    "128..149, CharacterTitleStateView) would land on the reader. The array moves to a zero-filled region of",
+    "256 x 4 records (the type is a byte), and:",
+    "  * GetStateData is rewritten in place (37 of its 42 bytes): type unbounded (a byte), level <= 3, new base;",
+    "  * both inlined lookups get the new base and a 0xFF bound;",
+    "  * Read loads the NEW base at both sites (mov ecx, imm32 ; nop in place of mov ecx, [ebp-0x90]); since ecx",
+    "    then carries the new base into the loop head, the reader address there becomes the absolute",
+    "    0x1328C128 + 0x9800 - there is exactly one such object. Read's stock clear loop still clears the old",
+    "    array, which nothing reads any more; the new region starts zeroed.",
+    "",
+    "ABSOLUTE ADDRESSES: the imm32s written into formerly register-relative instructions have no relocation entry;",
+    "like the zone's other code caves this relies on the exe loading at its preferred base (it does: 0x400000).",
+    "The bonus ROWS for types 128..149 are data (Fiesta2026on2016 migration)."
+  ],
+  "new_section": {
+    "name": ".ctstate",
+    "size": "types * levels * rec_size",
+    "materialise": false,
+    "execute": false,
+    "note": "Zero-filled CT_DataState[types][4]."
+  },
+  "edits": [
+    { "why": "GetStateData rewritten in place (guard on the stock first bytes; the code blob writes the rest)",
+      "at": "get_state_data", "expect": "0x8AEC8B55", "write": "0x0FEC8B55" },
+
+    { "why": "set-current, old title: type bound 0x7F -> 0xFF", "at": "set_cur_bound_a", "width": 1, "expect": "0x7F", "write": "0xFF" },
+    { "why": "set-current, old title: state array base", "at": "set_cur_base_a", "expect": "state_obj", "write": "@newbase" },
+    { "why": "set-current, new title: type bound 0x7F -> 0xFF", "at": "set_cur_bound_b", "width": 1, "expect": "0x7F", "write": "0xFF" },
+    { "why": "set-current, new title: state array base", "at": "set_cur_base_b", "expect": "state_obj", "write": "@newbase" },
+
+    { "why": "Read: record base (count check / slot) - mov ecx, imm32 (opcode)", "at": "read_base_a", "width": 1, "expect": "0x8B", "write": "0xB9" },
+    { "why": "Read: record base - the new array", "at": "read_base_a + 1", "expect": "0xFFFF708D", "write": "@newbase" },
+    { "why": "Read: record base - pad", "at": "read_base_a + 5", "width": 1, "expect": "0xFF", "write": "0x90" },
+    { "why": "Read: count increment base - mov ecx, imm32 (opcode)", "at": "read_base_b", "width": 1, "expect": "0x8B", "write": "0xB9" },
+    { "why": "Read: count increment base - the new array", "at": "read_base_b + 1", "expect": "0xFFFF708D", "write": "@newbase" },
+    { "why": "Read: count increment base - pad", "at": "read_base_b + 5", "width": 1, "expect": "0xFF", "write": "0x90" },
+    { "why": "Read: loop-head reader address, absolute (ecx now carries the new base) - opcode", "at": "read_reader", "width": 1, "expect": "0x8D", "write": "0xB9" },
+    { "why": "Read: loop-head reader = the one object + 0x9800", "at": "read_reader + 1", "expect": "0x0098008E", "write": "state_obj + reader_off" },
+    { "why": "Read: loop-head reader - pad", "at": "read_reader + 5", "width": 1, "expect": "0x00", "write": "0x90" }
+  ],
+  "code": [
+    { "why": "GetStateData(type, level): &rec[type*4 + level] in the new array, NULL for level > 3",
+      "at": "get_state_data",
+      "emit": ["55", "8B EC",
+               "0F B6 45 08", "0F B6 55 0C",
+               "83 FA 03", "77 0F",
+               "8D 04 82", "6B C0 4C",
+               "05", {"u32": "@newbase"},
+               "5D", "C2 08 00",
+               "33 C0", "5D", "C2 08 00"] }
+  ]
+}
