@@ -83,6 +83,9 @@ CHARACTER_CHAIN = [
 # instance maps land (Fiesta2026on2016 tickets.md, "HOST THE 56 NON-FIELD 2026 MAPS").
 WORLDMANAGER_CHAIN = [
     ('indun-map-list-cap', []),
+    # 0x107D carries 7 coupon pairs (2026 client); pairs with character's beauty-coupon-tier6. DEPLOYED 2026-09-23 on
+    # its own (stock + this) - indun-map-list-cap has still never been booted.
+    ('beauty-coupon-list-7', []),
 ]
 
 # The chain as it was before handle-layout-2026, for reproducing build/Zone.maps.npc.dmg.exe exactly.

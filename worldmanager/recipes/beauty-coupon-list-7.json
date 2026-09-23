@@ -1,0 +1,60 @@
+{
+  "name": "beauty-coupon-list-7",
+  "summary": "The WorldManager rebuilds the beauty-coupon list (Character's 0x107F -> the client's 0x107D) in a fixed 29-byte stack buffer: err + 6 {id, count} pairs. The 2026 client reads SEVEN pairs (tiers 1-6 + gender change). Move the buffer 12 bytes down the frame and copy the seventh pair.",
+  "status": "BUILT 2026-09-23 with character/recipes/beauty-coupon-tier6 v2 (which sends the seventh pair). Statically verified.",
+  "target": {
+    "file": "WorldManager/WorldManager.exe",
+    "sha256": "0aaec96405b568ee936ca8fd46ed21caceca0769b7bc8e56187d7de3068a57c3",
+    "size": 630272
+  },
+  "params": {},
+  "consts": {
+    "hook": "0x0040C6AF",
+    "resume": "0x0040C6B4",
+    "cave": 0
+  },
+  "why": [
+    "CParserCharDB::fc_NC_CHAR_SET_STYLE_GET_INFO_DB_ACK (0x40C5F0), frame sub esp,0x24, stack cookie at ebp-4.",
+    "It copies Character's packet+8..+0x21 (err + 6 pairs) into a packet at ebp-0x24: length byte 0x1C, opcode",
+    "0x107D, err at -0x21, pairs -0x1F..-0x08, then sends 0x1D bytes. A seventh pair (4 bytes) would land on the",
+    "cookie, so the frame grows to 0x30 and every buffer displacement moves by -0x0C (buffer at ebp-0x30, ends",
+    "ebp-0x0F). Nothing else lives in this frame. The cave copies packet+0x22 (the seventh pair from Character,",
+    "beauty-coupon-tier6 v2) to ebp-0x13, pushes the new size 0x21 and the new buffer address, and resumes.",
+    "Length byte 0x1C -> 0x20 (opcode + 30 bytes).",
+    "",
+    "Why seven: the 2026 client's 0x107D handler (Fiesta.exe 0x757A00) reads err + 7 x {id, count}, and its",
+    "coupon chooser (0x755AD0) picks index max(grade)-1 - 5 for the 2026 Extravagant tier - or 6 for a gender",
+    "change. With six pairs, index 5 was the gender-change coupon and index 6 was past the packet: the client",
+    "refused Extravagant styles itself ('you need a beauty shop item or gender change item') without asking.",
+    "",
+    "0x409A30, called first, only logs the session; nothing checks the incoming packet's length."
+  ],
+  "new_section": {
+    "name": ".beauty7",
+    "size": "0x40",
+    "materialise": true,
+    "execute": true,
+    "note": "The send cave."
+  },
+  "edits": [
+    { "why": "frame 0x24 -> 0x30", "at": "0x0040C5F5", "width": 1, "expect": "0x24", "write": "0x30" },
+    { "why": "pair bytes 0-3  [ebp-0x1F] -> [ebp-0x2B]", "at": "0x0040C633", "width": 1, "expect": "0xE1", "write": "0xD5" },
+    { "why": "pair bytes 4-7  [ebp-0x1B] -> [ebp-0x27]", "at": "0x0040C639", "width": 1, "expect": "0xE5", "write": "0xD9" },
+    { "why": "err [ebp-0x21] -> [ebp-0x2D]", "at": "0x0040C640", "width": 1, "expect": "0xDF", "write": "0xD3" },
+    { "why": "pair bytes 16-19 [ebp-0x13] -> [ebp-0x1F]", "at": "0x0040C646", "width": 1, "expect": "0xED", "write": "0xE1" },
+    { "why": "pair bytes 20-23 [ebp-0x0F] -> [ebp-0x1B]", "at": "0x0040C649", "width": 1, "expect": "0xF1", "write": "0xE5" },
+    { "why": "pair bytes 12-15 [ebp-0x17] -> [ebp-0x23]", "at": "0x0040C655", "width": 1, "expect": "0xE9", "write": "0xDD" },
+    { "why": "opcode [ebp-0x23] -> [ebp-0x2F]", "at": "0x0040C65C", "width": 1, "expect": "0xDD", "write": "0xD1" },
+    { "why": "pair bytes 8-11 [ebp-0x0B] -> [ebp-0x17]", "at": "0x0040C665", "width": 1, "expect": "0xF5", "write": "0xE9" },
+    { "why": "length byte [ebp-0x24] -> [ebp-0x30]", "at": "0x0040C668", "width": 1, "expect": "0xDC", "write": "0xD0" },
+    { "why": "length byte value 0x1C -> 0x20", "at": "0x0040C669", "width": 1, "expect": "0x1C", "write": "0x20" },
+    { "why": "send: jmp to the cave (opcode, replaces push 0x1D)", "at": "hook", "width": 1, "expect": "0x6A", "write": "0xE9" },
+    { "why": "send: jmp to the cave (rel32, replaces the rest of push 0x1D and lea ecx,[ebp-0x24])",
+      "at": "hook + 1", "expect": "0xDC4D8D1D", "write": "@newbase + cave - (hook + 5)" }
+  ],
+  "code": [
+    { "why": "cave: seventh pair from the Character packet, new size and buffer, back",
+      "at": "@newbase + cave",
+      "emit": ["8B 56 22", "89 55 ED", "6A 21", "8D 4D D0", "E9", {"rel32": "resume"}] }
+  ]
+}
