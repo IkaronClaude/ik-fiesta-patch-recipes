@@ -73,6 +73,9 @@ CHARACTER_CHAIN = [
     # Creation accepts the 2026 starter grade (1) instead of 2016's (0) - the stack uses the 2026 HairInfo /
     # HairColorInfo / FaceInfo, which have no grade 0, so every 2026-client creation failed with 0x183.
     ('creation-grade-2026', []),
+    # Beauty coupons: HairShop06 (2026 'Extravagant', grade-6 styles) becomes the top tier - the per-tier array
+    # widens 6 -> 7 so it does not collide with the gender-change slot - and HairShop00_TD counts as Basic.
+    ('beauty-coupon-tier6', []),
 ]
 
 # WorldManager.exe (--target worldmanager): the world-wide instance-dungeon cap. Built and statically verified,
