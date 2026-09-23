@@ -1,7 +1,7 @@
 {
   "name": "beauty-coupon-tier6",
   "summary": "The style change knows five beauty-coupon tiers (HairShop01..05) plus the gender-change coupon. 2026 adds a sixth tier, HairShop06 'Beauty Coupon (Extravagant)', for its grade-6 styles, and HairShop00_TD, a tradable Basic coupon. Widen the per-tier array from 6 to 7 entries so HairShop06 becomes the top tier without colliding with the gender-change slot, and count HairShop00_TD as a Basic coupon. Both are found by name, like the stock five.",
-  "status": "BUILT 2026-09-23, statically verified. NOT yet exercised: the 2026 client's beauty shop does not speak the 2016 style packets (no 0x1079/0x107D case), so nothing reaches this path until the bridge translates it.",
+  "status": "BUILT 2026-09-23. v1 (6 pairs) deployed 12:23: normal styles OK live, Extravagant refused client-side. v2 = seven pairs, needs the WorldManager recipe beauty-coupon-list-7 alongside.",
   "target": {
     "file": "Character/Character.exe",
     "sha256": "2889640536a271468ef17cc6c74bd6f8799222e3bd95b81d53ea59d41c5a9e1c",
@@ -9,21 +9,24 @@
   },
   "params": {},
   "consts": {
-    "top_name_push":  "0x0040179C",
-    "old_top_name":   "0x004AD8E4",
-    "uni_lookup":     "0x00401891",
-    "uni_name":       "0x004AD7C0",
-    "uni_resume":     "0x00401896",
-    "name_lookup":    "0x00402CF0",
-    "item_table":     "0x006ED408",
-    "coupon_base":    "0x006EC8B0",
-    "scan_hook":      "0x00418182",
-    "scan_resume":    "0x00418189",
-    "str06":          0,
-    "strtd":          16,
-    "tdword":         32,
-    "loader_cave":    48,
-    "scan_cave":      80
+    "top_name_push": "0x0040179C",
+    "old_top_name": "0x004AD8E4",
+    "uni_lookup": "0x00401891",
+    "uni_name": "0x004AD7C0",
+    "uni_resume": "0x00401896",
+    "name_lookup": "0x00402CF0",
+    "item_table": "0x006ED408",
+    "coupon_base": "0x006EC8B0",
+    "scan_hook": "0x00418182",
+    "scan_resume": "0x00418189",
+    "str06": 0,
+    "strtd": 16,
+    "tdword": 32,
+    "loader_cave": 48,
+    "scan_cave": 80,
+    "info_hook": "0x00418996",
+    "info_resume": "0x004189DB",
+    "info_cave": 128
   },
   "why": [
     "Operator, 2026-09-23: coupons go Basic -> Deluxe, and 2026 adds one above; a style whose grade is above your best",
@@ -49,8 +52,12 @@
     "has already pushed the entry values it logs (0x418680, 0x41879D) or reads no entry at all - checked. The",
     "get-info handler has the same layout and only logs when the scan failed.",
     "",
-    "GET-INFO KEEPS ITS SIX PAIRS: its UniChange reads move to entry 6, so the reply is byte-for-byte the stock one",
-    "(HairShop06's count is not reported; the 2026 client's beauty UI is a different protocol anyway).",
+    "GET-INFO SENDS SEVEN PAIRS - what the 2026 client reads (live 2026-09-23: an Extravagant style was refused",
+    "CLIENT-SIDE, no 0x1078 sent). Its 0x107D handler (Fiesta.exe 0x757A00) stores err + 7 x {id, count} at +0x9C..+0xB6",
+    "and the chooser (0x755AD0) picks index max(grade)-1, or 6 for a gender change. So pairs 0-5 = tiers 1-6 (entries",
+    "0-5, the stock reads now land on HairShop06 for pair 5) and a cave appends pair 6 = UniChange (entry 6); 0x107F",
+    "grows 0x20 -> 0x24. The WorldManager rebuilds 0x107D from a fixed 6 pairs: worldmanager/recipes/",
+    "beauty-coupon-list-7 widens it. A 2016 client reading 6 pairs would now see HairShop06 as its 6th slot.",
     "",
     "HairShop00_TD (30496) is outside the consecutive range. The loader cave looks it up by name next to",
     "UniChange01; the scan cave maps an item with that id to HairShop01 before the range check, so it fills tier 1",
@@ -62,79 +69,235 @@
   ],
   "new_section": {
     "name": ".beauty6",
-    "size": "0x80",
+    "size": "0xC0",
     "materialise": true,
     "execute": true,
-    "note": "+0x00 'HairShop06', +0x10 'HairShop00_TD', +0x20 u16 HairShop00_TD id (written by the loader cave), +0x30 loader cave, +0x50 scan cave. Writable: the loader writes the id."
+    "note": "+0x00 'HairShop06', +0x10 'HairShop00_TD', +0x20 u16 HairShop00_TD id (written by the loader cave), +0x30 loader cave, +0x50 scan cave. Writable: the loader writes the id. +0x80 get-info cave."
   },
   "edits": [
-    { "why": "loader: the top-bound lookup reads HairShop06 instead of HairShop05 a second time",
-      "at": "top_name_push", "expect": "old_top_name", "write": "@newbase + str06" },
-
-    { "why": "loader: jmp to the cave that also looks up HairShop00_TD (opcode)",
-      "at": "uni_lookup", "width": 1, "expect": "0x68", "write": "0xE9" },
-    { "why": "loader: jmp to the cave (rel32)",
-      "at": "uni_lookup + 1", "expect": "uni_name", "write": "@newbase + loader_cave - uni_resume" },
-
-    { "why": "scan: jmp to the cave that maps HairShop00_TD to tier 1 (opcode)",
-      "at": "scan_hook", "width": 1, "expect": "0x0F", "write": "0xE9" },
-    { "why": "scan: jmp to the cave (rel32)",
-      "at": "scan_hook + 1", "expect": "0x8B0C5EB7", "write": "@newbase + scan_cave - (scan_hook + 5)" },
-    { "why": "scan: pad the two bytes the jmp leaves",
-      "at": "scan_hook + 5", "width": 2, "expect": "0x044E", "write": "0x9090" },
-
-    { "why": "scan init: the UniChange entry is index 6, not 5",
-      "at": "0x00418119", "width": 1, "expect": "5", "write": "6" },
-    { "why": "scan init: UniChange id at entry 6 (+0x54)",
-      "at": "0x00418125", "width": 1, "expect": "0x46", "write": "0x54" },
-    { "why": "scan init: seven entries",
-      "at": "0x00418129", "width": 1, "expect": "6", "write": "7" },
-    { "why": "scan: UniChange biggest-lot compare (+0x50 -> +0x5E)",
-      "at": "0x00418255", "width": 1, "expect": "0x50", "write": "0x5E" },
-    { "why": "scan: UniChange key low (+0x48 -> +0x56)",
-      "at": "0x0041825F", "width": 1, "expect": "0x48", "write": "0x56" },
-    { "why": "scan: UniChange key high (+0x4C -> +0x5A)",
-      "at": "0x00418262", "width": 1, "expect": "0x4C", "write": "0x5A" },
-    { "why": "scan: UniChange biggest lot (+0x50 -> +0x5E)",
-      "at": "0x00418266", "width": 1, "expect": "0x50", "write": "0x5E" },
-    { "why": "scan: UniChange total (+0x52 -> +0x60)",
-      "at": "0x0041826A", "width": 1, "expect": "0x52", "write": "0x60" },
-
-    { "why": "style: buffer size passed to the scan (6 -> 7 entries)",
-      "at": "0x004184BE", "width": 1, "expect": "0x54", "write": "0x62" },
-    { "why": "style: 'owns a gender-change coupon' reads entry 6's lot (ebp-0x114 -> ebp-0x106)",
-      "at": "0x00418571", "expect": "0xFFFFFEEC", "write": "0xFFFFFEFA" },
-    { "why": "style: the gender-change coupon is entry 6",
-      "at": "0x00418579", "expect": "5", "write": "6" },
-
-    { "why": "get-info: buffer size passed to the scan (6 -> 7 entries)",
-      "at": "0x00418894", "width": 1, "expect": "0x54", "write": "0x62" },
-    { "why": "get-info: sixth pair's id from entry 6 (UniChange), as stock",
-      "at": "0x00418976", "expect": "0xFFFFFEE2", "write": "0xFFFFFEF0" },
-    { "why": "get-info: sixth pair's total from entry 6 (UniChange), as stock",
-      "at": "0x00418984", "expect": "0xFFFFFEEE", "write": "0xFFFFFEFC" }
+    {
+      "why": "loader: the top-bound lookup reads HairShop06 instead of HairShop05 a second time",
+      "at": "top_name_push",
+      "expect": "old_top_name",
+      "write": "@newbase + str06"
+    },
+    {
+      "why": "loader: jmp to the cave that also looks up HairShop00_TD (opcode)",
+      "at": "uni_lookup",
+      "width": 1,
+      "expect": "0x68",
+      "write": "0xE9"
+    },
+    {
+      "why": "loader: jmp to the cave (rel32)",
+      "at": "uni_lookup + 1",
+      "expect": "uni_name",
+      "write": "@newbase + loader_cave - uni_resume"
+    },
+    {
+      "why": "scan: jmp to the cave that maps HairShop00_TD to tier 1 (opcode)",
+      "at": "scan_hook",
+      "width": 1,
+      "expect": "0x0F",
+      "write": "0xE9"
+    },
+    {
+      "why": "scan: jmp to the cave (rel32)",
+      "at": "scan_hook + 1",
+      "expect": "0x8B0C5EB7",
+      "write": "@newbase + scan_cave - (scan_hook + 5)"
+    },
+    {
+      "why": "scan: pad the two bytes the jmp leaves",
+      "at": "scan_hook + 5",
+      "width": 2,
+      "expect": "0x044E",
+      "write": "0x9090"
+    },
+    {
+      "why": "scan init: the UniChange entry is index 6, not 5",
+      "at": "0x00418119",
+      "width": 1,
+      "expect": "5",
+      "write": "6"
+    },
+    {
+      "why": "scan init: UniChange id at entry 6 (+0x54)",
+      "at": "0x00418125",
+      "width": 1,
+      "expect": "0x46",
+      "write": "0x54"
+    },
+    {
+      "why": "scan init: seven entries",
+      "at": "0x00418129",
+      "width": 1,
+      "expect": "6",
+      "write": "7"
+    },
+    {
+      "why": "scan: UniChange biggest-lot compare (+0x50 -> +0x5E)",
+      "at": "0x00418255",
+      "width": 1,
+      "expect": "0x50",
+      "write": "0x5E"
+    },
+    {
+      "why": "scan: UniChange key low (+0x48 -> +0x56)",
+      "at": "0x0041825F",
+      "width": 1,
+      "expect": "0x48",
+      "write": "0x56"
+    },
+    {
+      "why": "scan: UniChange key high (+0x4C -> +0x5A)",
+      "at": "0x00418262",
+      "width": 1,
+      "expect": "0x4C",
+      "write": "0x5A"
+    },
+    {
+      "why": "scan: UniChange biggest lot (+0x50 -> +0x5E)",
+      "at": "0x00418266",
+      "width": 1,
+      "expect": "0x50",
+      "write": "0x5E"
+    },
+    {
+      "why": "scan: UniChange total (+0x52 -> +0x60)",
+      "at": "0x0041826A",
+      "width": 1,
+      "expect": "0x52",
+      "write": "0x60"
+    },
+    {
+      "why": "style: buffer size passed to the scan (6 -> 7 entries)",
+      "at": "0x004184BE",
+      "width": 1,
+      "expect": "0x54",
+      "write": "0x62"
+    },
+    {
+      "why": "style: 'owns a gender-change coupon' reads entry 6's lot (ebp-0x114 -> ebp-0x106)",
+      "at": "0x00418571",
+      "expect": "0xFFFFFEEC",
+      "write": "0xFFFFFEFA"
+    },
+    {
+      "why": "style: the gender-change coupon is entry 6",
+      "at": "0x00418579",
+      "expect": "5",
+      "write": "6"
+    },
+    {
+      "why": "get-info: buffer size passed to the scan (6 -> 7 entries)",
+      "at": "0x00418894",
+      "width": 1,
+      "expect": "0x54",
+      "write": "0x62"
+    },
+    {
+      "why": "get-info: jmp to the cave that appends the 7th pair (opcode)",
+      "at": "info_hook",
+      "width": 1,
+      "expect": "0x66",
+      "write": "0xE9"
+    },
+    {
+      "why": "get-info: jmp to the cave (rel32)",
+      "at": "info_hook + 1",
+      "expect": "0xDEBB9589",
+      "write": "@newbase + info_cave - (info_hook + 5)"
+    },
+    {
+      "why": "get-info: pad the rest of the replaced store and the jmp",
+      "at": "info_hook + 5",
+      "expect": "0x3CEBFFFF",
+      "write": "0x90909090"
+    },
+    {
+      "why": "get-info: 0x107F payload 0x20 -> 0x24 (seven pairs)",
+      "at": "0x004189DE",
+      "width": 1,
+      "expect": "0x20",
+      "write": "0x24"
+    }
   ],
   "code": [
-    { "why": "coupon names and the HairShop00_TD id word (0xFFFF until the loader fills it)",
+    {
+      "why": "coupon names and the HairShop00_TD id word (0xFFFF until the loader fills it)",
       "at": "@newbase",
-      "emit": ["48 61 69 72 53 68 6F 70 30 36 00 00 00 00 00 00",
-               "48 61 69 72 53 68 6F 70 30 30 5F 54 44 00 00 00",
-               "FF FF 00 00 00 00 00 00 00 00 00 00 00 00 00 00"] },
-    { "why": "loader cave: HairShop00_TD id -> the word, then the stock UniChange01 push, back",
+      "emit": [
+        "48 61 69 72 53 68 6F 70 30 36 00 00 00 00 00 00",
+        "48 61 69 72 53 68 6F 70 30 30 5F 54 44 00 00 00",
+        "FF FF 00 00 00 00 00 00 00 00 00 00 00 00 00 00"
+      ]
+    },
+    {
+      "why": "loader cave: HairShop00_TD id -> the word, then the stock UniChange01 push, back",
       "at": "@newbase + loader_cave",
-      "emit": ["68", {"u32": "@newbase + strtd"},
-               "B9", {"u32": "item_table"},
-               "E8", {"rel32": "name_lookup"},
-               "66 A3", {"u32": "@newbase + tdword"},
-               "68", {"u32": "uni_name"},
-               "E9", {"rel32": "uni_resume"}] },
-    { "why": "scan cave: the two replaced loads; a HairShop00_TD counts as HairShop01; back",
+      "emit": [
+        "68",
+        {
+          "u32": "@newbase + strtd"
+        },
+        "B9",
+        {
+          "u32": "item_table"
+        },
+        "E8",
+        {
+          "rel32": "name_lookup"
+        },
+        "66 A3",
+        {
+          "u32": "@newbase + tdword"
+        },
+        "68",
+        {
+          "u32": "uni_name"
+        },
+        "E9",
+        {
+          "rel32": "uni_resume"
+        }
+      ]
+    },
+    {
+      "why": "scan cave: the two replaced loads; a HairShop00_TD counts as HairShop01; back",
       "at": "@newbase + scan_cave",
-      "emit": ["0F B7 5E 0C",
-               "8B 4E 04",
-               "66 3B 1D", {"u32": "@newbase + tdword"},
-               "75 07",
-               "0F B7 1D", {"u32": "coupon_base"},
-               "E9", {"rel32": "scan_resume"}] }
+      "emit": [
+        "0F B7 5E 0C",
+        "8B 4E 04",
+        "66 3B 1D",
+        {
+          "u32": "@newbase + tdword"
+        },
+        "75 07",
+        "0F B7 1D",
+        {
+          "u32": "coupon_base"
+        },
+        "E9",
+        {
+          "rel32": "scan_resume"
+        }
+      ]
+    },
+    {
+      "why": "get-info cave: the replaced store of pair 6's count, then pair 7 = entry 6 (UniChange id, total); back",
+      "at": "@newbase + info_cave",
+      "emit": [
+        "66 89 95 BB DE FF FF",
+        "0F B7 85 F0 FE FF FF",
+        "66 89 85 BD DE FF FF",
+        "0F B7 85 FC FE FF FF",
+        "66 89 85 BF DE FF FF",
+        "E9",
+        {
+          "rel32": "info_resume"
+        }
+      ]
+    }
   ]
 }
