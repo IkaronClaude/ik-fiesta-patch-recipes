@@ -1,0 +1,109 @@
+{
+  "name": "indun-map-list-cap",
+  "summary": "The WorldManager accepts at most 32 instance-dungeon (map, level) rows for the WHOLE world and refuses a registration packet carrying more. Relocate the array and raise the guard, so a 2026 port can host more than 32.",
+  "status": "BUILT 2026-09-23 from NOTES-map-caps.md section 4; statically verified, NOT yet run by a WorldManager process.",
+  "target": {
+    "file": "WorldManager/WorldManager.exe",
+    "sha256": "0aaec96405b568ee936ca8fd46ed21caceca0769b7bc8e56187d7de3068a57c3",
+    "size": 630272
+  },
+  "params": {
+    "rows": 127
+  },
+  "consts": {
+    "entry_size":    13,
+    "old_rows":      "0x20",
+    "old_list":      "0x00557D14",
+    "guard_imm8":    "0x004288C4",
+    "base_b":        "0x004288E3",
+    "base_a":        "0x004288F0",
+    "base_c":        "0x004288F5",
+    "base_d":        "0x004288FC",
+    "off_b":         8,
+    "off_a":         4,
+    "off_c":         0,
+    "off_d":         12
+  },
+  "why": [
+    "The WM does not read Field.txt. Each zone, on its S2S connection ack (FieldContainer::fc_IndunMapRegist,",
+    "0x462AF0 in Zone.exe), sends NC_INSTANCE_DUNGEON_MAP_REGIST_CMD with EVERY InstanceDungeon row of its",
+    "Field.txt - not only its own zone's - as {MapIDClient[12]; ModeIDLv u8} = 13 bytes each behind a u16 count.",
+    "CParserZone::fc_NC_INSTANCE_DUNGEON_MAP_REGIST_CMD (0x428870) then:",
+    "",
+    "    0x4288C1  cmp word [esi], 0x20 ; ja fail      <- refuses a packet with more than 32 entries",
+    "    0x4288C9  cmp [0x557D10], 0 ; jg skip          <- keeps only the FIRST registration, so every zone must",
+    "                                                      send the complete list (they do)",
+    "    0x4288E2  mov edx, 0x557D12                    \\",
+    "    0x4288EF  mov edi, 0x557D0E                     | four bases of the strength-reduced copy loop, each",
+    "    0x4288F4  mov edx, 0x557D0A                     | = m_IndunMapList - 0xA + {0, 4, 8, 12}",
+    "    0x4288FB  mov ebx, 0x557D16                    /",
+    "",
+    "copying into CWMZoneSessionManager::m_IndunMapList at 0x557D14 - 32 entries of 13 B = 416 bytes - with the",
+    "count in m_NumOfIndunMap at 0x557D10, then echoing the list back to the zones (opcode 0xA41A, built in a",
+    "0x2014-byte stack buffer that already holds 630 entries).",
+    "",
+    "A reference scan of 0x557D00-0x557EB8 (common/tools/xref_range.py, 2026-09-14) found NOTHING else in the WM",
+    "touching the array - only this handler's four bases and the count. So the cap moves with five edits: the",
+    "array to a region of its own, and the guard.",
+    "",
+    "WHY 127. The guard is an imm8 in a 16-bit compare (66 83 3E xx), so it sign-extends: 0x7F is the largest",
+    "value that stays positive, and a bigger one would read as negative and refuse everything. 127 rows is 1651",
+    "bytes. The zone side is already past this (instance-cluster-cap gives 32 clusters per zone process), and the",
+    "echo buffer holds 630, so 127 is the whole remaining ceiling.",
+    "",
+    "THE COUNT DOES NOT MOVE. m_NumOfIndunMap stays at 0x557D10; only the array base changes. The old 416 bytes",
+    "at 0x557D14 are left where they are - nothing reads them once the four bases point elsewhere.",
+    "",
+    "A ZERO-FILL REGION IS RIGHT for the array: the count starts at 0 and every entry is written before it is",
+    "read, exactly as the stock .bss array was.",
+    "",
+    "ALSO NEEDED IN THE DATA (merge rule, from the same reading): the zone stores InstanceDungeon rows in a",
+    "pointer array INDEXED BY IDNo (fc_Load: [FieldContainer+0x54078][IDNo]) and fc_IndunMapRegist walks slots",
+    "0..rowcount-1, so IDNo must run contiguously from 0 - a row whose IDNo >= rowcount is never registered with",
+    "the WM at all, and a gap leaves a null slot the loop skips.",
+    "",
+    "HOW TO PROVE IT: put more than 32 InstanceDungeon rows in a zone's Field.txt, start the WM and that zone, and",
+    "read m_NumOfIndunMap (0x557D10) in the live WM - stock refuses the packet and leaves it 0; patched it holds",
+    "the row count, and the zones get the echo."
+  ],
+  "new_section": {
+    "name": ".indun",
+    "size": "0x800",
+    "materialise": false,
+    "execute": false,
+    "note": "Data only, zero-filled: 127 entries of 13 bytes = 1651 B. No code lives here."
+  },
+  "edits": [
+    {
+      "why": "the packet guard: refuse more than `rows` entries instead of 32",
+      "at": "guard_imm8",
+      "width": 1,
+      "expect": "old_rows",
+      "write": "rows"
+    },
+    {
+      "why": "copy-loop base A (list - 0xA + 4)",
+      "at": "base_a",
+      "expect": "old_list - 0xA + off_a",
+      "write": "@newbase - 0xA + off_a"
+    },
+    {
+      "why": "copy-loop base B (list - 0xA + 8)",
+      "at": "base_b",
+      "expect": "old_list - 0xA + off_b",
+      "write": "@newbase - 0xA + off_b"
+    },
+    {
+      "why": "copy-loop base C (list - 0xA + 0)",
+      "at": "base_c",
+      "expect": "old_list - 0xA + off_c",
+      "write": "@newbase - 0xA + off_c"
+    },
+    {
+      "why": "copy-loop base D (list - 0xA + 12)",
+      "at": "base_d",
+      "expect": "old_list - 0xA + off_d",
+      "write": "@newbase - 0xA + off_d"
+    }
+  ]
+}

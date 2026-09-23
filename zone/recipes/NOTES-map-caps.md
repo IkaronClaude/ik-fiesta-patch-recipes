@@ -115,7 +115,7 @@ Fiesta2026on2016/tickets.md.)
 FieldList row on a running zone (zone 3's 38 maps on zone 4). All four READY, zero cap asserts, zero
 `Too many mob`; zone 1 at 75 maps / 215 block infos / 22 clusters, zone 4 at 30 / 209, bot joined.
 
-## 4. The WorldManager side (read 2026-09-14, no recipe yet - 17 of 32 used)
+## 4. The WorldManager side (read 2026-09-14; RECIPE WRITTEN 2026-09-23: worldmanager/recipes/indun-map-list-cap.json, 32 -> 127 rows, statically verified, not yet run - 17 of 32 used)
 
 The WM does not read Field.txt. Each zone, on its S2S connection ack (`wms_NC_MISC_S2SCONNECTION_ACK` ->
 `FieldContainer::fc_IndunMapRegist`, 0x462AF0), sends NC_INSTANCE_DUNGEON_MAP_REGIST_CMD with EVERY

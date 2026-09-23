@@ -72,6 +72,13 @@ CHARACTER_CHAIN = [
     ('char-itemlist-void', []),
 ]
 
+# WorldManager.exe (--target worldmanager): the world-wide instance-dungeon cap. Built and statically verified,
+# not yet run by a WM process - the stack uses 17 of the stock 32 rows, so it is not needed until the 2026
+# instance maps land (Fiesta2026on2016 tickets.md, "HOST THE 56 NON-FIELD 2026 MAPS").
+WORLDMANAGER_CHAIN = [
+    ('indun-map-list-cap', []),
+]
+
 # The chain as it was before handle-layout-2026, for reproducing build/Zone.maps.npc.dmg.exe exactly.
 LEGACY = {'npc-object-pool-cap': []}
 
@@ -104,8 +111,8 @@ def verify(target, recipe, sets, stock, built):
 
 def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument('--target', choices=('zone', 'character'), default='zone')
-    ap.add_argument('--exe', required=True, help='the STOCK Zone.exe (or Character.exe); opened read-only')
+    ap.add_argument('--target', choices=('zone', 'character', 'worldmanager'), default='zone')
+    ap.add_argument('--exe', required=True, help='the STOCK Zone.exe (or Character.exe / WorldManager.exe); opened read-only')
     ap.add_argument('--out', required=True)
     ap.add_argument('--upto', help='stop after this recipe')
     ap.add_argument('--experimental', action='store_true', help='also apply the recipes that have not been booted yet')
@@ -113,7 +120,7 @@ def main():
     a = ap.parse_args()
 
     chain = []
-    for name, sets in (CHARACTER_CHAIN if a.target == 'character' else CHAIN):
+    for name, sets in {'character': CHARACTER_CHAIN, 'worldmanager': WORLDMANAGER_CHAIN}.get(a.target, CHAIN):
         chain.append((name, LEGACY.get(name, sets) if a.legacy else sets))
         if name == a.upto:
             break
