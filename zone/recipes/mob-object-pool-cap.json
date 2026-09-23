@@ -1,0 +1,130 @@
+{
+  "name": "mob-object-pool-cap",
+  "summary": "Zone.exe pre-sizes the mob object pool at 8000 per process and gives kind 5 exactly 8000 handles; past that every spawn is refused with 'MobBreeder::mb_regen : Too many mob'. Raise the pool to 12000 - the mob handle range the 2026 client uses - with the same six constants as the NPC recipe.",
+  "status": "BUILT 2026-09-23. Boot on one zone, then everywhere (operator rule).",
+  "target": {
+    "file": "Zone00/Zone.exe",
+    "sha256": "7ef3532da08194a377558322ca2bd06d1ce5bdb2813796e033173b72d9ff883d",
+    "size": 4673536
+  },
+  "params": {
+    "mobs": 12000
+  },
+  "consts": {
+    "old_mobs":     "0x1F40",
+    "obj_size":     "0x2568",
+    "old_total":    "0x0490F204",
+    "old_fill":     "0x17700",
+    "player_base":  "0x2EE0",
+    "pool_site":    "0x005576D1",
+    "arr_total":    "0x0055C9BE",
+    "arr_count":    "0x0055C9E0",
+    "arr_cookie":   "0x0055C9EF",
+    "fill_bound":   "0x0055CAB5",
+    "make_a_span":  "0x00548E08",
+    "make_b_span":  "0x00556A52",
+    "split_upper":  "0x00633657",
+    "player_base_a": "0x00548E4A",
+    "player_base_b": "0x00559D72"
+  },
+  "why": [
+    "Operator P0, 2026-09-22: 'raise the 8k mob limit' - a recipe instead of moving maps between zones. Zone 1 of the",
+    "2026on2016 stack reached 8,530 regen mobs once the fitted 2026 spawn groups landed (a 2016 zone peaks at 6,544)",
+    "and MobBreeder::mb_regen asserted 'Too many mob' 26 times a second; the fields keep growing with every capture.",
+    "",
+    "The mob pool is the same shape as the NPC one (npc-object-pool-cap, NOTES-object-handles.md), factory type 5,",
+    "pool at manager+0x10C, mob objects 0x2568 bytes each:",
+    "",
+    "    0x005576D0  push 0x1F40                 ; ShineObjectPool::Create element count (manager ctor)",
+    "    0x0055C9BD  push 0x0490F204             ; operator new bytes for the object array: 8000 * 0x2568 + 4",
+    "    0x0055C9DF  push 0x1F40                 ; eh vector ctor element count",
+    "    0x0055C9ED  mov  dword [eax], 0x1F40    ; array cookie, read by the dtor",
+    "    0x0055CAB4  cmp  eax, 0x17700           ; fill loop bound in SLOT BYTES: 8000 * 12",
+    "    0x00548E07  mov  edx, 0x1F40 ; cmp dx, ax ; ja compose ; else 0xFFFF   sohu_SetMobHandle (maker A)",
+    "    0x00556A51  mov  ecx, 0x1F40 ; cmp cx, ax ; ja compose ; else 0xFFFF   ShineMob::so_RemakeHandle (maker B)",
+    "    0x00633656  mov  ecx, 0x1F40 ; cmp cx, ax ; jbe next   sohu_HandleSplit: handle < 0x1F40 -> kind 5, index = handle",
+    "",
+    "Mobs are kind 5 with base 0, so no handle COMPOSITION site carries a base to move; only the split's upper bound",
+    "and the two makers' span checks grow with the pool.",
+    "",
+    "WHY 12000 AND WHY THIS NEEDS handle-layout-2026. The 2026 client splits handles by its own literal ranges:",
+    "mobs 0x0000-0x2EE0 (12000), players from 0x2EE0. handle-layout-2026 already moved the zone's player base to",
+    "0x2EE0 (sohu_SetPlayerHandle 0x548E49 and ShinePlayer::so_RemakeHandle 0x559D71) and left 0x1F40-0x2EE0",
+    "unassigned. This recipe hands exactly that gap to the mobs, so the zone's mob range becomes the client's. With",
+    "the STOCK layout (players from 0x1F40) a 12000-mob pool would compose player handles inside the mob range; the",
+    "two player_base edits below are no-op writes that REFUSE to apply unless the player base is 0x2EE0 already.",
+    "Raising 'mobs' past 0x2EE0 needs the player range moved first, and the client would not follow anyway.",
+    "",
+    "MEMORY. 4000 more mob objects * 0x2568 B = 37 MB per zone process, allocated at start-up.",
+    "",
+    "NOT TOUCHED. RaidSystem::CreateRaid / ResetRaid write 0x1E80 and 0x1F40 as raid handle values (its own id space,",
+    "compared only inside RaidSystem::FindRaid); the raid system's 2016 behaviour is unchanged. AbnormalState buffers",
+    "of 0x1F40 bytes and the 0x1F40-byte item/quest save buffers are unrelated uses of the same number.",
+    "",
+    "HOW TO PROVE IT: a zone hosting > 8000 regen mobs (make_stack without the MOVES that spread zone 1 out, or",
+    "integrate_harvest --deploy's per-zone regen count) boots with no 'Too many mob' in its Assert log, and",
+    "tools/zone_npcpool_probe.pl (Fiesta2026on2016) reads pool +0x10C with 12000 slots, all carrying an object."
+  ],
+  "edits": [
+    {
+      "why": "manager ctor: mob pool element count",
+      "at": "pool_site",
+      "expect": "old_mobs",
+      "write": "mobs"
+    },
+    {
+      "why": "som_Initialize: operator new bytes for the mob object array (mobs * 0x2568 + 4)",
+      "at": "arr_total",
+      "expect": "old_total",
+      "write": "mobs * obj_size + 4"
+    },
+    {
+      "why": "som_Initialize: eh vector ctor element count",
+      "at": "arr_count",
+      "expect": "old_mobs",
+      "write": "mobs"
+    },
+    {
+      "why": "som_Initialize: array cookie",
+      "at": "arr_cookie",
+      "expect": "old_mobs",
+      "write": "mobs"
+    },
+    {
+      "why": "som_Initialize: fill loop bound in slot bytes (mobs * 12)",
+      "at": "fill_bound",
+      "expect": "old_fill",
+      "write": "mobs * 12"
+    },
+    {
+      "why": "sohu_SetMobHandle: index < span",
+      "at": "make_a_span",
+      "expect": "old_mobs",
+      "write": "mobs"
+    },
+    {
+      "why": "ShineMob::so_RemakeHandle: index < span",
+      "at": "make_b_span",
+      "expect": "old_mobs",
+      "write": "mobs"
+    },
+    {
+      "why": "sohu_HandleSplit: kind 5 upper bound",
+      "at": "split_upper",
+      "expect": "old_mobs",
+      "write": "mobs"
+    },
+    {
+      "why": "GUARD: the player base must already be 0x2EE0 (handle-layout-2026) - sohu_SetPlayerHandle",
+      "at": "player_base_a",
+      "expect": "player_base",
+      "write": "player_base"
+    },
+    {
+      "why": "GUARD: the player base must already be 0x2EE0 (handle-layout-2026) - ShinePlayer::so_RemakeHandle",
+      "at": "player_base_b",
+      "expect": "player_base",
+      "write": "player_base"
+    }
+  ]
+}
