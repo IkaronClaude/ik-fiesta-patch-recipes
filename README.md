@@ -49,6 +49,8 @@ client/          the client:    recipes/                                  - see 
 # the patched exes, from the stock ones (never in place; every recipe re-verified on the result)
 python build.py --exe Z:/ServerSource/Zone00/Zone.exe --out build/Zone.hooked.exe --experimental
 python build.py --target character --exe Z:/ServerSource/Character/Character.exe --out build/Character.hooked.exe
+# WorldManager.exe: the world-wide instance-dungeon cap (32 -> 127 rows); only needed past 32 rows
+python build.py --target worldmanager --exe <Server2016>/WorldManager/WorldManager.exe --out build/WorldManager.hooked.exe
 
 # the loader and the plugins (Visual Studio, 32-bit toolchain)
 common\loader\build.bat                          # -> build\fiestahook.dll
