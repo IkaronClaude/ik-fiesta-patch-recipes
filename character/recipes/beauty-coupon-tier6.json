@@ -26,7 +26,11 @@
     "scan_cave": 80,
     "info_hook": "0x00418996",
     "info_resume": "0x004189DB",
-    "info_cave": 128
+    "info_cave": 128,
+    "style_slot": 192,
+    "style_cave": 200,
+    "style_call": "0x00418142",
+    "stock_reader": "0x0046A290"
   },
   "why": [
     "Operator, 2026-09-23: coupons go Basic -> Deluxe, and 2026 adds one above; a style whose grade is above your best",
@@ -65,14 +69,18 @@
     "missing row leaves 0xFFFF, which no item carries.",
     "",
     "NEEDS in the item table: HairShop06 (the new top bound - if it were missing the bound would read 0xFFFF and",
-    "every id above HairShop01 would count as a coupon). The merged ItemInfo has both rows."
+    "every id above HairShop01 would count as a coupon). The merged ItemInfo has both rows.",
+    "",
+    "INVENTORY PAST 144: the scan reads the inventory through the 144-limited wrapper 0x46A290 into a 144-record",
+    "stack list, so a coupon past row 144 was invisible. The call at 0x418142 now goes through a slot the char_void",
+    "plugin fills (part 3): it reads all 192 cells and passes the coupon rows first. No plugin = the stock read."
   ],
   "new_section": {
     "name": ".beauty6",
-    "size": "0xC0",
+    "size": "0x100",
     "materialise": true,
     "execute": true,
-    "note": "+0x00 'HairShop06', +0x10 'HairShop00_TD', +0x20 u16 HairShop00_TD id (written by the loader cave), +0x30 loader cave, +0x50 scan cave. Writable: the loader writes the id. +0x80 get-info cave."
+    "note": "+0x00 'HairShop06', +0x10 'HairShop00_TD', +0x20 u16 HairShop00_TD id (written by the loader cave), +0x30 loader cave, +0x50 scan cave. Writable: the loader writes the id. +0x80 get-info cave. +0xC0 style-read slot (filled by the char_void plugin; null = stock), +0xC8 its cave."
   },
   "edits": [
     {
@@ -221,6 +229,12 @@
       "width": 1,
       "expect": "0x20",
       "write": "0x24"
+    },
+    {
+      "why": "scan: the inventory read goes through the .beauty6 slot (char_void part 3: 192 cells, coupons first)",
+      "at": "style_call + 1",
+      "expect": "stock_reader - (style_call + 5)",
+      "write": "@newbase + style_cave - (style_call + 5)"
     }
   ],
   "code": [
@@ -296,6 +310,30 @@
         "E9",
         {
           "rel32": "info_resume"
+        }
+      ]
+    },
+    {
+      "why": "style-read slot, null until the char_void plugin fills it",
+      "at": "@newbase + style_slot",
+      "emit": [
+        "00 00 00 00"
+      ]
+    },
+    {
+      "why": "style-read cave: the plugin's reader when the slot is set, else the stock 144-row wrapper",
+      "at": "@newbase + style_cave",
+      "emit": [
+        "A1",
+        {
+          "u32": "@newbase + style_slot"
+        },
+        "85 C0",
+        "74 02",
+        "FF E0",
+        "E9",
+        {
+          "rel32": "stock_reader"
         }
       ]
     }
