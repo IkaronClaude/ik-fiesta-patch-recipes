@@ -1,10 +1,11 @@
 // Does the hook machinery actually work? Runs as a plain 32-bit exe, no Zone.exe needed.
+// Build + run: common	estuild.bat  (the same 32-bit toolchain as the loader).
 //
 // The risky part of a trampoline detour is insn_len(): copy a wrong number of bytes and the relocated
 // prologue is garbage, which shows up as a crash somewhere unrelated. So the test detours real functions,
 // checks the replacement ran, checks the trampoline still reaches the original behaviour, and checks
 // uninstall puts the bytes back.
-#include "../src/hook.h"
+#include <hook_core.h>
 #include <stdio.h>
 
 static int g_calls = 0;
@@ -26,7 +27,7 @@ struct Target {
 };
 
 typedef int(__fastcall* AddThunk)(void* self, void* edx, int a, int b);
-static zone::Detour g_detour;
+static hook::Detour g_detour;
 static int g_intercepted = 0;
 
 static int __fastcall add_replacement(void* self, void* edx, int a, int b) {
@@ -41,7 +42,7 @@ static int __declspec(noinline) triple(int x) {
     return x * 3;
 }
 typedef int(*TripleFn)(int);
-static zone::Detour g_detour2;
+static hook::Detour g_detour2;
 static int __cdecl triple_replacement(int x) {
     return ((TripleFn)g_detour2.trampoline)(x) + 1;
 }
@@ -56,14 +57,14 @@ int main() {
     const unsigned char mov_eax_ecx8[]={ 0x8B, 0x41, 0x08 };
     const unsigned char push_imm32[] = { 0x68, 0x44, 0x33, 0x22, 0x11 };
     const unsigned char mov_dw_imm[] = { 0xC7, 0x45, 0xFC, 0, 0, 0, 0 };
-    CHECK(zone::insn_len(push_ebp) == 1,    "insn_len push ebp = 1");
-    CHECK(zone::insn_len(mov_ebp_esp) == 2, "insn_len mov ebp,esp = 2");
-    CHECK(zone::insn_len(sub_esp_8) == 3,   "insn_len sub esp,8 = 3");
-    CHECK(zone::insn_len(mov_eax_ecx8) == 3,"insn_len mov eax,[ecx+8] = 3");
-    CHECK(zone::insn_len(push_imm32) == 5,  "insn_len push imm32 = 5");
-    CHECK(zone::insn_len(mov_dw_imm) == 7,  "insn_len mov [ebp-4],imm32 = 7");
+    CHECK(hook::insn_len(push_ebp) == 1,    "insn_len push ebp = 1");
+    CHECK(hook::insn_len(mov_ebp_esp) == 2, "insn_len mov ebp,esp = 2");
+    CHECK(hook::insn_len(sub_esp_8) == 3,   "insn_len sub esp,8 = 3");
+    CHECK(hook::insn_len(mov_eax_ecx8) == 3,"insn_len mov eax,[ecx+8] = 3");
+    CHECK(hook::insn_len(push_imm32) == 5,  "insn_len push imm32 = 5");
+    CHECK(hook::insn_len(mov_dw_imm) == 7,  "insn_len mov [ebp-4],imm32 = 7");
     const unsigned char nonsense[] = { 0x0F, 0x0B };
-    CHECK(zone::insn_len(nonsense) == 0,    "insn_len refuses what it does not know");
+    CHECK(hook::insn_len(nonsense) == 0,    "insn_len refuses what it does not know");
 
     // -- a __thiscall method, the packet-handler shape
     Target t; t.value = 100;
@@ -75,7 +76,7 @@ int main() {
     union { int (__thiscall Target::*pm)(int, int); void* p; } cvt;
     cvt.pm = &Target::add;
     void* target = cvt.p;
-    bool ok = zone::detour(target, (void*)add_replacement, &g_detour);
+    bool ok = hook::detour(target, (void*)add_replacement, &g_detour);
     CHECK(ok, "detour installed on a __thiscall method");
     if (ok) {
         g_calls = 0;
@@ -83,7 +84,7 @@ int main() {
         CHECK(g_intercepted == 1, "replacement ran");
         CHECK(g_calls == 1, "trampoline reached the original body");
         CHECK(after == 1030, "replacement could change the result (103 * 10)");
-        CHECK(zone::undetour(&g_detour), "undetour restored the bytes");
+        CHECK(hook::undetour(&g_detour), "undetour restored the bytes");
         g_intercepted = 0;
         int restored = t.add(1, 2);
         CHECK(restored == 103 && g_intercepted == 0, "original behaviour is back");
@@ -92,16 +93,21 @@ int main() {
     // -- a plain __cdecl function
     const unsigned char* tb = (const unsigned char*)(void*)triple;
     printf("  ..    triple starts: %02X %02X %02X %02X %02X %02X  (insn_len %u)\n",
-           tb[0], tb[1], tb[2], tb[3], tb[4], tb[5], (unsigned)zone::insn_len(tb));
-    bool ok2 = zone::detour((void*)triple, (void*)triple_replacement, &g_detour2);
+           tb[0], tb[1], tb[2], tb[3], tb[4], tb[5], (unsigned)hook::insn_len(tb));
+    bool ok2 = hook::detour((void*)triple, (void*)triple_replacement, &g_detour2);
     CHECK(ok2, "detour installed on a __cdecl function");
     if (ok2) {
         CHECK(triple(5) == 16, "trampoline + replacement composed (5*3 + 1)");
-        CHECK(zone::undetour(&g_detour2), "undetour restored the bytes");
+        CHECK(hook::undetour(&g_detour2), "undetour restored the bytes");
         CHECK(triple(5) == 15, "original behaviour is back");
     }
 
-    // -- vtable swap
+    // -- vtable swap: the mechanism quest_gate and void_bag use on ShinePlayer
+    void* fake_vt[3] = { (void*)0x1111, (void*)triple, (void*)0x3333 };
+    void* prev = hook::vtable_set(fake_vt, 1, (void*)triple_replacement);
+    CHECK(prev == (void*)triple && fake_vt[1] == (void*)triple_replacement, "vtable_set swaps one slot and returns the old entry");
+    CHECK(fake_vt[0] == (void*)0x1111 && fake_vt[2] == (void*)0x3333, "vtable_set leaves the neighbours alone");
+
     printf("\n%s (%d failure%s)\n", failures ? "FAILED" : "PASSED", failures, failures == 1 ? "" : "s");
     return failures ? 1 : 0;
 }
