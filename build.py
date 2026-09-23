@@ -76,6 +76,8 @@ CHARACTER_CHAIN = [
     # Beauty coupons: HairShop06 (2026 'Extravagant', grade-6 styles) becomes the top tier - the per-tier array
     # widens 6 -> 7 so it does not collide with the gender-change slot - and HairShop00_TD counts as Basic.
     ('beauty-coupon-tier6', []),
+    # Titles past type 127 load and save (2026 has 150); the zone half is the title_ext plugin.
+    ('character-title-types', []),
 ]
 
 # WorldManager.exe (--target worldmanager): the world-wide instance-dungeon cap. Built and statically verified,
