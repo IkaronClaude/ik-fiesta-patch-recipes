@@ -1,0 +1,105 @@
+{
+  "name": "creation-grade-2026",
+  "summary": "Character creation checks the chosen hair, hair colour and face rows for Grade 0 - the 2016 starter style. 2026 renumbered the grades (no 0 at all; starter = 1), so with the 2026 HairInfo / HairColorInfo / FaceInfo every creation from the 2026 client failed with AVATAR_CREATEFAIL 0x183. Make the check Grade == 1.",
+  "status": "BUILT 2026-09-23. Boot on the stack's Character, then create a character from the 2026 client.",
+  "target": {
+    "file": "Character/Character.exe",
+    "sha256": "2889640536a271468ef17cc6c74bd6f8799222e3bd95b81d53ea59d41c5a9e1c",
+    "size": 927744
+  },
+  "params": {},
+  "consts": {
+    "site": "0x004043A6"
+  },
+  "why": [
+    "Operator, 2026-09-23: character creation from the 2026 client gets no answer at all. The bridge's log showed the",
+    "client's NC_AVATAR_CREATE_REQ answered by NC_AVATAR_CREATEFAIL_ACK err 0x0183 in 17 ms, three times.",
+    "",
+    "Character.exe's reply builder (0x404B30) maps the create worker's result: >0 success, -1 -> 0x182, -2 -> 0x183,",
+    "-3 -> 0x184, else 0x181. The worker (0x404280) returns -2 at 0x404B09 from exactly one place before it ever",
+    "reaches the database - the appearance check. It looks the chosen hair, colour and face up (HairInfo holder",
+    "0x6EC870, HairColorInfo 0x6EC830, FaceInfo 0x6EC7F0, each a row lookup by id through 0x43FDC0), requires each",
+    "row to exist, and then:",
+    "",
+    "    0x4043A6  cmp byte [ecx+0x3D], bl ; jne fail     HairColorInfo.Grade      (bl = 0 in this function)",
+    "    0x4043AF  cmp byte [edx+0x41], bl ; jne fail     HairInfo.Grade",
+    "    0x4043B8  cmp byte [eax+0x21], bl ; jne fail     FaceInfo.Grade",
+    "",
+    "The offsets are the Grade column in each in-memory row - the style-change handler (0x4182B0) reads the same three",
+    "offsets as the grade that picks a style ticket. Replayed with the exact values the client sent, p_Char_Create",
+    "itself succeeds; only this check refuses.",
+    "",
+    "2016 grades: 0 = starter (creatable), 1 = ?, 4 / 5 = shop tiers. 2026 grades: 1 = starter (20 hairs, 10 colours,",
+    "20 faces), 4 / 5 / 6 = shop tiers - there is no 0 anywhere, and 2026 promoted some 2016 shop styles to starter",
+    "(Face 20: 2016 grade 4, 2026 grade 1). The 2026 client offers exactly its grade-1 rows on the creation screen.",
+    "The operator's call: use the 2026 tables as they are and make the exe speak 2026.",
+    "",
+    "THE PATCH rewrites the 27 bytes in place - no cave - comparing with 1 instead of bl, with short jumps to one",
+    "shared fail stub:",
+    "",
+    "    cmp byte [ecx+0x3D],1 ; jne stub ; cmp byte [edx+0x41],1 ; jne stub ; cmp byte [eax+0x21],1 ; je 0x4043C1",
+    "    stub: jmp 0x404B09 ; nop x4",
+    "",
+    "Nothing after 0x4043C1 reads the flags, and the register state is unchanged (the compares only read memory).",
+    "",
+    "NOT CHANGED, and why it is still right: the style-change path (0x4182B0) derives a ticket item as",
+    "base + max(grade) - 1, with grade 0 treated as 1. So 2026 grades 1 / 4 / 5 pick exactly the tickets 2016's",
+    "0-1 / 4 / 5 did. 2026's new tier 6 reaches base + 5, a ticket 2016 never used - see the ticket in",
+    "Fiesta2026on2016's tickets.md.",
+    "",
+    "CONSEQUENCE: with the 2026 tables there are no Grade-0 rows, so a 2016 CLIENT's creation screen (which lists",
+    "grade 0) offers no hair, colour or face. The 2026 client is the target; the merged 2016 client is not."
+  ],
+  "edits": [
+    {
+      "why": "creation grade check, bytes +0..+3",
+      "at": "site + 0",
+      "expect": "0xF3D5938",
+      "write": "0x13D7980"
+    },
+    {
+      "why": "creation grade check, bytes +4..+7",
+      "at": "site + 4",
+      "expect": "0x75A85",
+      "write": "0x7A800C75"
+    },
+    {
+      "why": "creation grade check, bytes +8..+11",
+      "at": "site + 8",
+      "expect": "0x415A3800",
+      "write": "0x6750141"
+    },
+    {
+      "why": "creation grade check, bytes +12..+15",
+      "at": "site + 12",
+      "expect": "0x751850F",
+      "write": "0x1217880"
+    },
+    {
+      "why": "creation grade check, bytes +16..+19",
+      "at": "site + 16",
+      "expect": "0x58380000",
+      "write": "0x4CE90974"
+    },
+    {
+      "why": "creation grade check, bytes +20..+23",
+      "at": "site + 20",
+      "expect": "0x48850F21",
+      "write": "0x90000007"
+    },
+    {
+      "why": "creation grade check, bytes +24..+25",
+      "at": "site + 24",
+      "expect": "0x7",
+      "write": "0x9090",
+      "width": 2
+    },
+    {
+      "why": "creation grade check, bytes +26..+26",
+      "at": "site + 26",
+      "expect": "0x0",
+      "write": "0x90",
+      "width": 1
+    }
+  ]
+}
