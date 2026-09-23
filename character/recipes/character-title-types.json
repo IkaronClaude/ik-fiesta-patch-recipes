@@ -1,0 +1,63 @@
+{
+  "name": "character-title-types",
+  "summary": "Character.exe drops every title row of type >= 128 when it builds the login title block, and refuses to save the usable state of one when a title is set current. 2026 has 150 title types (22 new, 8 of them quest rewards). Keep the 128 bound only where it indexes the 128-entry counter array; let the owned-title list and the set-current save carry any byte type.",
+  "status": "BUILT 2026-09-23 with the zone plugin title_ext (which does the zone half). Statically verified.",
+  "target": {
+    "file": "Character/Character.exe",
+    "sha256": "2889640536a271468ef17cc6c74bd6f8799222e3bd95b81d53ea59d41c5a9e1c",
+    "size": 927744
+  },
+  "params": {},
+  "consts": {
+    "load_site": "0x0046D349",
+    "load_continue": "0x0046D351",
+    "load_list": "0x0046D359",
+    "load_skip": "0x0046D3B1",
+    "cave": 0
+  },
+  "why": [
+    "The login title block (CHARACTER_TITLE_READBLOCK: flags, u64 TitleValues[128], u16 NumOfTitle, CT_INFO list) is",
+    "built at 0x46D2C0 from p_Char_GetTitleAll's rows {nType, nElementNo, nElementValue}:",
+    "",
+    "    0x46D349  cmp cl, 0x80 ; jae skip          <- EVERY row of type >= 128 dropped",
+    "              element 0..3 -> a list entry {type, element | value << 6}",
+    "              element 0xFF -> TitleValues[type] = value        (the only use that needs type < 128)",
+    "              type 0 elements 0..2 -> the current-title fields",
+    "",
+    "The DB column is a tinyint, p_Char_SetTitle takes any type, and fc_NC_CT_DB_SET_CMD saves a new title with",
+    "no bound - so a 2026 title was stored and then never loaded. The cave keeps the bound for counter rows only:",
+    "",
+    "    cmp cl, 0x80 ; jb stock_path          (type < 128: exactly the stock code from 0x46D351)",
+    "    cmp al, 0xFF ; je skip                (a counter row for a type the 128-entry array cannot hold)",
+    "    cmp al, 4    ; jae skip               (the stock element check)",
+    "    jmp 0x46D359                          (the list path: type != 0 -> 0x46D385 -> list entry)",
+    "",
+    "fc_NC_CT_SET_CURRENT_DB_CMD (0x413050) saves UseTitle / UseAbleTitle through 0x46D500 behind cmp al, 0x80;",
+    "raised to 0xFF (no title has that type) so setting a 2026 title current keeps its usable state.",
+    "",
+    "LIST SIZE: the list grows by one 2-byte entry per owned (type, element); the zone keeps 512 of them",
+    "(CCharacterTitle +0x88..+0x488). 128 types x 4 elements was already 512, and a character owns far fewer.",
+    "The zone half (status per type past 127) is zone/plugins/title_ext."
+  ],
+  "new_section": {
+    "name": ".titles",
+    "size": "0x40",
+    "materialise": true,
+    "execute": true,
+    "note": "The login-block cave."
+  },
+  "edits": [
+    { "why": "login block: mov al,[ebp-1] first (the 3 bytes after the replaced cmp/jae)", "at": "load_site", "expect": "0x7380F980", "write": "0xE9FF458A" },
+    { "why": "login block: jmp to the cave (rel32)", "at": "load_site + 4", "expect": "0xFF458A63", "write": "@newbase + cave - (load_site + 8)" },
+    { "why": "set-current save: UseTitle bound 0x80 -> 0xFF", "at": "0x004130E2", "width": 1, "expect": "0x80", "write": "0xFF" },
+    { "why": "set-current save: UseAbleTitle bound 0x80 -> 0xFF", "at": "0x00413137", "width": 1, "expect": "0x80", "write": "0xFF" }
+  ],
+  "code": [
+    { "why": "cave: the 128 bound only for counter rows",
+      "at": "@newbase + cave",
+      "emit": ["80 F9 80", "72 0D", "3C FF", "74 0E", "3C 04", "73 0A",
+               "E9", {"rel32": "load_list"},
+               "E9", {"rel32": "load_continue"},
+               "E9", {"rel32": "load_skip"}] }
+  ]
+}
