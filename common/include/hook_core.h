@@ -149,7 +149,8 @@ inline void log_init(const char* tag, const wchar_t* filename = L"fiestahook.log
 }
 
 // wvsprintfA is USER32, not the CRT, so this works in the no-CRT loader too. It understands
-// %s %d %u %x %c %% and width/precision. It does NOT do %p or floating point - use %x for pointers.
+// %s %d %u %x %c %% and width/precision. It does NOT do %p, floating point or 64-BIT integers (%llu / %I64u read
+// the wrong arguments and CRASH the process - zone04, 2026-09-24): use %x for pointers, format 64-bit values yourself.
 inline void log(const char* fmt, ...) {
     if (detail::g_log_ready) EnterCriticalSection(&detail::g_log_lock);
 
