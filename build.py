@@ -75,6 +75,9 @@ EXPERIMENTAL = [
     # A LINK that cannot start its quest (repeatable past LevelMax) closed the script silently -> the 2026 dialog hung
     # on "Okay. I'll do whatever it takes!". Send QSC_END first, like quest-script-end-notify does at END.
     ('quest-link-fail-notify', []),
+    # Q49: generic handler templates for AbStataIndex 792..2047 - without them aeo_Set never ATTACHES a 2026 state
+    # past 791 (no stat effect, no packet). Needs abstate-index-cap + abstate-container-cap (same slots).
+    ('abstate-template-cap', []),
     # NOT a recipe: the disconnect a same-zone link onto an unmarkable spot causes (error 1669) cannot be skipped -
     # so_Unmark has already run and the exe never re-marks, so the player ends up in limbo (tried 2026-09-23,
     # withdrawn). The quest_gate plugin pre-checks a GM &linkto destination instead.

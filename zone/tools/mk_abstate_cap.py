@@ -131,6 +131,31 @@ def main():
                                   'expect': '0x%X' % OLD_SLOTS, 'write': 'slots'})
                     bounds += 1
             off += ins.size
+    # 4 ---- the bounds of INLINED as_FromIndex copies (found 2026-09-24 from a zone03 crash: asl_CanEnchant read
+    # list[idx] with its own `cmp edi, 0x318` guard, took the "invalid" branch for a 2026 index and dereferenced 0).
+    # Every indexed read of the list ([reg*4 + list]) outside the methods has such a guard a few instructions
+    # before it; each gets `slots`. The linear sweep's instruction list is reused.
+    insns = sorted({ins.address: ins for ins in at_pos.values()}.values(), key=lambda i: i.address)
+    list_lo, list_hi = OBJ + LIST_OFF, OBJ + LIST_OFF + OLD_SLOTS * 4
+    inline = 0
+    for k, ins in enumerate(insns):
+        if method_of(ins.address):
+            continue
+        if not any(o.type == X.X86_OP_MEM and o.mem.index != 0 and o.mem.scale == 4 and list_lo <= (o.mem.disp & 0xFFFFFFFF) < list_hi
+                   for o in ins.operands):
+            continue
+        guard = [q for q in insns[max(0, k - 14):k] if q.mnemonic == 'cmp' and
+                 any(o.type == X.X86_OP_IMM and (o.imm & 0xFFFFFFFF) == OLD_SLOTS for o in q.operands)]
+        assert guard, 'an indexed list read with no 0x318 guard before it: 0x%08X %s %s' % (ins.address, ins.mnemonic, ins.op_str)
+        q = guard[-1]
+        pos = q.address - va0 + q.size - 4
+        assert struct.unpack_from('<I', d, pos)[0] == OLD_SLOTS, hex(q.address)
+        at = '0x%08X' % (va0 + pos)
+        if any(e['at'] == at for e in edits):
+            continue
+        edits.append({'why': 'inlined as_FromIndex bound (%s %s at 0x%08X, guards the read at 0x%08X)' % (q.mnemonic, q.op_str, q.address, ins.address),
+                      'at': at, 'expect': '0x%X' % OLD_SLOTS, 'write': 'slots'})
+        inline += 1
     # no other section may hold an address into the object (a vtable, a pointer table)
     for s2 in pe.sections:
         if s2 is sec:
@@ -176,6 +201,8 @@ def main():
             '    lookup by id or index) also move by the growth',
             '  - every [this + 0xE18] / [this + 0x121C] inside the six AbState methods (%d)      -> + the growth' % tail_refs,
             '  - every `0x318` the methods compare an index against (%d)                          -> slots' % bounds,
+            '  - every INLINED copy of as_FromIndex elsewhere (%d): the `cmp ..., 0x318` guarding an indexed read of the list' % inline,
+            '    -> slots (added 2026-09-24: the copy in asl_CanEnchant sent index 898 down its "invalid" branch and read 0 - a zone crash)',
             '',
             'The old 0x1620 bytes of .data are simply no longer referenced. No other section holds an address into the',
             'object (checked). The list is indexed by AbStataIndex, the id the client sends and receives, so it cannot',
@@ -191,7 +218,7 @@ def main():
     out = os.path.join(os.path.dirname(HERE), 'recipes', 'abstate-index-cap.json')
     json.dump(recipe, open(out, 'w', encoding='utf-8', newline='\n'), indent=2)
     print('%d edits -> %s' % (len(edits), out))
-    print('  absolute refs %d, tail-member sites %d, bounds %d' % (abs_refs, tail_refs, bounds))
+    print('  absolute refs %d, tail-member sites %d, bounds %d, inlined bounds %d' % (abs_refs, tail_refs, bounds, inline))
     print('  left alone (not AbState code):')
     for s in strays:
         print('    ' + s)
