@@ -1,0 +1,1137 @@
+{
+  "name": "abstate-container-cap",
+  "summary": "AbnormalStateContainer for `slots` AbStataIndexes: abstateidentarray moves to a section sized for them, and the object state bitset (792 bits) is bounds-checked. Without it a 2026 state past 792 corrupts the handler table (zone01 crash 2026-09-24).",
+  "status": "GENERATED 2026-09-24; BOOTED on zone03 the same day and live-tested there: a bot used Gold Dragon Grace Grace (AbStataIndex 1093 -> the relocated identarray entry filled, abstatetemplate 228-230 intact) and then Shield Increase T1 (229, applied, zone up) - the sequence that crashed zone01 on the old exe. Then rolled out to every zone of the stack in build/Zone.hooked.exe.",
+  "target": {
+    "file": "Zone00/Zone.exe",
+    "sha256": "7ef3532da08194a377558322ca2bd06d1ce5bdb2813796e033173b72d9ff883d",
+    "size": 4673536
+  },
+  "params": {
+    "slots": 2048
+  },
+  "consts": {},
+  "why": [
+    "rows, AbStataIndex up to 1093), two unchecked writes indexed by AbStataIndex ran past 792-slot storage:",
+    "",
+    "  1. ?abstateidentarray (0x875228) = AbnormalStateIdentifier[792], 12 bytes each, BSS. AbstateElementInObject::aeo_Set",
+    "     writes identarray[idx] (0x40A47F) BEFORE it checks idx against abstatetemplate's count (0x40A48D); every",
+    "     reader goes through it too. Index 1093 (Gold Dragon's Grace) lands on 0x878564 - inside ?abstatetemplate,",
+    "     over the handler objects of AbStataIndex 228/229 - and the next Shield Increase T1 (229) called a null vtable",
+    "     slot (aeo_Set+0x176, EIP 0). Fix: the array moves to a new section sized for `slots`; every reference is an",
+    "     indexed [reg*4 + disp32] with disp = base + 0 / 4 / 8 / 0xA, rewritten to the same field of the new array.",
+    "  2. ShineObject::so_AbnormalState_BitSet / BitReset (0x401A00 / 0x401A40) set bit idx of the object's",
+    "     ABNORMAL_STATE_BIT (99 bytes = 792 bits, vtable+0x4A0) with no bound: index 1093 writes 37 bytes past it, into",
+    "     the object. That array is part of the object and of the 2016 wire (99 bytes), so it cannot grow here: both",
+    "     get a bound check (idx >= 792 -> return), i.e. a state past 792 is not in the view bitset others receive. The",
+    "     2026 wire carries 136 bytes; widening the object + wire is the open part of feature A1.",
+    "",
+    "abstatetemplate (the per-index handler objects) is NOT touched: all 9 readers compare idx against its count (792)",
+    "first, so an index past it simply has no special handler - the stock behaviour for any state without one.",
+    "",
+    "Sites (all found by decoding the stock exe): 172 indexed references (actor 35, argument 135, word+8 1, word+0xA 1) and the two bitset prologues."
+  ],
+  "new_section": {
+    "name": ".absc",
+    "size": "0x40 + slots * 12",
+    "materialise": true,
+    "execute": true,
+    "note": "Two 0x14-byte bound-check stubs at +0x00 / +0x20, then the zero-filled identarray at +0x40 (materialised because the stubs are code)."
+  },
+  "code": [
+    {
+      "why": "so_AbnormalState_BitSet: return when idx >= 792 (the object bitset is 792 bits)",
+      "at": "@newbase + 0x0",
+      "emit": [
+        "817C2404",
+        {
+          "u32": "0x318"
+        },
+        "730A",
+        "558BEC8B01",
+        "E9",
+        {
+          "rel32": "0x401A05"
+        },
+        "C20400"
+      ]
+    },
+    {
+      "why": "so_AbnormalState_BitReset: return when idx >= 792 (the object bitset is 792 bits)",
+      "at": "@newbase + 0x20",
+      "emit": [
+        "817C2404",
+        {
+          "u32": "0x318"
+        },
+        "730A",
+        "558BEC8B01",
+        "E9",
+        {
+          "rel32": "0x401A45"
+        },
+        "C20400"
+      ]
+    }
+  ],
+  "edits": [
+    {
+      "why": "identarray[i].argument  (mov ecx, dword ptr [edx*4 + 0x87522c] at 0x0040121A)",
+      "at": "0x0040121D",
+      "expect": "0x87522C",
+      "write": "@newbase + 0x44"
+    },
+    {
+      "why": "identarray[i].argument  (mov eax, dword ptr [eax*4 + 0x87522c] at 0x00401236)",
+      "at": "0x00401239",
+      "expect": "0x87522C",
+      "write": "@newbase + 0x44"
+    },
+    {
+      "why": "identarray[i].actor  (mov eax, dword ptr [eax*4 + 0x875228] at 0x00401246)",
+      "at": "0x00401249",
+      "expect": "0x875228",
+      "write": "@newbase + 0x40"
+    },
+    {
+      "why": "so_AbnormalState_BitSet: jmp to the bound check (E9)",
+      "at": "0x00401A00",
+      "width": 1,
+      "expect": "0x55",
+      "write": "0xE9"
+    },
+    {
+      "why": "so_AbnormalState_BitSet: jmp rel32",
+      "at": "0x00401A01",
+      "expect": "0x018BEC8B",
+      "write": "@newbase + 0x0 - 0x401A05"
+    },
+    {
+      "why": "so_AbnormalState_BitReset: jmp to the bound check (E9)",
+      "at": "0x00401A40",
+      "width": 1,
+      "expect": "0x55",
+      "write": "0xE9"
+    },
+    {
+      "why": "so_AbnormalState_BitReset: jmp rel32",
+      "at": "0x00401A41",
+      "expect": "0x018BEC8B",
+      "write": "@newbase + 0x20 - 0x401A45"
+    },
+    {
+      "why": "identarray[i].argument  (mov ecx, dword ptr [edx*4 + 0x87522c] at 0x00401BFD)",
+      "at": "0x00401C00",
+      "expect": "0x87522C",
+      "write": "@newbase + 0x44"
+    },
+    {
+      "why": "identarray[i].actor  (mov ecx, dword ptr [eax*4 + 0x875228] at 0x00401D55)",
+      "at": "0x00401D58",
+      "expect": "0x875228",
+      "write": "@newbase + 0x40"
+    },
+    {
+      "why": "identarray[i].argument  (mov edx, dword ptr [ecx*4 + 0x87522c] at 0x00401D6B)",
+      "at": "0x00401D6E",
+      "expect": "0x87522C",
+      "write": "@newbase + 0x44"
+    },
+    {
+      "why": "identarray[i].argument  (mov esi, dword ptr [eax*4 + 0x87522c] at 0x00401E0E)",
+      "at": "0x00401E11",
+      "expect": "0x87522C",
+      "write": "@newbase + 0x44"
+    },
+    {
+      "why": "identarray[i].actor  (mov ecx, dword ptr [eax*4 + 0x875228] at 0x00402015)",
+      "at": "0x00402018",
+      "expect": "0x875228",
+      "write": "@newbase + 0x40"
+    },
+    {
+      "why": "identarray[i].argument  (mov edx, dword ptr [ecx*4 + 0x87522c] at 0x0040202B)",
+      "at": "0x0040202E",
+      "expect": "0x87522C",
+      "write": "@newbase + 0x44"
+    },
+    {
+      "why": "identarray[i].argument  (mov eax, dword ptr [ecx*4 + 0x87522c] at 0x004021E4)",
+      "at": "0x004021E7",
+      "expect": "0x87522C",
+      "write": "@newbase + 0x44"
+    },
+    {
+      "why": "identarray[i].argument  (mov eax, dword ptr [ecx*4 + 0x87522c] at 0x00402207)",
+      "at": "0x0040220A",
+      "expect": "0x87522C",
+      "write": "@newbase + 0x44"
+    },
+    {
+      "why": "identarray[i].argument  (mov eax, dword ptr [ecx*4 + 0x87522c] at 0x00402254)",
+      "at": "0x00402257",
+      "expect": "0x87522C",
+      "write": "@newbase + 0x44"
+    },
+    {
+      "why": "identarray[i].argument  (mov eax, dword ptr [ecx*4 + 0x87522c] at 0x0040227A)",
+      "at": "0x0040227D",
+      "expect": "0x87522C",
+      "write": "@newbase + 0x44"
+    },
+    {
+      "why": "identarray[i].argument  (mov eax, dword ptr [ecx*4 + 0x87522c] at 0x004022B4)",
+      "at": "0x004022B7",
+      "expect": "0x87522C",
+      "write": "@newbase + 0x44"
+    },
+    {
+      "why": "identarray[i].argument  (mov eax, dword ptr [ecx*4 + 0x87522c] at 0x004022DA)",
+      "at": "0x004022DD",
+      "expect": "0x87522C",
+      "write": "@newbase + 0x44"
+    },
+    {
+      "why": "identarray[i].argument  (mov eax, dword ptr [ecx*4 + 0x87522c] at 0x0040231F)",
+      "at": "0x00402322",
+      "expect": "0x87522C",
+      "write": "@newbase + 0x44"
+    },
+    {
+      "why": "identarray[i].argument  (mov eax, dword ptr [ecx*4 + 0x87522c] at 0x00402345)",
+      "at": "0x00402348",
+      "expect": "0x87522C",
+      "write": "@newbase + 0x44"
+    },
+    {
+      "why": "identarray[i].argument  (mov eax, dword ptr [ecx*4 + 0x87522c] at 0x004023E4)",
+      "at": "0x004023E7",
+      "expect": "0x87522C",
+      "write": "@newbase + 0x44"
+    },
+    {
+      "why": "identarray[i].argument  (mov eax, dword ptr [ecx*4 + 0x87522c] at 0x00402407)",
+      "at": "0x0040240A",
+      "expect": "0x87522C",
+      "write": "@newbase + 0x44"
+    },
+    {
+      "why": "identarray[i].argument  (mov eax, dword ptr [ecx*4 + 0x87522c] at 0x00402464)",
+      "at": "0x00402467",
+      "expect": "0x87522C",
+      "write": "@newbase + 0x44"
+    },
+    {
+      "why": "identarray[i].argument  (mov eax, dword ptr [ecx*4 + 0x87522c] at 0x00402487)",
+      "at": "0x0040248A",
+      "expect": "0x87522C",
+      "write": "@newbase + 0x44"
+    },
+    {
+      "why": "identarray[i].argument  (mov eax, dword ptr [ecx*4 + 0x87522c] at 0x00402504)",
+      "at": "0x00402507",
+      "expect": "0x87522C",
+      "write": "@newbase + 0x44"
+    },
+    {
+      "why": "identarray[i].argument  (mov eax, dword ptr [ecx*4 + 0x87522c] at 0x00402527)",
+      "at": "0x0040252A",
+      "expect": "0x87522C",
+      "write": "@newbase + 0x44"
+    },
+    {
+      "why": "identarray[i].actor  (cmp dword ptr [ecx*4 + 0x875228], 0 at 0x0040557C)",
+      "at": "0x0040557F",
+      "expect": "0x875228",
+      "write": "@newbase + 0x40"
+    },
+    {
+      "why": "identarray[i].actor  (mov ecx, dword ptr [edx*4 + 0x875228] at 0x0040558C)",
+      "at": "0x0040558F",
+      "expect": "0x875228",
+      "write": "@newbase + 0x40"
+    },
+    {
+      "why": "identarray[i].actor  (cmp dword ptr [edx*4 + 0x875228], 0 at 0x00406B0C)",
+      "at": "0x00406B0F",
+      "expect": "0x875228",
+      "write": "@newbase + 0x40"
+    },
+    {
+      "why": "identarray[i].actor  (mov ecx, dword ptr [ecx*4 + 0x875228] at 0x00406B19)",
+      "at": "0x00406B1C",
+      "expect": "0x875228",
+      "write": "@newbase + 0x40"
+    },
+    {
+      "why": "identarray[i].actor  (mov ecx, dword ptr [ecx*4 + 0x875228] at 0x00406C2D)",
+      "at": "0x00406C30",
+      "expect": "0x875228",
+      "write": "@newbase + 0x40"
+    },
+    {
+      "why": "identarray[i].argument  (mov ecx, dword ptr [edx*4 + 0x87522c] at 0x00406DBE)",
+      "at": "0x00406DC1",
+      "expect": "0x87522C",
+      "write": "@newbase + 0x44"
+    },
+    {
+      "why": "identarray[i].argument  (mov ecx, dword ptr [edx*4 + 0x87522c] at 0x00406F16)",
+      "at": "0x00406F19",
+      "expect": "0x87522C",
+      "write": "@newbase + 0x44"
+    },
+    {
+      "why": "identarray[i].argument  (mov ecx, dword ptr [edx*4 + 0x87522c] at 0x00406F37)",
+      "at": "0x00406F3A",
+      "expect": "0x87522C",
+      "write": "@newbase + 0x44"
+    },
+    {
+      "why": "identarray[i].argument  (mov ecx, dword ptr [edx*4 + 0x87522c] at 0x00406F5A)",
+      "at": "0x00406F5D",
+      "expect": "0x87522C",
+      "write": "@newbase + 0x44"
+    },
+    {
+      "why": "identarray[i].argument  (mov ecx, dword ptr [edx*4 + 0x87522c] at 0x004070B3)",
+      "at": "0x004070B6",
+      "expect": "0x87522C",
+      "write": "@newbase + 0x44"
+    },
+    {
+      "why": "identarray[i].argument  (mov ecx, dword ptr [edx*4 + 0x87522c] at 0x004071A6)",
+      "at": "0x004071A9",
+      "expect": "0x87522C",
+      "write": "@newbase + 0x44"
+    },
+    {
+      "why": "identarray[i].argument  (mov ecx, dword ptr [edx*4 + 0x87522c] at 0x004071C7)",
+      "at": "0x004071CA",
+      "expect": "0x87522C",
+      "write": "@newbase + 0x44"
+    },
+    {
+      "why": "identarray[i].argument  (mov eax, dword ptr [ecx*4 + 0x87522c] at 0x00407242)",
+      "at": "0x00407245",
+      "expect": "0x87522C",
+      "write": "@newbase + 0x44"
+    },
+    {
+      "why": "identarray[i].argument  (mov ecx, dword ptr [edx*4 + 0x87522c] at 0x0040731E)",
+      "at": "0x00407321",
+      "expect": "0x87522C",
+      "write": "@newbase + 0x44"
+    },
+    {
+      "why": "identarray[i].argument  (mov ecx, dword ptr [edx*4 + 0x87522c] at 0x004075DE)",
+      "at": "0x004075E1",
+      "expect": "0x87522C",
+      "write": "@newbase + 0x44"
+    },
+    {
+      "why": "identarray[i].argument  (mov ecx, dword ptr [edx*4 + 0x87522c] at 0x004076BE)",
+      "at": "0x004076C1",
+      "expect": "0x87522C",
+      "write": "@newbase + 0x44"
+    },
+    {
+      "why": "identarray[i].argument  (mov ecx, dword ptr [edx*4 + 0x87522c] at 0x004077DF)",
+      "at": "0x004077E2",
+      "expect": "0x87522C",
+      "write": "@newbase + 0x44"
+    },
+    {
+      "why": "identarray[i].argument  (mov ecx, dword ptr [edx*4 + 0x87522c] at 0x00407978)",
+      "at": "0x0040797B",
+      "expect": "0x87522C",
+      "write": "@newbase + 0x44"
+    },
+    {
+      "why": "identarray[i].argument  (mov ecx, dword ptr [eax*4 + 0x87522c] at 0x00407A54)",
+      "at": "0x00407A57",
+      "expect": "0x87522C",
+      "write": "@newbase + 0x44"
+    },
+    {
+      "why": "identarray[i].argument  (mov edx, dword ptr [ebx*4 + 0x87522c] at 0x00408ACF)",
+      "at": "0x00408AD2",
+      "expect": "0x87522C",
+      "write": "@newbase + 0x44"
+    },
+    {
+      "why": "identarray[i].argument  (mov eax, dword ptr [ecx*4 + 0x87522c] at 0x00408DAE)",
+      "at": "0x00408DB1",
+      "expect": "0x87522C",
+      "write": "@newbase + 0x44"
+    },
+    {
+      "why": "identarray[i].argument  (mov eax, dword ptr [ecx*4 + 0x87522c] at 0x00408DD6)",
+      "at": "0x00408DD9",
+      "expect": "0x87522C",
+      "write": "@newbase + 0x44"
+    },
+    {
+      "why": "identarray[i].argument  (mov ecx, dword ptr [edx*4 + 0x87522c] at 0x00409042)",
+      "at": "0x00409045",
+      "expect": "0x87522C",
+      "write": "@newbase + 0x44"
+    },
+    {
+      "why": "identarray[i].argument  (mov ecx, dword ptr [edx*4 + 0x87522c] at 0x00409065)",
+      "at": "0x00409068",
+      "expect": "0x87522C",
+      "write": "@newbase + 0x44"
+    },
+    {
+      "why": "identarray[i].argument  (mov eax, dword ptr [ecx*4 + 0x87522c] at 0x004090B1)",
+      "at": "0x004090B4",
+      "expect": "0x87522C",
+      "write": "@newbase + 0x44"
+    },
+    {
+      "why": "identarray[i].argument  (mov eax, dword ptr [ecx*4 + 0x87522c] at 0x004090D4)",
+      "at": "0x004090D7",
+      "expect": "0x87522C",
+      "write": "@newbase + 0x44"
+    },
+    {
+      "why": "identarray[i].argument  (mov eax, dword ptr [ecx*4 + 0x87522c] at 0x00409140)",
+      "at": "0x00409143",
+      "expect": "0x87522C",
+      "write": "@newbase + 0x44"
+    },
+    {
+      "why": "identarray[i].argument  (mov eax, dword ptr [ecx*4 + 0x87522c] at 0x00409167)",
+      "at": "0x0040916A",
+      "expect": "0x87522C",
+      "write": "@newbase + 0x44"
+    },
+    {
+      "why": "identarray[i].argument  (mov ecx, dword ptr [edx*4 + 0x87522c] at 0x004092E2)",
+      "at": "0x004092E5",
+      "expect": "0x87522C",
+      "write": "@newbase + 0x44"
+    },
+    {
+      "why": "identarray[i].argument  (mov ecx, dword ptr [edx*4 + 0x87522c] at 0x00409305)",
+      "at": "0x00409308",
+      "expect": "0x87522C",
+      "write": "@newbase + 0x44"
+    },
+    {
+      "why": "identarray[i].argument  (mov eax, dword ptr [ecx*4 + 0x87522c] at 0x00409351)",
+      "at": "0x00409354",
+      "expect": "0x87522C",
+      "write": "@newbase + 0x44"
+    },
+    {
+      "why": "identarray[i].argument  (mov eax, dword ptr [ecx*4 + 0x87522c] at 0x00409374)",
+      "at": "0x00409377",
+      "expect": "0x87522C",
+      "write": "@newbase + 0x44"
+    },
+    {
+      "why": "identarray[i].argument  (mov eax, dword ptr [ecx*4 + 0x87522c] at 0x004093E0)",
+      "at": "0x004093E3",
+      "expect": "0x87522C",
+      "write": "@newbase + 0x44"
+    },
+    {
+      "why": "identarray[i].argument  (mov eax, dword ptr [ecx*4 + 0x87522c] at 0x00409407)",
+      "at": "0x0040940A",
+      "expect": "0x87522C",
+      "write": "@newbase + 0x44"
+    },
+    {
+      "why": "identarray[i].argument  (mov eax, dword ptr [ecx*4 + 0x87522c] at 0x00409502)",
+      "at": "0x00409505",
+      "expect": "0x87522C",
+      "write": "@newbase + 0x44"
+    },
+    {
+      "why": "identarray[i].argument  (mov eax, dword ptr [ecx*4 + 0x87522c] at 0x00409529)",
+      "at": "0x0040952C",
+      "expect": "0x87522C",
+      "write": "@newbase + 0x44"
+    },
+    {
+      "why": "identarray[i].argument  (mov ecx, dword ptr [edx*4 + 0x87522c] at 0x00409576)",
+      "at": "0x00409579",
+      "expect": "0x87522C",
+      "write": "@newbase + 0x44"
+    },
+    {
+      "why": "identarray[i].argument  (mov ecx, dword ptr [edx*4 + 0x87522c] at 0x004095A2)",
+      "at": "0x004095A5",
+      "expect": "0x87522C",
+      "write": "@newbase + 0x44"
+    },
+    {
+      "why": "identarray[i].argument  (mov eax, dword ptr [ecx*4 + 0x87522c] at 0x00409622)",
+      "at": "0x00409625",
+      "expect": "0x87522C",
+      "write": "@newbase + 0x44"
+    },
+    {
+      "why": "identarray[i].argument  (mov eax, dword ptr [ecx*4 + 0x87522c] at 0x00409649)",
+      "at": "0x0040964C",
+      "expect": "0x87522C",
+      "write": "@newbase + 0x44"
+    },
+    {
+      "why": "identarray[i].argument  (mov ecx, dword ptr [edx*4 + 0x87522c] at 0x00409696)",
+      "at": "0x00409699",
+      "expect": "0x87522C",
+      "write": "@newbase + 0x44"
+    },
+    {
+      "why": "identarray[i].argument  (mov ecx, dword ptr [edx*4 + 0x87522c] at 0x004096C2)",
+      "at": "0x004096C5",
+      "expect": "0x87522C",
+      "write": "@newbase + 0x44"
+    },
+    {
+      "why": "identarray[i].actor  (mov ecx, dword ptr [ecx*4 + 0x875228] at 0x00409FCA)",
+      "at": "0x00409FCD",
+      "expect": "0x875228",
+      "write": "@newbase + 0x40"
+    },
+    {
+      "why": "identarray[i].argument  (mov edi, dword ptr [edi*4 + 0x87522c] at 0x0040A27A)",
+      "at": "0x0040A27D",
+      "expect": "0x87522C",
+      "write": "@newbase + 0x44"
+    },
+    {
+      "why": "identarray[i].argument  (mov esi, dword ptr [esi*4 + 0x87522c] at 0x0040A2B6)",
+      "at": "0x0040A2B9",
+      "expect": "0x87522C",
+      "write": "@newbase + 0x44"
+    },
+    {
+      "why": "identarray[i].argument  (mov dword ptr [eax*4 + 0x87522c], edi at 0x0040A47F)",
+      "at": "0x0040A482",
+      "expect": "0x87522C",
+      "write": "@newbase + 0x44"
+    },
+    {
+      "why": "identarray[i].word +8  (mov word ptr [eax*4 + 0x875230], dx at 0x0040A5B0)",
+      "at": "0x0040A5B4",
+      "expect": "0x875230",
+      "write": "@newbase + 0x48"
+    },
+    {
+      "why": "identarray[i].word +0xA  (mov word ptr [eax*4 + 0x875232], dx at 0x0040A5C4)",
+      "at": "0x0040A5C8",
+      "expect": "0x875232",
+      "write": "@newbase + 0x4A"
+    },
+    {
+      "why": "identarray[i].actor  (mov dword ptr [edx*4 + 0x875228], eax at 0x0040A5E3)",
+      "at": "0x0040A5E6",
+      "expect": "0x875228",
+      "write": "@newbase + 0x40"
+    },
+    {
+      "why": "identarray[i].actor  (mov dword ptr [edx*4 + 0x875228], 0x877748 at 0x0040A5F2)",
+      "at": "0x0040A5F5",
+      "expect": "0x875228",
+      "write": "@newbase + 0x40"
+    },
+    {
+      "why": "identarray[i].argument  (mov eax, dword ptr [ecx*4 + 0x87522c] at 0x0040AAE9)",
+      "at": "0x0040AAEC",
+      "expect": "0x87522C",
+      "write": "@newbase + 0x44"
+    },
+    {
+      "why": "identarray[i].argument  (cmp dword ptr [ecx*4 + 0x87522c], 0 at 0x0040AC64)",
+      "at": "0x0040AC67",
+      "expect": "0x87522C",
+      "write": "@newbase + 0x44"
+    },
+    {
+      "why": "identarray[i].argument  (mov ecx, dword ptr [edx*4 + 0x87522c] at 0x0040AC74)",
+      "at": "0x0040AC77",
+      "expect": "0x87522C",
+      "write": "@newbase + 0x44"
+    },
+    {
+      "why": "identarray[i].argument  (mov eax, dword ptr [eax*4 + 0x87522c] at 0x0040AC86)",
+      "at": "0x0040AC89",
+      "expect": "0x87522C",
+      "write": "@newbase + 0x44"
+    },
+    {
+      "why": "identarray[i].argument  (cmp dword ptr [ecx*4 + 0x87522c], 0 at 0x0040ADF4)",
+      "at": "0x0040ADF7",
+      "expect": "0x87522C",
+      "write": "@newbase + 0x44"
+    },
+    {
+      "why": "identarray[i].argument  (mov ecx, dword ptr [edx*4 + 0x87522c] at 0x0040AE04)",
+      "at": "0x0040AE07",
+      "expect": "0x87522C",
+      "write": "@newbase + 0x44"
+    },
+    {
+      "why": "identarray[i].argument  (mov eax, dword ptr [eax*4 + 0x87522c] at 0x0040AE16)",
+      "at": "0x0040AE19",
+      "expect": "0x87522C",
+      "write": "@newbase + 0x44"
+    },
+    {
+      "why": "identarray[i].argument  (mov eax, dword ptr [ecx*4 + 0x87522c] at 0x0040B3C0)",
+      "at": "0x0040B3C3",
+      "expect": "0x87522C",
+      "write": "@newbase + 0x44"
+    },
+    {
+      "why": "identarray[i].argument  (mov eax, dword ptr [ecx*4 + 0x87522c] at 0x0040B3E3)",
+      "at": "0x0040B3E6",
+      "expect": "0x87522C",
+      "write": "@newbase + 0x44"
+    },
+    {
+      "why": "identarray[i].argument  (mov eax, dword ptr [ecx*4 + 0x87522c] at 0x0040B43F)",
+      "at": "0x0040B442",
+      "expect": "0x87522C",
+      "write": "@newbase + 0x44"
+    },
+    {
+      "why": "identarray[i].argument  (mov eax, dword ptr [ecx*4 + 0x87522c] at 0x0040B462)",
+      "at": "0x0040B465",
+      "expect": "0x87522C",
+      "write": "@newbase + 0x44"
+    },
+    {
+      "why": "identarray[i].argument  (mov eax, dword ptr [ecx*4 + 0x87522c] at 0x0040B49D)",
+      "at": "0x0040B4A0",
+      "expect": "0x87522C",
+      "write": "@newbase + 0x44"
+    },
+    {
+      "why": "identarray[i].argument  (mov ecx, dword ptr [edx*4 + 0x87522c] at 0x0040B4DD)",
+      "at": "0x0040B4E0",
+      "expect": "0x87522C",
+      "write": "@newbase + 0x44"
+    },
+    {
+      "why": "identarray[i].argument  (mov ecx, dword ptr [edx*4 + 0x87522c] at 0x0040B520)",
+      "at": "0x0040B523",
+      "expect": "0x87522C",
+      "write": "@newbase + 0x44"
+    },
+    {
+      "why": "identarray[i].argument  (mov ecx, dword ptr [edx*4 + 0x87522c] at 0x0040B543)",
+      "at": "0x0040B546",
+      "expect": "0x87522C",
+      "write": "@newbase + 0x44"
+    },
+    {
+      "why": "identarray[i].argument  (mov eax, dword ptr [ecx*4 + 0x87522c] at 0x0040B5C1)",
+      "at": "0x0040B5C4",
+      "expect": "0x87522C",
+      "write": "@newbase + 0x44"
+    },
+    {
+      "why": "identarray[i].argument  (mov eax, dword ptr [ecx*4 + 0x87522c] at 0x0040B5E4)",
+      "at": "0x0040B5E7",
+      "expect": "0x87522C",
+      "write": "@newbase + 0x44"
+    },
+    {
+      "why": "identarray[i].argument  (mov eax, dword ptr [ecx*4 + 0x87522c] at 0x0040B6A0)",
+      "at": "0x0040B6A3",
+      "expect": "0x87522C",
+      "write": "@newbase + 0x44"
+    },
+    {
+      "why": "identarray[i].argument  (mov eax, dword ptr [ecx*4 + 0x87522c] at 0x0040B7C2)",
+      "at": "0x0040B7C5",
+      "expect": "0x87522C",
+      "write": "@newbase + 0x44"
+    },
+    {
+      "why": "identarray[i].argument  (mov eax, dword ptr [ecx*4 + 0x87522c] at 0x0040B7E5)",
+      "at": "0x0040B7E8",
+      "expect": "0x87522C",
+      "write": "@newbase + 0x44"
+    },
+    {
+      "why": "identarray[i].argument  (mov eax, dword ptr [ecx*4 + 0x87522c] at 0x0040B980)",
+      "at": "0x0040B983",
+      "expect": "0x87522C",
+      "write": "@newbase + 0x44"
+    },
+    {
+      "why": "identarray[i].argument  (mov ecx, dword ptr [eax*4 + 0x87522c] at 0x0040BAE3)",
+      "at": "0x0040BAE6",
+      "expect": "0x87522C",
+      "write": "@newbase + 0x44"
+    },
+    {
+      "why": "identarray[i].argument  (mov eax, dword ptr [ecx*4 + 0x87522c] at 0x0040BBF0)",
+      "at": "0x0040BBF3",
+      "expect": "0x87522C",
+      "write": "@newbase + 0x44"
+    },
+    {
+      "why": "identarray[i].argument  (mov eax, dword ptr [ecx*4 + 0x87522c] at 0x0040BC13)",
+      "at": "0x0040BC16",
+      "expect": "0x87522C",
+      "write": "@newbase + 0x44"
+    },
+    {
+      "why": "identarray[i].argument  (mov eax, dword ptr [ecx*4 + 0x87522c] at 0x0040BC8B)",
+      "at": "0x0040BC8E",
+      "expect": "0x87522C",
+      "write": "@newbase + 0x44"
+    },
+    {
+      "why": "identarray[i].argument  (mov eax, dword ptr [ecx*4 + 0x87522c] at 0x0040BCD7)",
+      "at": "0x0040BCDA",
+      "expect": "0x87522C",
+      "write": "@newbase + 0x44"
+    },
+    {
+      "why": "identarray[i].argument  (mov esi, dword ptr [esi*4 + 0x87522c] at 0x0040BE1B)",
+      "at": "0x0040BE1E",
+      "expect": "0x87522C",
+      "write": "@newbase + 0x44"
+    },
+    {
+      "why": "identarray[i].argument  (mov ecx, dword ptr [edx*4 + 0x87522c] at 0x0040C0F2)",
+      "at": "0x0040C0F5",
+      "expect": "0x87522C",
+      "write": "@newbase + 0x44"
+    },
+    {
+      "why": "identarray[i].argument  (mov ecx, dword ptr [edx*4 + 0x87522c] at 0x0040C274)",
+      "at": "0x0040C277",
+      "expect": "0x87522C",
+      "write": "@newbase + 0x44"
+    },
+    {
+      "why": "identarray[i].argument  (mov ecx, dword ptr [edx*4 + 0x87522c] at 0x0040C297)",
+      "at": "0x0040C29A",
+      "expect": "0x87522C",
+      "write": "@newbase + 0x44"
+    },
+    {
+      "why": "identarray[i].argument  (mov eax, dword ptr [ecx*4 + 0x87522c] at 0x0040C2E3)",
+      "at": "0x0040C2E6",
+      "expect": "0x87522C",
+      "write": "@newbase + 0x44"
+    },
+    {
+      "why": "identarray[i].argument  (mov eax, dword ptr [ecx*4 + 0x87522c] at 0x0040C306)",
+      "at": "0x0040C309",
+      "expect": "0x87522C",
+      "write": "@newbase + 0x44"
+    },
+    {
+      "why": "identarray[i].argument  (mov eax, dword ptr [ecx*4 + 0x87522c] at 0x0040C36F)",
+      "at": "0x0040C372",
+      "expect": "0x87522C",
+      "write": "@newbase + 0x44"
+    },
+    {
+      "why": "identarray[i].argument  (mov eax, dword ptr [ecx*4 + 0x87522c] at 0x0040C396)",
+      "at": "0x0040C399",
+      "expect": "0x87522C",
+      "write": "@newbase + 0x44"
+    },
+    {
+      "why": "identarray[i].argument  (mov eax, dword ptr [ecx*4 + 0x87522c] at 0x0040C41D)",
+      "at": "0x0040C420",
+      "expect": "0x87522C",
+      "write": "@newbase + 0x44"
+    },
+    {
+      "why": "identarray[i].argument  (mov eax, dword ptr [ecx*4 + 0x87522c] at 0x0040C470)",
+      "at": "0x0040C473",
+      "expect": "0x87522C",
+      "write": "@newbase + 0x44"
+    },
+    {
+      "why": "identarray[i].argument  (mov eax, dword ptr [ecx*4 + 0x87522c] at 0x0040C6D0)",
+      "at": "0x0040C6D3",
+      "expect": "0x87522C",
+      "write": "@newbase + 0x44"
+    },
+    {
+      "why": "identarray[i].argument  (mov eax, dword ptr [ecx*4 + 0x87522c] at 0x0040C701)",
+      "at": "0x0040C704",
+      "expect": "0x87522C",
+      "write": "@newbase + 0x44"
+    },
+    {
+      "why": "identarray[i].argument  (mov eax, dword ptr [ecx*4 + 0x87522c] at 0x0040C78E)",
+      "at": "0x0040C791",
+      "expect": "0x87522C",
+      "write": "@newbase + 0x44"
+    },
+    {
+      "why": "identarray[i].argument  (mov eax, dword ptr [ecx*4 + 0x87522c] at 0x0040C7B5)",
+      "at": "0x0040C7B8",
+      "expect": "0x87522C",
+      "write": "@newbase + 0x44"
+    },
+    {
+      "why": "identarray[i].argument  (mov eax, dword ptr [ecx*4 + 0x87522c] at 0x0040C89C)",
+      "at": "0x0040C89F",
+      "expect": "0x87522C",
+      "write": "@newbase + 0x44"
+    },
+    {
+      "why": "identarray[i].argument  (mov eax, dword ptr [ecx*4 + 0x87522c] at 0x0040C8C1)",
+      "at": "0x0040C8C4",
+      "expect": "0x87522C",
+      "write": "@newbase + 0x44"
+    },
+    {
+      "why": "identarray[i].argument  (mov eax, dword ptr [ecx*4 + 0x87522c] at 0x0040C8E6)",
+      "at": "0x0040C8E9",
+      "expect": "0x87522C",
+      "write": "@newbase + 0x44"
+    },
+    {
+      "why": "identarray[i].argument  (mov eax, dword ptr [ecx*4 + 0x87522c] at 0x0040C976)",
+      "at": "0x0040C979",
+      "expect": "0x87522C",
+      "write": "@newbase + 0x44"
+    },
+    {
+      "why": "identarray[i].argument  (mov eax, dword ptr [ecx*4 + 0x87522c] at 0x0040CA71)",
+      "at": "0x0040CA74",
+      "expect": "0x87522C",
+      "write": "@newbase + 0x44"
+    },
+    {
+      "why": "identarray[i].argument  (mov eax, dword ptr [ecx*4 + 0x87522c] at 0x0040CA93)",
+      "at": "0x0040CA96",
+      "expect": "0x87522C",
+      "write": "@newbase + 0x44"
+    },
+    {
+      "why": "identarray[i].argument  (mov eax, dword ptr [ecx*4 + 0x87522c] at 0x0040CAB5)",
+      "at": "0x0040CAB8",
+      "expect": "0x87522C",
+      "write": "@newbase + 0x44"
+    },
+    {
+      "why": "identarray[i].argument  (mov eax, dword ptr [ecx*4 + 0x87522c] at 0x0040CAD7)",
+      "at": "0x0040CADA",
+      "expect": "0x87522C",
+      "write": "@newbase + 0x44"
+    },
+    {
+      "why": "identarray[i].actor  (mov ecx, dword ptr [ecx*4 + 0x875228] at 0x0040CC66)",
+      "at": "0x0040CC69",
+      "expect": "0x875228",
+      "write": "@newbase + 0x40"
+    },
+    {
+      "why": "identarray[i].actor  (mov ecx, dword ptr [ecx*4 + 0x875228] at 0x0040CCEE)",
+      "at": "0x0040CCF1",
+      "expect": "0x875228",
+      "write": "@newbase + 0x40"
+    },
+    {
+      "why": "identarray[i].actor  (mov ecx, dword ptr [ecx*4 + 0x875228] at 0x0040CD90)",
+      "at": "0x0040CD93",
+      "expect": "0x875228",
+      "write": "@newbase + 0x40"
+    },
+    {
+      "why": "identarray[i].actor  (mov ecx, dword ptr [ecx*4 + 0x875228] at 0x0040CE6E)",
+      "at": "0x0040CE71",
+      "expect": "0x875228",
+      "write": "@newbase + 0x40"
+    },
+    {
+      "why": "identarray[i].argument  (mov eax, dword ptr [ecx*4 + 0x87522c] at 0x0040D1D9)",
+      "at": "0x0040D1DC",
+      "expect": "0x87522C",
+      "write": "@newbase + 0x44"
+    },
+    {
+      "why": "identarray[i].actor  (mov ecx, dword ptr [ecx*4 + 0x875228] at 0x0040D2AF)",
+      "at": "0x0040D2B2",
+      "expect": "0x875228",
+      "write": "@newbase + 0x40"
+    },
+    {
+      "why": "identarray[i].argument  (mov ecx, dword ptr [ecx*4 + 0x87522c] at 0x0040D337)",
+      "at": "0x0040D33A",
+      "expect": "0x87522C",
+      "write": "@newbase + 0x44"
+    },
+    {
+      "why": "identarray[i].argument  (mov ecx, dword ptr [edx*4 + 0x87522c] at 0x0040D6CC)",
+      "at": "0x0040D6CF",
+      "expect": "0x87522C",
+      "write": "@newbase + 0x44"
+    },
+    {
+      "why": "identarray[i].argument  (mov eax, dword ptr [ecx*4 + 0x87522c] at 0x0040D76B)",
+      "at": "0x0040D76E",
+      "expect": "0x87522C",
+      "write": "@newbase + 0x44"
+    },
+    {
+      "why": "identarray[i].argument  (mov eax, dword ptr [ecx*4 + 0x87522c] at 0x0040D7BB)",
+      "at": "0x0040D7BE",
+      "expect": "0x87522C",
+      "write": "@newbase + 0x44"
+    },
+    {
+      "why": "identarray[i].argument  (mov ecx, dword ptr [edx*4 + 0x87522c] at 0x0040D824)",
+      "at": "0x0040D827",
+      "expect": "0x87522C",
+      "write": "@newbase + 0x44"
+    },
+    {
+      "why": "identarray[i].argument  (mov ecx, dword ptr [edx*4 + 0x87522c] at 0x0040D849)",
+      "at": "0x0040D84C",
+      "expect": "0x87522C",
+      "write": "@newbase + 0x44"
+    },
+    {
+      "why": "identarray[i].argument  (mov eax, dword ptr [ecx*4 + 0x87522c] at 0x0040DCBD)",
+      "at": "0x0040DCC0",
+      "expect": "0x87522C",
+      "write": "@newbase + 0x44"
+    },
+    {
+      "why": "identarray[i].argument  (mov eax, dword ptr [ecx*4 + 0x87522c] at 0x0040DCE2)",
+      "at": "0x0040DCE5",
+      "expect": "0x87522C",
+      "write": "@newbase + 0x44"
+    },
+    {
+      "why": "identarray[i].argument  (mov eax, dword ptr [ecx*4 + 0x87522c] at 0x0040DD12)",
+      "at": "0x0040DD15",
+      "expect": "0x87522C",
+      "write": "@newbase + 0x44"
+    },
+    {
+      "why": "identarray[i].argument  (mov eax, dword ptr [ecx*4 + 0x87522c] at 0x0040DD37)",
+      "at": "0x0040DD3A",
+      "expect": "0x87522C",
+      "write": "@newbase + 0x44"
+    },
+    {
+      "why": "identarray[i].argument  (mov ecx, dword ptr [edx*4 + 0x87522c] at 0x0040DDFF)",
+      "at": "0x0040DE02",
+      "expect": "0x87522C",
+      "write": "@newbase + 0x44"
+    },
+    {
+      "why": "identarray[i].actor  (mov ecx, dword ptr [ecx*4 + 0x875228] at 0x0043017F)",
+      "at": "0x00430182",
+      "expect": "0x875228",
+      "write": "@newbase + 0x40"
+    },
+    {
+      "why": "identarray[i].actor  (mov ecx, dword ptr [ecx*4 + 0x875228] at 0x004303F3)",
+      "at": "0x004303F6",
+      "expect": "0x875228",
+      "write": "@newbase + 0x40"
+    },
+    {
+      "why": "identarray[i].actor  (mov ecx, dword ptr [ecx*4 + 0x875228] at 0x0043345D)",
+      "at": "0x00433460",
+      "expect": "0x875228",
+      "write": "@newbase + 0x40"
+    },
+    {
+      "why": "identarray[i].actor  (mov ecx, dword ptr [ecx*4 + 0x875228] at 0x00433E73)",
+      "at": "0x00433E76",
+      "expect": "0x875228",
+      "write": "@newbase + 0x40"
+    },
+    {
+      "why": "identarray[i].argument  (mov eax, dword ptr [ecx*4 + 0x87522c] at 0x00433FBF)",
+      "at": "0x00433FC2",
+      "expect": "0x87522C",
+      "write": "@newbase + 0x44"
+    },
+    {
+      "why": "identarray[i].argument  (mov eax, dword ptr [ecx*4 + 0x87522c] at 0x00434131)",
+      "at": "0x00434134",
+      "expect": "0x87522C",
+      "write": "@newbase + 0x44"
+    },
+    {
+      "why": "identarray[i].actor  (mov ecx, dword ptr [ecx*4 + 0x875228] at 0x00436F62)",
+      "at": "0x00436F65",
+      "expect": "0x875228",
+      "write": "@newbase + 0x40"
+    },
+    {
+      "why": "identarray[i].argument  (mov eax, dword ptr [edx*4 + 0x87522c] at 0x00440C30)",
+      "at": "0x00440C33",
+      "expect": "0x87522C",
+      "write": "@newbase + 0x44"
+    },
+    {
+      "why": "identarray[i].argument  (mov edx, dword ptr [ecx*4 + 0x87522c] at 0x00443829)",
+      "at": "0x0044382C",
+      "expect": "0x87522C",
+      "write": "@newbase + 0x44"
+    },
+    {
+      "why": "identarray[i].argument  (mov edx, dword ptr [eax*4 + 0x87522c] at 0x0044383C)",
+      "at": "0x0044383F",
+      "expect": "0x87522C",
+      "write": "@newbase + 0x44"
+    },
+    {
+      "why": "identarray[i].argument  (mov eax, dword ptr [ecx*4 + 0x87522c] at 0x0044395A)",
+      "at": "0x0044395D",
+      "expect": "0x87522C",
+      "write": "@newbase + 0x44"
+    },
+    {
+      "why": "identarray[i].argument  (mov eax, dword ptr [ecx*4 + 0x87522c] at 0x0044397D)",
+      "at": "0x00443980",
+      "expect": "0x87522C",
+      "write": "@newbase + 0x44"
+    },
+    {
+      "why": "identarray[i].argument  (mov ecx, dword ptr [edx*4 + 0x87522c] at 0x004A80FC)",
+      "at": "0x004A80FF",
+      "expect": "0x87522C",
+      "write": "@newbase + 0x44"
+    },
+    {
+      "why": "identarray[i].argument  (mov ecx, dword ptr [edx*4 + 0x87522c] at 0x004A8145)",
+      "at": "0x004A8148",
+      "expect": "0x87522C",
+      "write": "@newbase + 0x44"
+    },
+    {
+      "why": "identarray[i].argument  (mov ecx, dword ptr [edx*4 + 0x87522c] at 0x004A818E)",
+      "at": "0x004A8191",
+      "expect": "0x87522C",
+      "write": "@newbase + 0x44"
+    },
+    {
+      "why": "identarray[i].argument  (mov ecx, dword ptr [edx*4 + 0x87522c] at 0x004A81D7)",
+      "at": "0x004A81DA",
+      "expect": "0x87522C",
+      "write": "@newbase + 0x44"
+    },
+    {
+      "why": "identarray[i].argument  (mov ecx, dword ptr [edx*4 + 0x87522c] at 0x004A8212)",
+      "at": "0x004A8215",
+      "expect": "0x87522C",
+      "write": "@newbase + 0x44"
+    },
+    {
+      "why": "identarray[i].argument  (mov ecx, dword ptr [edx*4 + 0x87522c] at 0x004A824D)",
+      "at": "0x004A8250",
+      "expect": "0x87522C",
+      "write": "@newbase + 0x44"
+    },
+    {
+      "why": "identarray[i].actor  (mov ecx, dword ptr [ecx*4 + 0x875228] at 0x0050474E)",
+      "at": "0x00504751",
+      "expect": "0x875228",
+      "write": "@newbase + 0x40"
+    },
+    {
+      "why": "identarray[i].actor  (mov ecx, dword ptr [ecx*4 + 0x875228] at 0x00504A9A)",
+      "at": "0x00504A9D",
+      "expect": "0x875228",
+      "write": "@newbase + 0x40"
+    },
+    {
+      "why": "identarray[i].actor  (mov ecx, dword ptr [ecx*4 + 0x875228] at 0x0050627A)",
+      "at": "0x0050627D",
+      "expect": "0x875228",
+      "write": "@newbase + 0x40"
+    },
+    {
+      "why": "identarray[i].actor  (mov ecx, dword ptr [ecx*4 + 0x875228] at 0x00506337)",
+      "at": "0x0050633A",
+      "expect": "0x875228",
+      "write": "@newbase + 0x40"
+    },
+    {
+      "why": "identarray[i].actor  (mov ecx, dword ptr [ecx*4 + 0x875228] at 0x005063DA)",
+      "at": "0x005063DD",
+      "expect": "0x875228",
+      "write": "@newbase + 0x40"
+    },
+    {
+      "why": "identarray[i].actor  (mov ecx, dword ptr [ecx*4 + 0x875228] at 0x00506497)",
+      "at": "0x0050649A",
+      "expect": "0x875228",
+      "write": "@newbase + 0x40"
+    },
+    {
+      "why": "identarray[i].actor  (mov ecx, dword ptr [ecx*4 + 0x875228] at 0x00506547)",
+      "at": "0x0050654A",
+      "expect": "0x875228",
+      "write": "@newbase + 0x40"
+    },
+    {
+      "why": "identarray[i].actor  (mov ecx, dword ptr [ecx*4 + 0x875228] at 0x005065F1)",
+      "at": "0x005065F4",
+      "expect": "0x875228",
+      "write": "@newbase + 0x40"
+    },
+    {
+      "why": "identarray[i].argument  (mov edx, dword ptr [ecx*4 + 0x87522c] at 0x005106F2)",
+      "at": "0x005106F5",
+      "expect": "0x87522C",
+      "write": "@newbase + 0x44"
+    },
+    {
+      "why": "identarray[i].actor  (mov ecx, dword ptr [ecx*4 + 0x875228] at 0x0055BB14)",
+      "at": "0x0055BB17",
+      "expect": "0x875228",
+      "write": "@newbase + 0x40"
+    },
+    {
+      "why": "identarray[i].argument  (mov edx, dword ptr [ecx*4 + 0x87522c] at 0x00566730)",
+      "at": "0x00566733",
+      "expect": "0x87522C",
+      "write": "@newbase + 0x44"
+    },
+    {
+      "why": "identarray[i].actor  (mov ecx, dword ptr [ecx*4 + 0x875228] at 0x0057C32A)",
+      "at": "0x0057C32D",
+      "expect": "0x875228",
+      "write": "@newbase + 0x40"
+    },
+    {
+      "why": "identarray[i].actor  (mov ecx, dword ptr [ecx*4 + 0x875228] at 0x0057C3CC)",
+      "at": "0x0057C3CF",
+      "expect": "0x875228",
+      "write": "@newbase + 0x40"
+    },
+    {
+      "why": "identarray[i].actor  (mov ecx, dword ptr [ecx*4 + 0x875228] at 0x0057C6B2)",
+      "at": "0x0057C6B5",
+      "expect": "0x875228",
+      "write": "@newbase + 0x40"
+    },
+    {
+      "why": "identarray[i].actor  (mov ecx, dword ptr [ecx*4 + 0x875228] at 0x0057C813)",
+      "at": "0x0057C816",
+      "expect": "0x875228",
+      "write": "@newbase + 0x40"
+    },
+    {
+      "why": "identarray[i].actor  (mov eax, dword ptr [ecx*4 + 0x875228] at 0x00582045)",
+      "at": "0x00582048",
+      "expect": "0x875228",
+      "write": "@newbase + 0x40"
+    }
+  ]
+}
