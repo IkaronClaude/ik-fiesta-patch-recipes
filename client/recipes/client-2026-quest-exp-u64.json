@@ -1,0 +1,62 @@
+{
+  "name": "client-2026-quest-exp-u64",
+  "summary": "2026 client: the quest reward window shows quest EXP as 64 bits (QuestReward.Flag + Undefined0), not just the low 32.",
+  "status": "BUILT 2026-09-24, not yet seen in a live client.",
+  "target": {
+    "file": "Fiesta.exe",
+    "sha256": "79762e9a7f7bdf1a66f2b7826fa70945a1debe5b016ec5c9e8d600eb7357a730",
+    "size": 9264128
+  },
+  "params": {},
+  "consts": {
+    "high_dword_store": "0x00697E0D",
+    "store_tail_1": "0x00697E11",
+    "store_tail_2": "0x00697E12"
+  },
+  "why": [
+    "RewardWin (Game/RewardWin.nif) fills its reward lines in 0x697D20: it fetches the quest's QuestReward rows",
+    "(0x6989F0) and switches on RewardType (jump table 0x697FDC, case 0 = EXP at 0x697DB0). A QuestReward row is",
+    "packed: +0 ID u16, +2 Selectable, +3 RewardType u32, +7 Flag, +0xB Undefined0, +0xF Undefined1.",
+    "The EXP line object already holds a 64-BIT amount - low at +0x18, high at +0x1C - but the high half is a",
+    "hard-coded zero:",
+    "",
+    "    00697E07  8B 46 07              mov  eax, [esi+7]          ; Flag (low dword)",
+    "    00697E0A  89 41 18              mov  [ecx+0x18], eax",
+    "    00697E0D  C7 41 1C 00 00 00 00  mov  dword [ecx+0x1C], 0   ; high dword",
+    "",
+    "The patch takes the high dword from Undefined0 instead, in the same 7 bytes:",
+    "",
+    "    00697E0D  8B 46 0B              mov  eax, [esi+0xB]        ; Undefined0 (high dword)",
+    "    00697E10  89 41 1C              mov  [ecx+0x1C], eax",
+    "    00697E13  90                    nop",
+    "",
+    "Fiesta2026on2016 writes rewards above 2^32 as Flag = low / Undefined0 = high (0 on every stock row, so a stock",
+    "table shows exactly what it showed before), and the server side is the zone plugin quest_exp, which grants",
+    "the same 64-bit value. It also fixes the stock display of the 42 rewards in [2^31, 2^32) only in so far as",
+    "the line was already 64-bit: the low dword is taken as-is, unsigned, into a zero-extended value.",
+    "No relocation touches these bytes. Other places that show quest EXP (if any) are not covered - only this window."
+  ],
+  "edits": [
+    {
+      "why": "mov eax,[esi+0xB] + first byte of mov [ecx+0x1C],eax, over the first 4 bytes of mov dword [ecx+0x1C],0",
+      "at": "high_dword_store",
+      "width": 4,
+      "expect": "0x001C41C7",
+      "write": "0x890B468B"
+    },
+    {
+      "why": "modrm byte of mov [ecx+0x1C],eax, over the immediate's 2nd byte",
+      "at": "store_tail_1",
+      "width": 1,
+      "expect": "0x00",
+      "write": "0x41"
+    },
+    {
+      "why": "disp8 0x1C + nop, over the immediate's last 2 bytes",
+      "at": "store_tail_2",
+      "width": 2,
+      "expect": "0x0000",
+      "write": "0x901C"
+    }
+  ]
+}

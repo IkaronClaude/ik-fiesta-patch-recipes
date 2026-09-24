@@ -30,3 +30,24 @@ alternative is fiesta-proxy's Bridge2026, which sends the `0x442E` itself; run i
 when testing this recipe so it is the patch being tested and not the bridge. **Untested live as of
 2026-09-17.**
 
+
+## `client-2026-dll-loader` - the client loads `fiestahook.dll`
+
+The same import injection as the zone's `dll-loader`, into the 2026 `Fiesta.exe`. The shared loader
+(`common/loader`) has a CLIENT MODE: the client is not a service, so it swaps the `CreateWindowExA` import and
+loads `hooks\*.dll` on the first call (WinMain, main thread, before any window). With no plugins the client runs
+as before. Needs XIGNCODE neutralised (Client2026patched is).
+
+## `client-2026-quest-exp-u64` - quest EXP above 4.29 billion in the reward window
+
+`RewardWin` (0x697D20) builds each EXP line with a 64-bit amount but hard-codes the high dword to 0
+(`mov dword [ecx+0x1C], 0` at 0x697E0D). Seven bytes make it `mov eax,[esi+0xB]; mov [ecx+0x1C],eax; nop` - the
+high dword from `QuestReward.Undefined0`, which Fiesta2026on2016 fills for rewards above 2^32 (0 on stock rows,
+so stock data displays unchanged). Server side: the zone plugin `quest_exp`.
+
+```bash
+python apply.py client/recipes/client-2026-dll-loader.json   --exe <Client2026patched>/Fiesta.exe --out build/client2026/Fiesta.step1.exe --allow-hash-mismatch
+python apply.py client/recipes/client-2026-quest-exp-u64.json --exe build/client2026/Fiesta.step1.exe --out build/client2026/Fiesta.exe --allow-hash-mismatch
+# deploy: Fiesta.exe + build/fiestahook.dll into the client folder, plugins (if any) in hooks/
+```
+Both untested in a live client as of 2026-09-24.
