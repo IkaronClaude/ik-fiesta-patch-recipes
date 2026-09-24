@@ -1,0 +1,113 @@
+{
+  "name": "abstate-template-cap",
+  "summary": "Handler templates for AbStataIndex 792..slots-1, so a 2026 state past the 2016 range is attached (its effects applied, its packets sent) instead of skipped.",
+  "status": "WRITTEN 2026-09-24 (Q49). Needs abstate-index-cap + abstate-container-cap (same slots).",
+  "target": {
+    "file": "Zone00/Zone.exe",
+    "sha256": "7ef3532da08194a377558322ca2bd06d1ce5bdb2813796e033173b72d9ff883d",
+    "size": 4673536
+  },
+  "params": {
+    "slots": 2048
+  },
+  "consts": {
+    "list_capacity_imm": "0x0041188E",
+    "hook_site": "0x00416141",
+    "hook_rel32": "0x00416142",
+    "resume": "0x00416146",
+    "generic_vtable": "0x006A36BC"
+  },
+  "why": [
+    "?abstatetemplate (AbnormalStateContainer::AbnormalStateList, 0x877AD0) holds one handler object per AbStataIndex:",
+    "inline objects (most of them the generic AbnormalStateElement, {vtable 0x6A36BC, id} - 8 bytes; a few special",
+    "classes), a 792-slot pointer array at +0x265C, and at +0x32BC an array-list (vtable 0x6A44CC) built by",
+    "`push 0x318; call 0x40E0D0` - capacity and count 792 (u16 at +0x32C0), 12-byte entries at +0x32C4 whose first",
+    "dword points at the pointer-array slot of that index (the list links the entries itself). The constructor's tail",
+    "(0x4160CC..0x41613F) tags each object with its index and fills entry[i] for i < 792.",
+    "AbstateElementInObject::aeo_Set calls the template's methods (vtable+0x18 at 0x40A4B6, attach at 0x40A6CD...)",
+    "only for idx < count - so with the 2026 AbState table in (index up to 1093, abstate-index-cap), every state past",
+    "791 was set in the object's list but never ATTACHED: no stat effect, no packet (a bot on the 2026 data saw state",
+    "229 arrive and Gold Dragon's Grace, 1093, never). This gives those indexes the generic template:",
+    "  - the list capacity 792 -> slots (the imm32 of the push at 0x41188D): count and entries grow, all linked;",
+    "  - a cave at the constructor's end (0x416141, `mov eax, esi; mov ecx, [ebp-0xC]` moved into it) that, for",
+    "    i = 792..slots-1, writes a generic object {0x6A36BC, i} and a pointer slot to it in this region and points",
+    "    entry[i] at the slot - exactly what the constructor does for a generic index below 792 (its slot value comes",
+    "    from vtable+0x24, 0x450350 = `mov eax, ecx; ret`, i.e. the object itself).",
+    "The inline pointer array keeps 792 slots: its only other reader, AbnormalStateList::operator[] (0x401850,",
+    "bound 0x317), has one caller (AbState::as_Load 0x416FCB) that discards the result. The region is in the RWX",
+    "arena (code + the objects the cave writes). New action kinds a 2026 state may need (SubAbState Type >= 120) stay",
+    "clamped to no-ops in the data (invented.json abstate_clamped) - this gives the states the generic behaviour."
+  ],
+  "new_section": {
+    "name": ".abtpl",
+    "size": "0x100 + (slots - 792) * 8 + 0x40 + (slots - 792) * 4",
+    "materialise": true,
+    "execute": true,
+    "note": "Cave at +0, generic template objects at +0x100 (8 B each), their pointer slots after them. RWX arena."
+  },
+  "code": [
+    {
+      "why": "after the constructor's own loop: generic templates + list entries for 792..slots-1, then resume",
+      "at": "@newbase",
+      "emit": [
+        "BF18030000",
+        "8D87E8FCFFFF",
+        "8D0CC5",
+        {
+          "u32": "@newbase + 0x100"
+        },
+        "C701",
+        {
+          "u32": "generic_vtable"
+        },
+        "897904",
+        "8D1485",
+        {
+          "u32": "@newbase + 0x100 + (slots - 792) * 8 + 0x40"
+        },
+        "890A",
+        "0FB786C0320000",
+        "3BF8",
+        "7D12",
+        "8B86C4320000",
+        "8D1C7F",
+        "833C9800",
+        "7503",
+        "891498",
+        "47",
+        "81FF",
+        {
+          "u32": "slots"
+        },
+        "7CBB",
+        "8BC6",
+        "8B4DF4",
+        "E9",
+        {
+          "rel32": "resume"
+        }
+      ]
+    }
+  ],
+  "edits": [
+    {
+      "why": "the template list's capacity (push 0x318 at 0x41188D -> slots): count + entries for every index",
+      "at": "list_capacity_imm",
+      "expect": "0x318",
+      "write": "slots"
+    },
+    {
+      "why": "constructor end: jmp to the cave (E9)",
+      "at": "hook_site",
+      "width": 1,
+      "expect": "0x8B",
+      "write": "0xE9"
+    },
+    {
+      "why": "constructor end: jmp rel32 (replaces mov eax, esi / mov ecx, [ebp-0xC], both moved into the cave)",
+      "at": "hook_rel32",
+      "expect": "0xF44D8BC6",
+      "write": "@newbase - resume"
+    }
+  ]
+}

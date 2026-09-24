@@ -35,6 +35,8 @@
     "    lookup by id or index) also move by the growth",
     "  - every [this + 0xE18] / [this + 0x121C] inside the six AbState methods (7)      -> + the growth",
     "  - every `0x318` the methods compare an index against (4)                          -> slots",
+    "  - every INLINED copy of as_FromIndex elsewhere (19): the `cmp ..., 0x318` guarding an indexed read of the list",
+    "    -> slots (added 2026-09-24: the copy in asl_CanEnchant sent index 898 down its \"invalid\" branch and read 0 - a zone crash)",
     "",
     "The old 0x1620 bytes of .data are simply no longer referenced. No other section holds an address into the",
     "object (checked). The list is indexed by AbStataIndex, the id the client sends and receives, so it cannot",
@@ -135,16 +137,34 @@
       "write": "@newbase"
     },
     {
+      "why": "inlined as_FromIndex bound (cmp esi, 0x318 at 0x0040A9A7, guards the read at 0x0040A9CB)",
+      "at": "0x0040A9A9",
+      "expect": "0x318",
+      "write": "slots"
+    },
+    {
       "why": "&as_StateIndexList[0]  (mov eax, dword ptr [esi*4 + 0x87b060] at 0x0040A9CB)",
       "at": "0x0040A9CE",
       "expect": "0x87B060",
       "write": "@newbase + 0x1B8"
     },
     {
+      "why": "inlined as_FromIndex bound (cmp eax, 0x318 at 0x0040AC94, guards the read at 0x0040ACB5)",
+      "at": "0x0040AC95",
+      "expect": "0x318",
+      "write": "slots"
+    },
+    {
       "why": "&as_StateIndexList[0]  (mov eax, dword ptr [eax*4 + 0x87b060] at 0x0040ACB5)",
       "at": "0x0040ACB8",
       "expect": "0x87B060",
       "write": "@newbase + 0x1B8"
+    },
+    {
+      "why": "inlined as_FromIndex bound (cmp eax, 0x318 at 0x0040AE24, guards the read at 0x0040AE45)",
+      "at": "0x0040AE25",
+      "expect": "0x318",
+      "write": "slots"
     },
     {
       "why": "&as_StateIndexList[0]  (mov eax, dword ptr [eax*4 + 0x87b060] at 0x0040AE45)",
@@ -177,10 +197,22 @@
       "write": "@newbase + 0x1AC"
     },
     {
+      "why": "inlined as_FromIndex bound (cmp eax, 0x318 at 0x0040BAB2, guards the read at 0x0040BAD3)",
+      "at": "0x0040BAB3",
+      "expect": "0x318",
+      "write": "slots"
+    },
+    {
       "why": "&as_StateIndexList[0]  (mov edx, dword ptr [eax*4 + 0x87b060] at 0x0040BAD3)",
       "at": "0x0040BAD6",
       "expect": "0x87B060",
       "write": "@newbase + 0x1B8"
+    },
+    {
+      "why": "inlined as_FromIndex bound (cmp edi, 0x318 at 0x0040C002, guards the read at 0x0040C023)",
+      "at": "0x0040C004",
+      "expect": "0x318",
+      "write": "slots"
     },
     {
       "why": "&as_StateIndexList[0]  (mov edi, dword ptr [edi*4 + 0x87b060] at 0x0040C023)",
@@ -195,16 +227,34 @@
       "write": "@newbase"
     },
     {
+      "why": "inlined as_FromIndex bound (cmp eax, 0x318 at 0x0040CB36, guards the read at 0x0040CB54)",
+      "at": "0x0040CB37",
+      "expect": "0x318",
+      "write": "slots"
+    },
+    {
       "why": "&as_StateIndexList[0]  (mov esi, dword ptr [eax*4 + 0x87b060] at 0x0040CB54)",
       "at": "0x0040CB57",
       "expect": "0x87B060",
       "write": "@newbase + 0x1B8"
     },
     {
+      "why": "inlined as_FromIndex bound (cmp eax, 0x318 at 0x004163DC, guards the read at 0x00416400)",
+      "at": "0x004163DD",
+      "expect": "0x318",
+      "write": "slots"
+    },
+    {
       "why": "&as_StateIndexList[0]  (mov esi, dword ptr [eax*4 + 0x87b060] at 0x00416400)",
       "at": "0x00416403",
       "expect": "0x87B060",
       "write": "@newbase + 0x1B8"
+    },
+    {
+      "why": "inlined as_FromIndex bound (cmp eax, 0x318 at 0x004164CB, guards the read at 0x004164F0)",
+      "at": "0x004164CC",
+      "expect": "0x318",
+      "write": "slots"
     },
     {
       "why": "&as_StateIndexList[0]  (mov edi, dword ptr [eax*4 + 0x87b060] at 0x004164F0)",
@@ -345,10 +395,22 @@
       "write": "@newbase"
     },
     {
+      "why": "inlined as_FromIndex bound (cmp edi, 0x318 at 0x0042ACCA, guards the read at 0x0042ACEB)",
+      "at": "0x0042ACCC",
+      "expect": "0x318",
+      "write": "slots"
+    },
+    {
       "why": "&as_StateIndexList[0]  (mov eax, dword ptr [edi*4 + 0x87b060] at 0x0042ACEB)",
       "at": "0x0042ACEE",
       "expect": "0x87B060",
       "write": "@newbase + 0x1B8"
+    },
+    {
+      "why": "inlined as_FromIndex bound (cmp esi, 0x318 at 0x0042B956, guards the read at 0x0042B976)",
+      "at": "0x0042B958",
+      "expect": "0x318",
+      "write": "slots"
     },
     {
       "why": "&as_StateIndexList[0]  (mov edi, dword ptr [esi*4 + 0x87b060] at 0x0042B976)",
@@ -363,10 +425,22 @@
       "write": "@newbase"
     },
     {
+      "why": "inlined as_FromIndex bound (cmp eax, 0x318 at 0x0042C0F5, guards the read at 0x0042C115)",
+      "at": "0x0042C0F6",
+      "expect": "0x318",
+      "write": "slots"
+    },
+    {
       "why": "&as_StateIndexList[0]  (mov eax, dword ptr [eax*4 + 0x87b060] at 0x0042C115)",
       "at": "0x0042C118",
       "expect": "0x87B060",
       "write": "@newbase + 0x1B8"
+    },
+    {
+      "why": "inlined as_FromIndex bound (cmp eax, 0x318 at 0x0042C262, guards the read at 0x0042C282)",
+      "at": "0x0042C263",
+      "expect": "0x318",
+      "write": "slots"
     },
     {
       "why": "&as_StateIndexList[0]  (mov edi, dword ptr [eax*4 + 0x87b060] at 0x0042C282)",
@@ -375,10 +449,22 @@
       "write": "@newbase + 0x1B8"
     },
     {
+      "why": "inlined as_FromIndex bound (cmp eax, 0x318 at 0x0042C56B, guards the read at 0x0042C58B)",
+      "at": "0x0042C56C",
+      "expect": "0x318",
+      "write": "slots"
+    },
+    {
       "why": "&as_StateIndexList[0]  (mov eax, dword ptr [eax*4 + 0x87b060] at 0x0042C58B)",
       "at": "0x0042C58E",
       "expect": "0x87B060",
       "write": "@newbase + 0x1B8"
+    },
+    {
+      "why": "inlined as_FromIndex bound (cmp ecx, 0x318 at 0x0042EB2E, guards the read at 0x0042EB3B)",
+      "at": "0x0042EB30",
+      "expect": "0x318",
+      "write": "slots"
     },
     {
       "why": "&as_StateIndexList[0]  (mov eax, dword ptr [ecx*4 + 0x87b060] at 0x0042EB3B)",
@@ -405,16 +491,34 @@
       "write": "@newbase + 0x71C"
     },
     {
+      "why": "inlined as_FromIndex bound (cmp dword ptr [ebp + 0xc], 0x318 at 0x00433317, guards the read at 0x0043333F)",
+      "at": "0x0043331A",
+      "expect": "0x318",
+      "write": "slots"
+    },
+    {
       "why": "&as_StateIndexList[0]  (mov ebx, dword ptr [edx*4 + 0x87b060] at 0x0043333F)",
       "at": "0x00433342",
       "expect": "0x87B060",
       "write": "@newbase + 0x1B8"
     },
     {
+      "why": "inlined as_FromIndex bound (cmp eax, 0x318 at 0x00433FE2, guards the read at 0x00434018)",
+      "at": "0x00433FE3",
+      "expect": "0x318",
+      "write": "slots"
+    },
+    {
       "why": "&as_StateIndexList[0]  (mov eax, dword ptr [eax*4 + 0x87b060] at 0x00434018)",
       "at": "0x0043401B",
       "expect": "0x87B060",
       "write": "@newbase + 0x1B8"
+    },
+    {
+      "why": "inlined as_FromIndex bound (cmp eax, 0x318 at 0x0043414C, guards the read at 0x0043416C)",
+      "at": "0x0043414D",
+      "expect": "0x318",
+      "write": "slots"
     },
     {
       "why": "&as_StateIndexList[0]  (mov eax, dword ptr [eax*4 + 0x87b060] at 0x0043416C)",
@@ -457,6 +561,12 @@
       "at": "0x004479C7",
       "expect": "0x87AEA8",
       "write": "@newbase"
+    },
+    {
+      "why": "inlined as_FromIndex bound (cmp eax, 0x318 at 0x00454B7A, guards the read at 0x00454BA4)",
+      "at": "0x00454B7B",
+      "expect": "0x318",
+      "write": "slots"
     },
     {
       "why": "&as_StateIndexList[0]  (mov eax, dword ptr [eax*4 + 0x87b060] at 0x00454BA4)",
@@ -643,6 +753,12 @@
       "at": "0x004B44E0",
       "expect": "0x87C0C4",
       "write": "@newbase + 0x121C + (slots - 792) * 4"
+    },
+    {
+      "why": "inlined as_FromIndex bound (cmp esi, 0x318 at 0x004B44F2, guards the read at 0x004B4511)",
+      "at": "0x004B44F4",
+      "expect": "0x318",
+      "write": "slots"
     },
     {
       "why": "&as_StateIndexList[0]  (mov eax, dword ptr [esi*4 + 0x87b060] at 0x004B4511)",
