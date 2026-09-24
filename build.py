@@ -78,6 +78,8 @@ EXPERIMENTAL = [
     # Q49: generic handler templates for AbStataIndex 792..2047 - without them aeo_Set never ATTACHES a 2026 state
     # past 791 (no stat effect, no packet). Needs abstate-index-cap + abstate-container-cap (same slots).
     ('abstate-template-cap', []),
+    # A quest give-up is refused for 10 s after the last quest dialog (err 0x0B49); operator 2026-09-25: about 3 s.
+    ('quest-giveup-delay', []),
     # NOT a recipe: the disconnect a same-zone link onto an unmarkable spot causes (error 1669) cannot be skipped -
     # so_Unmark has already run and the exe never re-marks, so the player ends up in limbo (tried 2026-09-23,
     # withdrawn). The quest_gate plugin pre-checks a GM &linkto destination instead.

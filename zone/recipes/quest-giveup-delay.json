@@ -1,0 +1,37 @@
+{
+  "name": "quest-giveup-delay",
+  "summary": "A quest can be given up 3 s after the last quest dialog instead of 10 s (operator 2026-09-25).",
+  "status": "WRITTEN 2026-09-25.",
+  "target": {
+    "file": "Zone00/Zone.exe",
+    "sha256": "7ef3532da08194a377558322ca2bd06d1ce5bdb2813796e033173b72d9ff883d",
+    "size": 4673536
+  },
+  "params": {
+    "ticks": 30
+  },
+  "consts": {
+    "delay_imm8": "0x00578990"
+  },
+  "limits": {
+    "ticks": {"max": "0x7F", "why": "an imm8 of `add edx, imm8` is sign-extended: 1..127 ticks (0.1..12.7 s)"}
+  },
+  "why": [
+    "ShinePlayer::sp_NC_QUEST_GIVE_UP_REQ (0x578910): `mov edx, [esi+0x5CB4]; add edx, 0x64; cmp [0x14D41A70], edx;",
+    "jae ok` - else it answers NC_QUEST_GIVE_UP_ACK err 0x0B49. [player+0x5CB4] is stamped with the global tick",
+    "(0x14D41A70, 100 ms units) by every NC_QUEST_SCRIPT_CMD_ACK (0x5783C8), so a give-up within 100 ticks = 10 s of",
+    "the last quest dialog page was refused (operator 2026-09-23: 'server error the first time, the second time it",
+    "worked'; wire: last 0x4402 11:09:53.2, give-up 11:10:00.1 -> 0x0B49, retry 11:10:05.5 -> 0x0B41 ok). The",
+    "operator asked for about 3 s (2026-09-25): the imm8 becomes `ticks` (30 = 3 s). No official capture has a",
+    "give-up, so the official delay is unknown; this applies to every product."
+  ],
+  "edits": [
+    {
+      "why": "give-up guard: add edx, 0x64 -> add edx, ticks (83 C2 imm8 at 0x57898E)",
+      "at": "delay_imm8",
+      "width": 1,
+      "expect": "0x64",
+      "write": "ticks"
+    }
+  ]
+}
