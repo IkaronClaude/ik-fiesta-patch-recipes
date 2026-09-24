@@ -62,6 +62,9 @@ EXPERIMENTAL = [
     # Title stat bonuses for 2026 title types 128..255 (the state array moved to its own region; the loader wrote
     # unbounded). Pairs with the title_ext plugin and character-title-types.
     ('title-state-types', []),
+    # Merchant shop lists 100 -> 1024 ("Too many merchants[100]", counted per NPC.txt PLACEMENT of a listed
+    # merchant): the whole ?npcitemlist global moves to its own section (zone/tools/mk_npcitemlist_cap.py).
+    ('npcitemlist-cap', []),
     # NOT a recipe: the disconnect a same-zone link onto an unmarkable spot causes (error 1669) cannot be skipped -
     # so_Unmark has already run and the exe never re-marks, so the player ends up in limbo (tried 2026-09-23,
     # withdrawn). The quest_gate plugin pre-checks a GM &linkto destination instead.
