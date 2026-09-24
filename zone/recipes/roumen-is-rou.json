@@ -1,0 +1,108 @@
+{
+  "name": "roumen-is-rou",
+  "summary": "The hard-coded fallback town (RouN 6445, 8630) becomes Rou and its town point.",
+  "status": "GENERATED 2026-09-24; tested on zone03 (a Lucky House logout now saves Rou 4199,4769, was RouN 6445,8630), then on every zone in build/Zone.hooked.exe.",
+  "target": {
+    "file": "Zone00/Zone.exe",
+    "sha256": "7ef3532da08194a377558322ca2bd06d1ce5bdb2813796e033173b72d9ff883d",
+    "size": 4673536
+  },
+  "params": {
+    "town_x": 4199,
+    "town_y": 4769
+  },
+  "consts": {},
+  "why": [
+    "The 2016 Zone.exe sends a player to \"RouN\" (6445, 8630) wherever it needs a default town, with no table behind it:",
+    "ShinePlayer::sp_2Roumen, so_SaveLocation (3 fallbacks - e.g. logging out in the Lucky House, GBHouse, saved the",
+    "character in RouN although Field.txt says RegenCity Rou), so_ply_ToNormalLoc, so_Prison_End and",
+    "WorldManagerSession::wms_NC_KQ_LINK_TO_FORCE_BY_BAN_CMD, plus a static town-name list (sp_NC_MISC_HIDE_EXCEPT_ME_ON_CMD)",
+    "and a global default. In the 2026 world RouN is retired and Rou (the rebuilt Roumen) is the town (Fiesta2026on2016",
+    "rule: nothing a player reaches may lead to RouN).",
+    "",
+    "  - the literal \"RouN\\0\" at its one .rdata address becomes \"Rou\\0\": every one of its 11 users (all `push offset`)",
+    "    copies it as the town name, so one 4-byte edit moves them all;",
+    "  - every (6445, 8630) pair written by those functions (`mov dword [reg+x], 0x192D` / `0x21B6`) becomes the Rou town",
+    "    point (params town_x / town_y). The same numbers elsewhere (MobBreederGroup) are unrelated and left alone."
+  ],
+  "edits": [
+    {
+      "why": "ShinePlayer::sp_2Roumen: fallback x 6445 -> Rou  (mov dword ptr [ebp - 0x82], 0x192d at 0x0043D06E)",
+      "at": "0x0043D074",
+      "expect": "0x192D",
+      "write": "town_x"
+    },
+    {
+      "why": "ShinePlayer::sp_2Roumen: fallback y 8630 -> Rou  (mov dword ptr [ebp - 0x7e], 0x21b6 at 0x0043D078)",
+      "at": "0x0043D07B",
+      "expect": "0x21B6",
+      "write": "town_y"
+    },
+    {
+      "why": "ShinePlayer::so_SaveLocation: fallback x 6445 -> Rou  (mov dword ptr [edi + 0x10], 0x192d at 0x0045455B)",
+      "at": "0x0045455E",
+      "expect": "0x192D",
+      "write": "town_x"
+    },
+    {
+      "why": "ShinePlayer::so_SaveLocation: fallback y 8630 -> Rou  (mov dword ptr [edi + 0x14], 0x21b6 at 0x00454562)",
+      "at": "0x00454565",
+      "expect": "0x21B6",
+      "write": "town_y"
+    },
+    {
+      "why": "ShinePlayer::so_SaveLocation: fallback x 6445 -> Rou  (mov dword ptr [edi + 0x10], 0x192d at 0x004546C0)",
+      "at": "0x004546C3",
+      "expect": "0x192D",
+      "write": "town_x"
+    },
+    {
+      "why": "ShinePlayer::so_SaveLocation: fallback y 8630 -> Rou  (mov dword ptr [edi + 0x14], 0x21b6 at 0x004546C7)",
+      "at": "0x004546CA",
+      "expect": "0x21B6",
+      "write": "town_y"
+    },
+    {
+      "why": "ShinePlayer::so_SaveLocation: fallback x 6445 -> Rou  (mov dword ptr [edi + 0x10], 0x192d at 0x00454749)",
+      "at": "0x0045474C",
+      "expect": "0x192D",
+      "write": "town_x"
+    },
+    {
+      "why": "ShinePlayer::so_SaveLocation: fallback y 8630 -> Rou  (mov dword ptr [edi + 0x14], 0x21b6 at 0x00454750)",
+      "at": "0x00454753",
+      "expect": "0x21B6",
+      "write": "town_y"
+    },
+    {
+      "why": "WorldManagerSession::wms_NC_KQ_LINK_TO_FORCE_BY_BAN_CMD: fallback x 6445 -> Rou  (mov dword ptr [ebp - 0x1e], 0x192d at 0x004971E0)",
+      "at": "0x004971E3",
+      "expect": "0x192D",
+      "write": "town_x"
+    },
+    {
+      "why": "WorldManagerSession::wms_NC_KQ_LINK_TO_FORCE_BY_BAN_CMD: fallback y 8630 -> Rou  (mov dword ptr [ebp - 0x1a], 0x21b6 at 0x004971E7)",
+      "at": "0x004971EA",
+      "expect": "0x21B6",
+      "write": "town_y"
+    },
+    {
+      "why": "ShinePlayer::so_ply_ToNormalLoc: fallback x 6445 -> Rou  (mov dword ptr [esi + 0x18], 0x192d at 0x00552671)",
+      "at": "0x00552674",
+      "expect": "0x192D",
+      "write": "town_x"
+    },
+    {
+      "why": "ShinePlayer::so_ply_ToNormalLoc: fallback y 8630 -> Rou  (mov dword ptr [esi + 0x1c], 0x21b6 at 0x00552678)",
+      "at": "0x0055267B",
+      "expect": "0x21B6",
+      "write": "town_y"
+    },
+    {
+      "why": "\"RouN\" -> \"Rou\": the fallback town name of every user of the literal",
+      "at": "0x006AC7F4",
+      "expect": "0x4E756F52",
+      "write": "0x00756F52"
+    }
+  ]
+}
