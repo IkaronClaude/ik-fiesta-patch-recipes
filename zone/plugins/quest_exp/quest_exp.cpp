@@ -3,8 +3,13 @@
 // ---- 1. QUEST EXP: THE STOCK PATH (read from Zone.exe) -------------------------------------------------------
 //
 //   CQuestZone::QuestTakeReward, reward type 0 (0x5BC053): mov edx,[Value] -> the reward packet +0x33, a u32
-//   InventoryCellLockList::icl_QuestReward(quest, int exp, int fame, b, b)  0x489800: parks it in a LockedCell
-//       lc_Index = quest id, lc_Argument +0x10 = exp (dword), +0x14 = fame, +0x18/+0x19 = title flags
+//   InventoryCellLockList::icl_QuestReward(index, int exp, int fame, b, b)  0x489800: parks it in a LockedCell
+//       lc_Argument +0x10 = exp (dword), +0x14 = fame, +0x18/+0x19 = title flags. lc_Index is NOT the quest id: the
+//       caller, CQuestZone::Send_NC_QUEST_DB_DONE_REQ(quest, ...) 0x5BBE60, passes a lock index (vtable+0x60 call at
+//       0x5BC190, first push [ebx+0x52] = a word of player vtable+0x7D4). Read as a quest id it made the first live
+//       test grant only the low dword (2,112,563,836 of 14,997,465,724, 2026-09-24). The quest is taken at
+//       Send_NC_QUEST_DB_DONE_REQ instead and matched to its releaser by (player, low dword): the releaser runs when
+//       the DB answers, on whatever thread, so it is a small locked pending list, not a thread-local.
 //   ShinePlayer::so_ply_InvenCellReleaser_QuestReward(LockedCell*)          0x52D980: when the DB answers,
 //       sp_GainExp(player, int [cell+0x10], 0xFFFF, 0xFFFF), then fame, then the title
 //   ShinePlayer::sp_GainExp(int exp, ...)                                   0x42D830: `mov eax,edi; cdq;
@@ -43,6 +48,8 @@
 #include <zone_globals.h>
 
 #include <cstddef>
+#include <mutex>
+#include <vector>
 
 namespace {
 
@@ -100,16 +107,69 @@ unsigned booster_permille(void* player) {
 // ---- 1 + 2: the quest EXP grant --------------------------------------------------------------------------------
 zone::Detour g_release;
 
-unsigned long long full_exp(unsigned short quest, unsigned low) {
+// quest rewards sent to the DB and not yet released: {player, low dword, quest, full 64-bit EXP}
+struct Pending {
+    void* player;
+    unsigned low;
+    unsigned short quest;
+    unsigned long long full;
+};
+std::mutex g_pending_lock;
+std::vector<Pending> g_pending;
+const size_t kMaxPending = 4096;                    // a DB that never answers must not grow this forever
+
+zone::Detour g_done;
+const unsigned kQuestZonePlayer = 0xB4;             // CQuestZone::m_pPlayer
+
+int __fastcall done_impl(void* qz, void*, unsigned short quest, unsigned long a2) {
+    typedef int(__fastcall * Orig)(void*, void*, unsigned short, unsigned long);
+    void* player = qz ? *(void**)((char*)qz + kQuestZonePlayer) : nullptr;
     auto get = zone::fn::CQuestData__GetQuestData();
     const QUEST_DATA* q = get(zone::global::gQuestData(), 0, quest);
-    if (!q) return low;
+    if (player && q) {
+        for (const auto& r : q->Reward) {
+            if (!r.Use || r.Type != kRewardExp) continue;
+            const unsigned* v = (const unsigned*)&r.Value;
+            std::lock_guard<std::mutex> g(g_pending_lock);
+            if (g_pending.size() >= kMaxPending) g_pending.erase(g_pending.begin());
+            g_pending.push_back({player, v[0], quest, ((unsigned long long)v[1] << 32) | v[0]});
+            break;                                  // QuestTakeReward uses one EXP slot (the last write wins; one is set)
+        }
+    }
+    return ((Orig)g_done.trampoline)(qz, 0, quest, a2);
+}
+
+void __declspec(naked) done_thunk() { __asm { jmp done_impl } }
+
+// the full reward of the quest this release belongs to: the pending entry of this player with this low dword
+bool take_pending(void* player, unsigned low, Pending* out) {
+    std::lock_guard<std::mutex> g(g_pending_lock);
+    for (size_t i = 0; i < g_pending.size(); i++) {
+        if (g_pending[i].player == player && g_pending[i].low == low) {
+            *out = g_pending[i];
+            g_pending.erase(g_pending.begin() + i);
+            return true;
+        }
+    }
+    return false;
+}
+
+// Fiesta2026on2016 writes every reward >= 2^31 with its quest id in the low 16 bits (operator's idea, 2026-09-24):
+// with no pending entry (a zone restart between the DB request and its answer), take the quest from the amount and
+// accept it only if that quest's EXP slot has exactly this low dword.
+bool fingerprinted(unsigned low, Pending* out) {
+    const unsigned short quest = (unsigned short)(low & 0xFFFF);
+    auto get = zone::fn::CQuestData__GetQuestData();
+    const QUEST_DATA* q = quest ? get(zone::global::gQuestData(), 0, quest) : nullptr;
+    if (!q || q->ID != quest) return false;         // GetQuestData is a lower_bound: check it is the quest asked for
     for (const auto& r : q->Reward) {
         if (!r.Use || r.Type != kRewardExp) continue;
         const unsigned* v = (const unsigned*)&r.Value;
-        if (v[0] == low) return ((unsigned long long)v[1] << 32) | v[0];   // the slot QuestTakeReward used
+        if (v[0] != low) return false;
+        *out = {nullptr, low, quest, ((unsigned long long)v[1] << 32) | v[0]};
+        return true;
     }
-    return low;
+    return false;
 }
 
 void __fastcall release_impl(void* player, void*, zone::types::InventoryLocking__LockedCell* cell) {
@@ -117,7 +177,9 @@ void __fastcall release_impl(void* player, void*, zone::types::InventoryLocking_
     unsigned* exp_arg = cell ? (unsigned*)((char*)cell + kCellExp) : nullptr;
     if (!exp_arg || !*exp_arg) return ((Orig)g_release.trampoline)(player, 0, cell);
     const unsigned low = *exp_arg;
-    const unsigned long long base = full_exp(cell->lc_Index, low);
+    Pending pend = {};
+    const bool known = take_pending(player, low, &pend) || fingerprinted(low, &pend);
+    const unsigned long long base = known ? pend.full : low;
     const unsigned boost = booster_permille(player);
     const unsigned long long total = base + base * boost / 1000;
     if (total == low && low <= (unsigned)kIntMax) return ((Orig)g_release.trampoline)(player, 0, cell);
@@ -129,7 +191,7 @@ void __fastcall release_impl(void* player, void*, zone::types::InventoryLocking_
         left -= (unsigned long long)chunk;
     }
     zone::log("quest %u: EXP %llu (reward %llu%s, booster +%u.%u%%) granted in %s",
-              (unsigned)cell->lc_Index, total, base, base != low ? " from the 8-byte slot" : "",
+              known ? (unsigned)pend.quest : 0u, total, base, base != low ? " from the 8-byte slot" : "",
               boost / 10, boost % 10, total > (unsigned long long)kIntMax ? "chunks" : "one call");
     *exp_arg = 0;                                   // the stock releaser still does fame + title
     ((Orig)g_release.trampoline)(player, 0, cell);
@@ -207,6 +269,8 @@ void __declspec(naked) abstate_thunk() { __asm { jmp abstate_impl } }
 }  // namespace
 
 ZONEHOOK_PLUGIN("quest_exp") {
+    zone::hook_function("CQuestZone::Send_NC_QUEST_DB_DONE_REQ (which quest a reward is)",
+                        (void*)zone::fn::CQuestZone__Send_NC_QUEST_DB_DONE_REQ(), (void*)done_thunk, &g_done);
     zone::hook_function("ShinePlayer::so_ply_InvenCellReleaser_QuestReward",
                         (void*)zone::fn::ShineObjectClass__ShinePlayer__so_ply_InvenCellReleaser_QuestReward(),
                         (void*)release_thunk, &g_release);

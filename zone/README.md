@@ -35,7 +35,19 @@ one. Proven live 2026-09-19. The file's header comment is the full write-up.
   and every login passes the low 32 bits of ~7e12 ms. While either runs for such a record, `so_AbnormalState_Set`
   gets 2^31-1 ms; the next login re-applies it.
 
-Unverified live as of 2026-09-24. The file's header comment has the disassembly.
+First live test 2026-09-24 granted only the low dword: the releaser's `lc_Index` is a lock index, not the quest
+id. Fixed: the quest is taken at `CQuestZone::Send_NC_QUEST_DB_DONE_REQ` (0x5BBE60) and matched to its release by
+(player, low dword); Fiesta2026on2016 also writes each reward >= 2^31 with its quest id in the low 16 bits, which the
+releaser uses (verified against the quest's slot) when no pending entry exists. The file's header comment has the
+disassembly.
+
+### `vault_jobs` - Mystery Vault rows for one job (Fiesta2026on2016 Q22)
+
+A MysteryVaultServer row with ChrClass `100 + class id` passes `IsCheckClassType` only for a player whose CURRENT
+class (`so_GetClass`) is that class. A vault with such rows but none for the player's class is refused whole: the
+free-slot check reports 0 for that one call, so the zone's own fail path runs and nothing is made or consumed, and the
+error becomes 0x709 (2026 client: "Cannot use due to the Class Requirement."). Loads and hooks on zone03
+2026-09-24; not exercised yet (needs vault data with job rows).
 
 ## Hook recipes (experimental chain)
 
