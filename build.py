@@ -65,6 +65,10 @@ EXPERIMENTAL = [
     # Merchant shop lists 100 -> 1024 ("Too many merchants[100]", counted per NPC.txt PLACEMENT of a listed
     # merchant): the whole ?npcitemlist global moves to its own section (zone/tools/mk_npcitemlist_cap.py).
     ('npcitemlist-cap', []),
+    # LAST, so no earlier region moves (plugins know some region addresses). The AbnormalStateContainer half (crash 2026-09-24): ?abstateidentarray (792 x 12 B, written before any bound
+    # check) moves to a section for `slots` indexes, and the object state bitset (792 bits) is bounds-checked.
+    # Required as soon as the 2026 AbState table is in: index 1093 overwrote the handler objects of 228 / 229.
+    ('abstate-container-cap', []),
     # NOT a recipe: the disconnect a same-zone link onto an unmarkable spot causes (error 1669) cannot be skipped -
     # so_Unmark has already run and the exe never re-marks, so the player ends up in limbo (tried 2026-09-23,
     # withdrawn). The quest_gate plugin pre-checks a GM &linkto destination instead.
