@@ -1,0 +1,172 @@
+{
+  "name": "npcitemlist-cap",
+  "summary": "Lift the 100 shop-list cap of NPCItemListTable (\"Too many merchants[100]\", counted per merchant PLACEMENT): the whole ?npcitemlist object moves to a new section sized for `slots`.",
+  "status": "GENERATED 2026-09-24 by zone/tools/mk_npcitemlist_cap.py.",
+  "target": {
+    "file": "Zone00/Zone.exe",
+    "sha256": "7ef3532da08194a377558322ca2bd06d1ce5bdb2813796e033173b72d9ff883d",
+    "size": 4673536
+  },
+  "params": {
+    "slots": 1024
+  },
+  "consts": {},
+  "why": [
+    "    python zone/tools/mk_npcitemlist_cap.py --exe Z:/ServerSource/Zone00/Zone.exe [--slots 1024]",
+    "",
+    "NPCItemList::NPCItemListTable (global ?npcitemlist, 0x598 bytes) keeps one prebuilt shop packet per merchant shop",
+    "list it has read:",
+    "",
+    "    +0x000  PROTO_NC_MENU_SHOPOPENTABLE_CMD* nilt_Packet[100]",
+    "    +0x190  int   nilt_TableNumber                  how many are in use",
+    "    +0x194  BTree nilt_Index2Handle                 list name -> slot",
+    "",
+    "nilt_ReadTable (0x4C5130) runs once per NPC.txt PLACEMENT of a Merchant with a list (a merchant standing on 12 maps",
+    "reads its list 12 times) and asserts `Too many merchants[100]` (cmp nilt_TableNumber, 0x64) - a ShineExit at",
+    "zone start. Fiesta2026on2016 hits it with the Rebalanced merchants (the enchant / buff merchants stand beside every",
+    "smith) and will hit it with captured maps too.",
+    "",
+    "The array cannot grow in place (?merchantcity follows at 0x0DA29A18), so the whole object moves to a new zero-filled",
+    "section sized for `slots`, the same technique as abstate-index-cap. Sites, all FOUND by decoding the stock exe:",
+    "  - every absolute reference into the object (imm32 / [disp32]): the same offset in the new section, plus the",
+    "    growth for the two members behind the array (the BTree is reached as `mov ecx, offset` by its constructor,",
+    "    destructor and the lookup in nilt_MenuPacket);",
+    "  - every [this + 0x190] / [this + 0x194] inside the two NPCItemListTable methods: + the growth;",
+    "  - the `cmp ..., 0x64` bound in those methods: slots.",
+    "",
+    "Found: 10 absolute references, 6 tail-member sites, 2 bound. No other section holds an address into",
+    "the object (checked). The old 0x598 bytes are simply no longer referenced."
+  ],
+  "new_section": {
+    "name": ".nilt",
+    "size": "0x598 + (slots - 100) * 4",
+    "materialise": false,
+    "note": "Zero-filled, as the original in the BSS tail of .data; the BTree constructor runs at start-up through the rewritten absolute reference."
+  },
+  "edits": [
+    {
+      "why": "&npcitemlist  (mov ecx, 0xda29450 at 0x004C271D)",
+      "at": "0x004C271E",
+      "expect": "0xDA29450",
+      "write": "@newbase"
+    },
+    {
+      "why": "&npcitemlist  (mov ecx, 0xda29450 at 0x004C2AEA)",
+      "at": "0x004C2AEB",
+      "expect": "0xDA29450",
+      "write": "@newbase"
+    },
+    {
+      "why": "nilt_MenuPacket: nilt_Index2Handle  (lea ecx, [esi + 0x194])",
+      "at": "0x004C50B9",
+      "expect": "0x194",
+      "write": "0x194 + (slots - 100) * 4"
+    },
+    {
+      "why": "nilt_MenuPacket: the slot bound, cmp eax,0x64 -> cmp ah,slots/256  (opcode + modrm)",
+      "at": "0x004C50FA",
+      "width": 2,
+      "expect": "0xF883",
+      "write": "0xFC80"
+    },
+    {
+      "why": "nilt_MenuPacket: the slot bound, imm8 0x64 -> slots/256 = 0x04",
+      "at": "0x004C50FC",
+      "width": 1,
+      "expect": "0x64",
+      "write": "0x04"
+    },
+    {
+      "why": "nilt_ReadTable: nilt_TableNumber  (mov eax, dword ptr [edi + 0x190])",
+      "at": "0x004C5165",
+      "expect": "0x190",
+      "write": "0x190 + (slots - 100) * 4"
+    },
+    {
+      "why": "nilt_ReadTable: the slot bound, cmp eax,0x64 -> cmp ah,slots/256  (opcode + modrm)",
+      "at": "0x004C516B",
+      "width": 2,
+      "expect": "0xF883",
+      "write": "0xFC80"
+    },
+    {
+      "why": "nilt_ReadTable: the slot bound, imm8 0x64 -> slots/256 = 0x04",
+      "at": "0x004C516D",
+      "width": 1,
+      "expect": "0x64",
+      "write": "0x04"
+    },
+    {
+      "why": "nilt_ReadTable: nilt_TableNumber  (mov edx, dword ptr [edi + 0x190])",
+      "at": "0x004C5249",
+      "expect": "0x190",
+      "write": "0x190 + (slots - 100) * 4"
+    },
+    {
+      "why": "nilt_ReadTable: nilt_TableNumber  (mov eax, dword ptr [edi + 0x190])",
+      "at": "0x004C5252",
+      "expect": "0x190",
+      "write": "0x190 + (slots - 100) * 4"
+    },
+    {
+      "why": "nilt_ReadTable: nilt_Index2Handle  (lea ecx, [edi + 0x194])",
+      "at": "0x004C5282",
+      "expect": "0x194",
+      "write": "0x194 + (slots - 100) * 4"
+    },
+    {
+      "why": "nilt_ReadTable: nilt_TableNumber  (inc dword ptr [edi + 0x190])",
+      "at": "0x004C528D",
+      "expect": "0x190",
+      "write": "0x190 + (slots - 100) * 4"
+    },
+    {
+      "why": "&npcitemlist  (mov ecx, 0xda29450 at 0x004C5C67)",
+      "at": "0x004C5C68",
+      "expect": "0xDA29450",
+      "write": "@newbase"
+    },
+    {
+      "why": "&npcitemlist  (mov ecx, 0xda29450 at 0x00524C16)",
+      "at": "0x00524C17",
+      "expect": "0xDA29450",
+      "write": "@newbase"
+    },
+    {
+      "why": "&nilt_Index2Handle+0x0  (mov ecx, 0xda295e4 at 0x00696C81)",
+      "at": "0x00696C82",
+      "expect": "0xDA295E4",
+      "write": "@newbase + 0x194 + (slots - 100) * 4"
+    },
+    {
+      "why": "&npcitemlist  (mov edi, 0xda29450 at 0x00696C92)",
+      "at": "0x00696C93",
+      "expect": "0xDA29450",
+      "write": "@newbase"
+    },
+    {
+      "why": "&nilt_TableNumber+0x0  (mov dword ptr [0xda295e0], eax at 0x00696C9E)",
+      "at": "0x00696C9F",
+      "expect": "0xDA295E0",
+      "write": "@newbase + 0x190 + (slots - 100) * 4"
+    },
+    {
+      "why": "&npcitemlist  (mov esi, 0xda29450 at 0x0069DD11)",
+      "at": "0x0069DD12",
+      "expect": "0xDA29450",
+      "write": "@newbase"
+    },
+    {
+      "why": "&nilt_TableNumber+0x0  (cmp esi, 0xda295e0 at 0x0069DD28)",
+      "at": "0x0069DD2A",
+      "expect": "0xDA295E0",
+      "write": "@newbase + 0x190 + (slots - 100) * 4"
+    },
+    {
+      "why": "&nilt_Index2Handle+0x0  (mov ecx, 0xda295e4 at 0x0069DD30)",
+      "at": "0x0069DD31",
+      "expect": "0xDA295E4",
+      "write": "@newbase + 0x194 + (slots - 100) * 4"
+    }
+  ]
+}
