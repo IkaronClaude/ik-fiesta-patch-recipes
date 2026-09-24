@@ -69,6 +69,9 @@ EXPERIMENTAL = [
     # check) moves to a section for `slots` indexes, and the object state bitset (792 bits) is bounds-checked.
     # Required as soon as the 2026 AbState table is in: index 1093 overwrote the handler objects of 228 / 229.
     ('abstate-container-cap', []),
+    # The zone's hard-coded fallback town "RouN" (6445, 8630) -> Rou and its town point: sp_2Roumen, so_SaveLocation
+    # (logging out in the Lucky House saved players in RouN), so_ply_ToNormalLoc, so_Prison_End, the KQ ban link.
+    ('roumen-is-rou', []),
     # NOT a recipe: the disconnect a same-zone link onto an unmarkable spot causes (error 1669) cannot be skipped -
     # so_Unmark has already run and the exe never re-marks, so the player ends up in limbo (tried 2026-09-23,
     # withdrawn). The quest_gate plugin pre-checks a GM &linkto destination instead.
