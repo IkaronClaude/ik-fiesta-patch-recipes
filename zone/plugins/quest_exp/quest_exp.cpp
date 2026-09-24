@@ -172,6 +172,16 @@ bool fingerprinted(unsigned low, Pending* out) {
     return false;
 }
 
+// decimal text of a u64 into buf (>= 21 bytes) - for zone::log, which cannot format 64-bit values
+const char* u64s(unsigned long long v, char* buf) {
+    char tmp[24];
+    int n = 0;
+    do { tmp[n++] = (char)('0' + v % 10); v /= 10; } while (v);
+    for (int i = 0; i < n; i++) buf[i] = tmp[n - 1 - i];
+    buf[n] = 0;
+    return buf;
+}
+
 void __fastcall release_impl(void* player, void*, zone::types::InventoryLocking__LockedCell* cell) {
     typedef void(__fastcall * Orig)(void*, void*, zone::types::InventoryLocking__LockedCell*);
     unsigned* exp_arg = cell ? (unsigned*)((char*)cell + kCellExp) : nullptr;
@@ -190,8 +200,11 @@ void __fastcall release_impl(void* player, void*, zone::types::InventoryLocking_
         gain(player, 0, chunk, 0xFFFF, 0xFFFF);
         left -= (unsigned long long)chunk;
     }
-    zone::log("quest %u: EXP %llu (reward %llu%s, booster +%u.%u%%) granted in %s",
-              known ? (unsigned)pend.quest : 0u, total, base, base != low ? " from the 8-byte slot" : "",
+    // zone::log is wvsprintfA: no 64-bit specifier (a %llu read the wrong arguments and crashed zone04 on the
+    // first real grant, 2026-09-24), so the amounts are formatted here
+    char t[24], b[24];
+    zone::log("quest %u: EXP %s (reward %s%s, booster +%u.%u%%) granted in %s",
+              known ? (unsigned)pend.quest : 0u, u64s(total, t), u64s(base, b), base != low ? " from the 8-byte slot" : "",
               boost / 10, boost % 10, total > (unsigned long long)kIntMax ? "chunks" : "one call");
     *exp_arg = 0;                                   // the stock releaser still does fame + title
     ((Orig)g_release.trampoline)(player, 0, cell);
