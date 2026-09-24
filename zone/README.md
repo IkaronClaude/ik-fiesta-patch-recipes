@@ -22,6 +22,21 @@ asks Character for bag 18 (`NC_CHAR_GET_ITEMLIST_BY_TYPE_REQ`), which needs `cha
 contents have arrived every move into or out of it is refused, so an item can never share a slot with a stored
 one. Proven live 2026-09-19. The file's header comment is the full write-up.
 
+### `quest_exp` - quest EXP past 2^31, the Quest EXP Booster, permanent charged AbStates
+
+- **Quest EXP:** the stock releaser (`so_ply_InvenCellReleaser_QuestReward` 0x52D980) passes the reward to
+  `sp_GainExp` as a signed int, which sign-extends it into the 64-bit EXP - a reward >= 2^31 SUBTRACTS EXP (42 of
+  the 2026 rewards). The plugin reads it unsigned, widens it to the full 8-byte reward value when the quest's EXP
+  slot carries a high dword (0 in all stock data, so nothing changes until a data variant sets one), applies the
+  booster, and grants in chunks of <= 2^31-1 through the zone's own `sp_GainExp`.
+- **Quest EXP Booster** (charged type 40, a 2026 type): `uib_CanUseItem` lets it through; the grant adds
+  EffectValue per mille of the strongest active one.
+- **Permanent type-31 items** (a charged AbState, e.g. Dragon's Grace): with KeepTime 0 the first use passes 0 ms
+  and every login passes the low 32 bits of ~7e12 ms. While either runs for such a record, `so_AbnormalState_Set`
+  gets 2^31-1 ms; the next login re-applies it.
+
+Unverified live as of 2026-09-24. The file's header comment has the disassembly.
+
 ## Hook recipes (experimental chain)
 
 - `dll-loader` - the import of `fiestahook.dll`; no code patched.
