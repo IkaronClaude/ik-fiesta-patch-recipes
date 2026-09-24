@@ -1,0 +1,33 @@
+{
+  "name": "client-2026-dll-loader",
+  "summary": "2026 client: import fiestahook.dll, so client features can be written as hook plugins (hooks/*.dll beside Fiesta.exe).",
+  "status": "BUILT 2026-09-24, not yet run in a live client.",
+  "target": {
+    "file": "Fiesta.exe",
+    "sha256": "79762e9a7f7bdf1a66f2b7826fa70945a1debe5b016ec5c9e8d600eb7357a730",
+    "size": 9264128
+  },
+  "params": {},
+  "consts": {},
+  "why": [
+    "THE TARGET IS Fiesta.exe (2026-09-15, 9,264,128 B), not the stale Fiesta.bin beside it.",
+    "",
+    "The same import injection as zone/recipes/dll-loader.json: the import descriptor array is copied into a new",
+    "section with fiestahook.dll appended and the import directory pointed at the copy; nothing in .text changes.",
+    "Safe for the same reason: Fiesta.exe has no bound-import directory (checked at apply time).",
+    "",
+    "The loader (common/loader) is shared with the servers. A server is a Windows service and loads its plugins",
+    "when ServiceMain starts; the client is not, so the loader's CLIENT MODE swaps the CreateWindowExA import and",
+    "loads hooks/*.dll on the first call - WinMain on the main thread, everything initialised, no window yet.",
+    "With no plugins the client runs exactly as before (the loader logs to fiestahook.log beside the exe).",
+    "",
+    "Deploy: fiestahook.dll next to Fiesta.exe, plugins in a hooks/ subfolder. XIGNCODE must already be",
+    "neutralised (Client2026patched is): an injected DLL is exactly what it scans for."
+  ],
+  "add_import": {
+    "dll": "fiestahook.dll",
+    "function": "ZoneHookInit",
+    "section": ".zhook"
+  },
+  "edits": []
+}

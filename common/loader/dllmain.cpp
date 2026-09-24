@@ -1,4 +1,5 @@
-// fiestahook.dll - the LOADER. A server exe is patched to import it (zone/recipes/dll-loader.json, character/recipes/dll-loader-character.json), and everything
+// fiestahook.dll - the LOADER. A server exe (zone/recipes/dll-loader.json, character/recipes/dll-loader-character.json) or the
+// 2026 game client (client/recipes/client-2026-dll-loader.json) is patched to import it, and everything
 // else lives in hooks/*.dll, which this loads.
 //
 // TWO STAGES, and the reason for it:
@@ -57,6 +58,28 @@ static void start_plugins() {
     }
 }
 
+// ---- stage 2, CLIENT mode: the game client is a GUI exe, not a service ---------------------------------
+//
+// Fiesta.exe (client/recipes/client-2026-dll-loader.json) has no StartServiceCtrlDispatcherA to get in front of.
+// Its equivalent moment is the FIRST CreateWindowExA call: WinMain is running on the main thread, the CRT and every
+// DLL are initialised, no loader lock is held, and no game window exists yet - so hooks installed here are in
+// place before any UI code runs. The slot is put back before the plugins load, and the real call follows.
+namespace {
+typedef HWND(WINAPI* CreateWindowExA_t)(DWORD, LPCSTR, LPCSTR, DWORD, int, int, int, int, HWND, HMENU, HINSTANCE, LPVOID);
+CreateWindowExA_t g_create_window = 0;
+volatile LONG g_client_started = 0;
+}  // namespace
+
+static HWND WINAPI first_window(DWORD ex, LPCSTR cls, LPCSTR name, DWORD style, int x, int y, int w, int h,
+                                HWND parent, HMENU menu, HINSTANCE inst, LPVOID param) {
+    if (InterlockedExchange(&g_client_started, 1) == 0) {
+        hook::iat_hook(NULL, "USER32.dll", "CreateWindowExA", (void*)g_create_window);
+        hook::log("client: first CreateWindowExA - loading plugins before any window exists");
+        start_plugins();
+    }
+    return g_create_window(ex, cls, name, style, x, y, w, h, parent, menu, inst, param);
+}
+
 // ---- stage 1: loader init ---------------------------------------------------------------------------
 
 extern "C" __declspec(dllexport) void ZoneHookInit() {
@@ -79,8 +102,11 @@ BOOL APIENTRY DllMain(HMODULE module, DWORD reason, LPVOID) {
 
         if (hook::hook_service_main(start_plugins)) {
             hook::log("waiting for ServiceMain");
+        } else if ((g_create_window = (CreateWindowExA_t)hook::iat_hook(NULL, "USER32.dll", "CreateWindowExA",
+                                                                        (void*)first_window)) != 0) {
+            hook::log("not a service - client mode: waiting for the first CreateWindowExA");
         } else {
-            hook::log("NOT A SERVICE (no StartServiceCtrlDispatcherA import) - nothing will be loaded");
+            hook::log("NOT A SERVICE and no CreateWindowExA import - nothing will be loaded");
         }
     } else if (reason == DLL_PROCESS_DETACH) {
         hook::uninstall_all();
