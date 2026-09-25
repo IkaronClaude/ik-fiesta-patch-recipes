@@ -1,7 +1,7 @@
 {
   "name": "client-2026-exp-gain-u64",
   "summary": "2026 client: NC_BAT_EXPGAIN (0x240B) is read as {u32 low, u16 handle, u32 high} - the EXP bar adds the u64 and \"Obtained %s Exp.\" prints the full 64-bit amount.",
-  "status": "WRITTEN 2026-09-25 (ticket Q32; pairs with zone recipe exp-gain-u64, which always sends the 12-byte form).",
+  "status": "SUPERSEDED 2026-09-25 by the client plugin client/plugins/exp64 (hooks/, no exe bytes changed) - DO NOT APPLY. v1 crashed the live client (unrelocated absolute address in its cave; the 2026 exe is ASLR-loaded); v2 (no absolute address) was built but never shipped. Kept as the record of the handler's layout.",
   "target": {
     "file": "Fiesta.exe",
     "sha256": "79762e9a7f7bdf1a66f2b7826fa70945a1debe5b016ec5c9e8d600eb7357a730",
@@ -14,13 +14,14 @@
     "ctor_rel32": "0x0073F0B0",
     "ctor_after_jmp": "0x0073F0B4",
     "ctor_back": "0x0073F0B4",
-    "handler_site": "0x0073F110",
-    "handler_rel32": "0x0073F111",
-    "handler_after_jmp": "0x0073F115",
+    "handler_site": "0x0073F11D",
+    "handler_rel32": "0x0073F11E",
+    "handler_after_jmp": "0x0073F122",
     "format_call": "0x0073F12F",
     "no_print": "0x0073F26B",
     "cave_ctor": "0x0",
-    "cave_handler": "0x20"
+    "cave_handler": "0x20",
+    "alloc2_imm8": "0x005A5D47"
   },
   "why": [
     "0x240B: case 0x58F6A7 news a 0x18-byte object and constructs it with the payload pointer (ctor 0x73F050):",
@@ -48,7 +49,14 @@
     "handler adds low/high with add/adc, skips the line when both are 0, and passes high to the formatter. A negative",
     "amount (sign-extended by the zone) adds and prints as negative, which the stock 32-bit add could not.",
     "REQUIRES a server that sends the 12-byte 0x240B (our zones with exp-gain-u64): against a stock 6-byte server the",
-    "high dword would be read from past the payload."
+    "high dword would be read from past the payload.",
+    "",
+    "v2 (2026-09-25): Fiesta.exe is DYNAMICBASE and Windows relocates it (live crash base 0xD70000). A cave must not hold",
+    "an absolute address: v1's `mov ecx, 0xC1BB08` was never relocated and the add at +8 faulted (AV 0x01710038). v2",
+    "lets the stock `push [ebx+0x10] / mov ecx, 0xC1BB08 (relocated by the loader) / call 0x7949E0` add the low dword",
+    "(with the carry into +0x196), then jumps at 0x73F11D and adds only the high dword into [ecx+0x196] - 0x7949E0 keeps",
+    "ecx. The object's ctor 0x73F050 has a second caller, 0x5A5D20 (unreferenced - dead code as far as a byte search",
+    "shows), which also allocates 0x18: bumped to 0x20 too, so the ctor's +0x18 store can never overrun it."
   ],
   "new_section": {
     "name": ".expgain64",
@@ -66,26 +74,32 @@
         "894618",
         "8B01",
         "894610",
-        "E9", {"rel32": "ctor_back"}
+        "E9",
+        {
+          "rel32": "ctor_back"
+        }
       ]
     },
     {
-      "why": "handler: u64 add into the EXP total, no line for 0, formatter gets (buf, low, high)",
+      "why": "handler: the stock call added the low dword; add the high dword, no line for 0, formatter gets (buf, low, high)",
       "at": "@newbase + cave_handler",
       "emit": [
-        "B908BBC100",
-        "8B4310",
-        "018192010000",
         "8B4318",
-        "118196010000",
+        "018196010000",
         "8B4310",
         "0B4318",
-        "0F84", {"rel32": "no_print"},
+        "0F84",
+        {
+          "rel32": "no_print"
+        },
         "FF7318",
         "FF7310",
         "8D45D8",
         "50",
-        "E9", {"rel32": "format_call"}
+        "E9",
+        {
+          "rel32": "format_call"
+        }
       ]
     }
   ],
@@ -93,6 +107,13 @@
     {
       "why": "the queued EXPGAIN object: 0x18 -> 0x20 bytes (room for the high dword at +0x18)",
       "at": "alloc_imm8",
+      "width": 1,
+      "expect": "0x18",
+      "write": "0x20"
+    },
+    {
+      "why": "the ctor's other caller 0x5A5D20: 0x18 -> 0x20 bytes as well",
+      "at": "alloc2_imm8",
       "width": 1,
       "expect": "0x18",
       "write": "0x20"
@@ -112,17 +133,17 @@
       "write": "@newbase + cave_ctor - ctor_after_jmp"
     },
     {
-      "why": "handler: push [ebx+0x10] opcode -> jmp rel32",
+      "why": "handler: mov eax,[ebx+0x10] opcode (after the stock bar add) -> jmp rel32",
       "at": "handler_site",
       "width": 1,
-      "expect": "0xFF",
+      "expect": "0x8B",
       "write": "0xE9"
     },
     {
-      "why": "handler -> its cave (0x73F115..0x73F12E become unreachable)",
+      "why": "-> its cave (the rest of mov eax,[ebx+0x10] + test eax,eax)",
       "at": "handler_rel32",
       "width": 4,
-      "expect": "0x08B91073",
+      "expect": "0xC0851043",
       "write": "@newbase + cave_handler - handler_after_jmp"
     }
   ]
