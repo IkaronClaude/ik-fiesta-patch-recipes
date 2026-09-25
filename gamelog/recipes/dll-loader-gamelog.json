@@ -1,0 +1,24 @@
+{
+  "name": "dll-loader-gamelog",
+  "summary": "Make GameLog.exe load the companion hook DLL (fiestahook.dll) before its entry point - the same loader Zone.exe gets.",
+  "status": "WRITTEN 2026-09-25 (Fiesta2026on2016 Q53: runtime thread counts via the cpu_count plugin).",
+  "target": {
+    "file": "GameLog/GameLog.exe",
+    "sha256": "6e855b2330577065935f0cc2326d14a0b126c4d3de4880a0aed6c03db8eeb7c6",
+    "size": 310784
+  },
+  "params": {},
+  "consts": {},
+  "why": [
+    "The same loader as dll-loader (read that recipe): one import of fiestahook.dll!ZoneHookInit appended to a",
+    "copy of the import descriptors, no code patched. GameLog.exe has no bound-import directory (checked at apply",
+    "time) and imports StartServiceCtrlDispatcherA, where the loader starts its plugins - from GameLog/hooks/, a folder",
+    "of its own. With an empty hooks/ the exe runs exactly as before."
+  ],
+  "add_import": {
+    "dll": "fiestahook.dll",
+    "function": "ZoneHookInit",
+    "section": ".zhook"
+  },
+  "edits": []
+}
