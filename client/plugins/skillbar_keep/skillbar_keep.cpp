@@ -27,18 +27,25 @@
 namespace {
 
 const unsigned kVaLearn = 0x005AD110u;     // LEARNSUC handler, thiscall(this, a1, payload), ret 8
-const unsigned kVaSkill = 0x007DCCC0u;     // cdecl skill record lookup (u16 id) -> record*, InxName at +2
+const unsigned kVaSkillTable = 0x00CE4F30u; // ActiveSkill table object*: vtable+0x10 = has(id), +0xC4 record*[], +0xC8 max id
 const unsigned kVaSlots = 0x00C1750Cu;     // void* slot[100]
 const unsigned kVaRedraw = 0x0057E2D0u;    // thiscall(same this as the handler): redraw the visible quick bars
 const int kSlots = 100, kSkillType = 1;
-const unsigned kSlotSkillId = 8, kRecordName = 2;
+const unsigned kSlotSkillId = 8, kRecordName = 2, kTableRecords = 0xC4, kTableMaxId = 0xC8;
 
 hook::Detour g_learn;
 
+// The ActiveSkill record the way the handler itself reads it (0x5AD242 / 0x5AD2F7). NOT 0x7DCCC0: that searches the
+// character's LEARNED list (6-byte entries, id at +0) - the first cut read "InxName" off such an entry, matched no
+// slot, and the bar got upgraded as stock (MagicMissile01 -> 05 on 2026-09-25).
 const char* skill_name(unsigned short id) {
-    typedef const unsigned char*(__cdecl * Lookup)(unsigned short);
-    const unsigned char* rec = ((Lookup)hook::rebase(kVaSkill))(id);
-    return rec ? (const char*)(rec + kRecordName) : nullptr;
+    char* table = *(char**)hook::rebase(kVaSkillTable);
+    if (!table) return nullptr;
+    typedef bool(__fastcall * Has)(void*, void*, unsigned);
+    if (!((Has)(*(void***)table)[4])(table, 0, id)) return nullptr;
+    if (id > *(unsigned short*)(table + kTableMaxId)) return nullptr;
+    const char* rec = (*(char***)(table + kTableRecords))[id];
+    return rec ? rec + kRecordName : nullptr;
 }
 
 // "PowerStrike05" -> base length 11, level 5 (the client's own rule: the last two characters are the level)
@@ -71,6 +78,7 @@ void __fastcall learn_impl(void* self, void*, void* a1, const unsigned char* pay
             size_t b;
             int lv;
             if (!name || !split(name, &b, &lv) || b != base || std::strncmp(name, learned, base) != 0) continue;
+            hook::log("learned %s: slot %d holds %s (%s)", learned, i, name, lv < level - 1 ? "kept" : "upgraded");
             if (lv < level - 1) {                  // a level below the one being replaced: kept on purpose
                 hidden[i] = s;
                 slots[i] = nullptr;
