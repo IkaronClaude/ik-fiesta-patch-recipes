@@ -29,7 +29,7 @@
     "abstatetemplate (the per-index handler objects) is NOT touched: all 9 readers compare idx against its count (792)",
     "first, so an index past it simply has no special handler - the stock behaviour for any state without one.",
     "",
-    "Sites (all found by decoding the stock exe): 172 indexed references (actor 35, argument 135, word+8 1, word+0xA 1) and the two bitset prologues."
+    "Sites (all found by decoding the stock exe): 176 indexed references (actor 35, argument 135, word+8 3, word+0xA 3) and the two bitset prologues."
   ],
   "new_section": {
     "name": ".absc",
@@ -702,6 +702,18 @@
       "write": "@newbase + 0x44"
     },
     {
+      "why": "identarray[i].word +0xA  (movzx ecx, word ptr [eax + eax + 0x875232] at 0x0040C0A3)",
+      "at": "0x0040C0A7",
+      "expect": "0x875232",
+      "write": "@newbase + 0x4A"
+    },
+    {
+      "why": "identarray[i].word +8  (movzx eax, word ptr [eax + 0x875230] at 0x0040C0AD)",
+      "at": "0x0040C0B0",
+      "expect": "0x875230",
+      "write": "@newbase + 0x48"
+    },
+    {
       "why": "identarray[i].argument  (mov ecx, dword ptr [edx*4 + 0x87522c] at 0x0040C0F2)",
       "at": "0x0040C0F5",
       "expect": "0x87522C",
@@ -850,6 +862,18 @@
       "at": "0x0040CE71",
       "expect": "0x875228",
       "write": "@newbase + 0x40"
+    },
+    {
+      "why": "identarray[i].word +0xA  (movzx ecx, word ptr [eax + eax + 0x875232] at 0x0040D19F)",
+      "at": "0x0040D1A3",
+      "expect": "0x875232",
+      "write": "@newbase + 0x4A"
+    },
+    {
+      "why": "identarray[i].word +8  (movzx eax, word ptr [eax + 0x875230] at 0x0040D1A9)",
+      "at": "0x0040D1AC",
+      "expect": "0x875230",
+      "write": "@newbase + 0x48"
     },
     {
       "why": "identarray[i].argument  (mov eax, dword ptr [ecx*4 + 0x87522c] at 0x0040D1D9)",

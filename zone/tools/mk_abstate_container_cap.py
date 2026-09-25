@@ -54,34 +54,42 @@ def main():
     md.detail = True
     X = capstone.x86
 
+    # Every 32-bit value inside the old array, found in the RAW bytes, then decoded backwards to the instruction that
+    # carries it as a memory displacement. The first version decoded .text in ONE linear sweep and matched only
+    # [idx*4 + field]: the sweep lost sync before asl_CanEnchant / asl_AbstateSet, so their group/grade reads
+    # [eax+eax+0x875232] / [eax+0x875230] (idx*12 already in eax) stayed on the OLD array - which nothing fills any
+    # more, so a higher scroll tier no longer superseded a lower one (operator 2026-09-25: T2 + T3 both active).
+    # Rebasing the displacement is right for any addressing form: the register part is the index arithmetic.
+    # A value that no instruction carries as a displacement (bytes of a call rel32 ...) is not a reference.
     edits, per_field, stray = [], {k: 0 for k in FIELDS}, []
-    off = 0
-    while off < len(d):                                   # one linear sweep: the instruction that holds the bytes
-        ins = next(md.disasm(d[off:off + 15], va0 + off, 1), None)
-        if ins is None:
-            off += 1
+    seen = set()
+    for pos in range(len(d) - 3):
+        v = struct.unpack_from('<I', d, pos)[0]
+        if not (ARR <= v < ARR_END):
             continue
-        for o in ins.operands:
-            v = None
-            if o.type == X.X86_OP_MEM and o.mem.base == 0:
-                v = o.mem.disp & 0xFFFFFFFF
-            elif o.type == X.X86_OP_IMM:
-                v = o.imm & 0xFFFFFFFF
-            if v is None or not (ARR <= v < ARR_END):
+        owner = None
+        for start in range(max(0, pos - 11), pos):
+            ins = next(md.disasm(d[start:start + 15], va0 + start, 1), None)
+            if ins is None or start + ins.size < pos + 4:
                 continue
-            field = v - ARR
-            if o.type != X.X86_OP_MEM or o.mem.index == 0 or o.mem.scale != 4 or field not in FIELDS:
-                stray.append('0x%08X %s %s' % (ins.address, ins.mnemonic, ins.op_str))
-                continue
-            raw = ins.bytes
-            pos = raw.find(struct.pack('<I', v))
-            assert pos >= 0 and raw.find(struct.pack('<I', v), pos + 1) < 0, hex(ins.address)
-            edits.append({'why': 'identarray[i].%s  (%s %s at 0x%08X)' % (FIELDS[field], ins.mnemonic, ins.op_str, ins.address),
-                          'at': '0x%08X' % (ins.address + pos), 'expect': '0x%X' % v,
-                          'write': '@newbase + 0x%X' % (CODE + field) if CODE + field else '@newbase'})
-            per_field[field] += 1
-        off += ins.size
-    assert not stray, 'references into the array that are not [idx*4 + field]: %s' % stray
+            if any(o.type == X.X86_OP_MEM and (o.mem.disp & 0xFFFFFFFF) == v for o in ins.operands) and \
+                    ins.bytes.find(struct.pack('<I', v)) == pos - start:
+                owner = ins
+                break
+        if owner is None:
+            continue
+        if owner.address in seen:
+            continue
+        seen.add(owner.address)
+        field = v - ARR
+        if field not in FIELDS:
+            stray.append('0x%08X %s %s' % (owner.address, owner.mnemonic, owner.op_str))
+            continue
+        edits.append({'why': 'identarray[i].%s  (%s %s at 0x%08X)' % (FIELDS[field], owner.mnemonic, owner.op_str, owner.address),
+                      'at': '0x%08X' % (va0 + pos), 'expect': '0x%X' % v,
+                      'write': '@newbase + 0x%X' % (CODE + field) if CODE + field else '@newbase'})
+        per_field[field] += 1
+    assert not stray, 'references into the array at a field that is not actor/argument/word+8/word+0xA: %s' % stray
     for s2 in pe.sections:                               # no pointer into the array outside code
         if s2 is sec:
             continue
