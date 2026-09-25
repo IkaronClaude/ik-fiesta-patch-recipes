@@ -56,6 +56,7 @@ python build.py --target worldmanager --exe <Server2016>/WorldManager/WorldManag
 common\loader\build.bat                          # -> build\fiestahook.dll
 common\build_plugin.bat zone void_bag             # -> build\plugins\void_bag.dll
 common\build_plugin.bat zone quest_gate           # -> build\plugins\quest_gate.dll  (quest-gated map entry, the 2026 rule)
+common\build_plugin.bat zone main_wake            # -> build\plugins\main_wake.dll   (idle main loop waits for network data, max 15 ms)
 common	estuild.bat                             # the hook library self-test (detour / trampoline / vtable swap): a plain 32-bit exe, must PASS
 common\build_plugin.bat character char_void       # -> build\plugins\char_void.dll
 
