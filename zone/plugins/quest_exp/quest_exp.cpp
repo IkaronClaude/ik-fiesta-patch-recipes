@@ -71,7 +71,9 @@ const unsigned kCellExp = 0x10;                  // LockedCell lc_Argument offse
 // ChargedItem = so_ply_ChargedEffectContainer() - offsetof(ci_Effect) (player + 0x2A330). The ACTIVE set is not
 // cel_Effect[50] itself (a freed slot keeps its record pointer) but the list whose header sits in ChargedEffectList's
 // padding: +4 u16 capacity, +8 node array, +0xE u16 head; a node is {element*, u16 next @4, u8 used @8}, 12 bytes.
-// Walked exactly as the zone walks it at 0x418080.
+// The array holds cap + 1 nodes and the head is the sentinel at index cap (list init 0x451710: new (cap+1)*12,
+// [+0xE] = cap) - a `head >= cap` check skipped every walk (booster +0.0% live, 2026-09-25).
+// Walked exactly as the zone walks it at 0x418080 (sp_CanChargedEnchant).
 struct Node {
     const zone::types::ChargedItemEffectList__ChargedItemEffectElement* element;
     unsigned short next;
@@ -91,7 +93,7 @@ void for_each_active(void* player, F f) {
     unsigned short cap = *(const unsigned short*)(list + 4);
     const Node* nodes = *(const Node* const*)(list + 8);
     unsigned short head = *(const unsigned short*)(list + 0xE);
-    if (!nodes || head >= cap) return;
+    if (!nodes || head > cap) return;
     for (unsigned short i = nodes[head].next, guard = 0; i < cap && guard < cap; i = nodes[i].next, ++guard) {
         if (!nodes[i].used || !nodes[i].element) break;
         const ChargedItemEffect* e = nodes[i].element->ciee_Index;
