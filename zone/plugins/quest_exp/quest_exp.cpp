@@ -21,9 +21,12 @@
 // This plugin replaces the releaser's EXP grant: the amount is read UNSIGNED, widened to the full 8-byte reward
 // value when the quest's EXP slot carries a high dword (QUEST_DATA Reward[k].Value is 8 bytes; the stock zone only
 // ever reads the low 4, and the high dword is 0 in every parity record - Fiesta2026on2016 variants may fill it),
-// scaled by an active Quest EXP Booster, and granted through sp_GainExp in chunks of at most 2^31-1 (so level-ups,
-// the EXP freeze and the level cap stay the zone's own). The stock releaser then runs with EXP 0 for fame + title.
-// A quest whose reward is <= 2^31-1 with no booster goes through untouched.
+// scaled by an active Quest EXP Booster, and granted by ONE sp_GainExp call: the recipe exp-gain-u64 makes that call
+// 64-bit - the plugin writes {player, high dword} into the arena region .expgain64 and passes the low dword; the
+// zone adds the u64 and sends a 12-byte 0x240B {low, handle, high} (the 2026 client reads it with
+// client-2026-exp-gain-u64). The EXP freeze, the level cap and the level-up (at most one per gain; the overshoot
+// levels on the next gain, as on official) stay the zone's own. The stock releaser then runs with EXP 0 for fame +
+// title. A quest whose reward is <= 2^31-1 with no booster goes through untouched.
 //
 // ---- 2. THE QUEST EXP BOOSTER (charged EffectEnum 40) -------------------------------------------------------
 //
@@ -182,6 +185,21 @@ const char* u64s(unsigned long long v, char* buf) {
     return buf;
 }
 
+// the recipe exp-gain-u64's slot: sp_GainExp adds `high` as the high dword when `player` is the one gaining
+struct ExpSlot {
+    void* player;
+    unsigned high;
+};
+std::mutex g_slot_lock;
+
+ExpSlot* exp_slot() {
+    static ExpSlot* slot = [] {
+        zone::ArenaRegion r = zone::arena_region(".expgain64");
+        return r.base && r.size >= sizeof(ExpSlot) ? (ExpSlot*)r.base : nullptr;
+    }();
+    return slot;
+}
+
 void __fastcall release_impl(void* player, void*, zone::types::InventoryLocking__LockedCell* cell) {
     typedef void(__fastcall * Orig)(void*, void*, zone::types::InventoryLocking__LockedCell*);
     unsigned* exp_arg = cell ? (unsigned*)((char*)cell + kCellExp) : nullptr;
@@ -194,18 +212,26 @@ void __fastcall release_impl(void* player, void*, zone::types::InventoryLocking_
     const unsigned long long total = base + base * boost / 1000;
     if (total == low && low <= (unsigned)kIntMax) return ((Orig)g_release.trampoline)(player, 0, cell);
 
+    ExpSlot* slot = exp_slot();
+    if (!slot) {                                    // no exp-gain-u64 in this exe: the stock 32-bit path, untouched
+        zone::log("quest %u: EXP reward above 2^31 NOT granted - this Zone.exe lacks the exp-gain-u64 recipe",
+                  known ? (unsigned)pend.quest : 0u);
+        return ((Orig)g_release.trampoline)(player, 0, cell);
+    }
     auto gain = zone::fn::ShineObjectClass__ShinePlayer__sp_GainExp();
-    for (unsigned long long left = total; left; ) {
-        int chunk = left > (unsigned long long)kIntMax ? kIntMax : (int)left;
-        gain(player, 0, chunk, 0xFFFF, 0xFFFF);
-        left -= (unsigned long long)chunk;
+    {
+        std::lock_guard<std::mutex> g(g_slot_lock);
+        slot->high = (unsigned)(total >> 32);
+        slot->player = player;                      // the cave takes (and clears) the slot only for this player
+        gain(player, 0, (int)(unsigned)total, 0xFFFF, 0xFFFF);
+        slot->player = nullptr;                     // level cap: the zone returned before the cave
     }
     // zone::log is wvsprintfA: no 64-bit specifier (a %llu read the wrong arguments and crashed zone04 on the
     // first real grant, 2026-09-24), so the amounts are formatted here
     char t[24], b[24];
-    zone::log("quest %u: EXP %s (reward %s%s, booster +%u.%u%%) granted in %s",
+    zone::log("quest %u: EXP %s (reward %s%s, booster +%u.%u%%) granted in one 64-bit gain",
               known ? (unsigned)pend.quest : 0u, u64s(total, t), u64s(base, b), base != low ? " from the 8-byte slot" : "",
-              boost / 10, boost % 10, total > (unsigned long long)kIntMax ? "chunks" : "one call");
+              boost / 10, boost % 10);
     *exp_arg = 0;                                   // the stock releaser still does fame + title
     ((Orig)g_release.trampoline)(player, 0, cell);
     *exp_arg = low;
