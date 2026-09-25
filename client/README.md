@@ -49,6 +49,7 @@ so stock data displays unchanged). Server side: the zone plugin `quest_exp`.
 python apply.py client/recipes/client-2026-dll-loader.json   --exe <Client2026patched>/Fiesta.exe --out build/client2026/Fiesta.step1.exe --allow-hash-mismatch
 python apply.py client/recipes/client-2026-quest-exp-u64.json --exe build/client2026/Fiesta.step1.exe --out build/client2026/Fiesta.exe --allow-hash-mismatch
 commonuild_plugin.bat client exp64                        # -> build/plugins/exp64.dll into <client>/hooks/
+commonuild_plugin.bat client dialog_advance               # -> build/plugins/dialog_advance.dll into <client>/hooks/
 # deploy: Fiesta.exe + build/fiestahook.dll into the client folder, plugins (if any) in hooks/
 ```
 Both untested in a live client as of 2026-09-24.
@@ -61,3 +62,11 @@ total around the handler 0x73F0E0 and hands it to the already-64-bit number form
 above 2^32 prints as one "Obtained N Exp." line. No exe bytes change. The byte recipe `client-2026-exp-gain-u64`
 is superseded: its first version crashed the live client - a cave's absolute address was not relocated and the
 2026 exe is ASLR-loaded. Prefer a plugin over a cave whenever the loader is in the exe.
+
+## `dialog_advance` (plugin) - quest pages advance unless they are a real choice
+
+The 2026 NpcDialogWin input handler (0x7275C0) presses the first `quest_ack` button on a background click or the
+confirm key - except for EPIC quests (QuestData.Q_TYPE 2), where only a click on the button text counts and a space
+tap falls through to the base handler (it pressed "decline" under a resting cursor). The plugin decides per page:
+<= 2 quest_ack controls (next / yes-no) auto-advance to the first, > 2 (a quiz) need a click. It answers the
+handler's one quest-record lookup (0x5C5550) with a copy whose type says so; no exe bytes change.
