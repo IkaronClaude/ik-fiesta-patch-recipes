@@ -104,6 +104,12 @@ deliberately **not** `eval()`. Recipe files are data; data from a file should no
   recipe here, and the `expect` check is what caught it.
 - `@newbase` resolves to the virtual address of `new_section`, which lets a recipe relocate a large
   static object without needing a code cave or an allocator.
+- `code` blobs place instructions: `emit` is a list of hex strings and computed fields - `{"rel32": x}`
+  (a jump/call target), `{"u32": x}` (a plain constant) and `{"abs32": x}` (an **address**). Every address
+  operand in a cave must be `abs32`: it is also added to the base relocation directory, so the loader moves it
+  with the image. The 2026 client is DYNAMICBASE and Windows loads it at a random base - a cave with a bare
+  `u32` address crashed it live (2026-09-25). The zone runs under Wine at its preferred base, but use `abs32`
+  there too. Prefer a hook plugin over a cave wherever the loader is in the exe.
 
 ## Hooks
 
