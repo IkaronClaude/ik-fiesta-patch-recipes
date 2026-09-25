@@ -50,6 +50,7 @@ python apply.py client/recipes/client-2026-dll-loader.json   --exe <Client2026pa
 python apply.py client/recipes/client-2026-quest-exp-u64.json --exe build/client2026/Fiesta.step1.exe --out build/client2026/Fiesta.exe --allow-hash-mismatch
 commonuild_plugin.bat client exp64                        # -> build/plugins/exp64.dll into <client>/hooks/
 commonuild_plugin.bat client dialog_advance               # -> build/plugins/dialog_advance.dll into <client>/hooks/
+commonuild_plugin.bat client skillbar_keep                # -> build/plugins/skillbar_keep.dll into <client>/hooks/
 # deploy: Fiesta.exe + build/fiestahook.dll into the client folder, plugins (if any) in hooks/
 ```
 Both untested in a live client as of 2026-09-24.
@@ -70,3 +71,9 @@ confirm key - except for EPIC quests (QuestData.Q_TYPE 2), where only a click on
 tap falls through to the base handler (it pressed "decline" under a resting cursor). The plugin decides per page:
 <= 2 quest_ack controls (next / yes-no) auto-advance to the first, > 2 (a quiz) need a click. It answers the
 handler's one quest-record lookup (0x5C5550) with a copy whose type says so; no exe bytes change.
+
+## `skillbar_keep` (plugin) - learning a skill level keeps deliberately lower bar slots
+
+On NC_SKILL_SKILL_LEARNSUC_CMD the client (0x5AD110) upgrades the bar slots of that skill found at the highest level on
+the bar - a lone level-1 slot included. The plugin hides, for that one call, the matching slots below the level being
+replaced (new level - 1), puts them back and redraws the bars (0x57E2D0): only slots at your current level upgrade.
