@@ -108,11 +108,16 @@ CHARACTER_CHAIN = [
 # not yet run by a WM process - the stack uses 17 of the stock 32 rows, so it is not needed until the 2026
 # instance maps land (Fiesta2026on2016 tickets.md, "HOST THE 56 NON-FIELD 2026 MAPS").
 WORLDMANAGER_CHAIN = [
+    # the plugin loader (Q53: cpu_count sets the thread pools' CPU count from FIESTA_CPUS); inert with no hooks/
+    ('dll-loader-worldmanager', []),
     ('indun-map-list-cap', []),
     # 0x107D carries 7 coupon pairs (2026 client); pairs with character's beauty-coupon-tier6. DEPLOYED 2026-09-23 on
     # its own (stock + this) - indun-map-list-cap has still never been booted.
     ('beauty-coupon-list-7', []),
 ]
+
+# Account / AccountLog / GameLog / Login (--target <name>): only the plugin loader so far (Q53, cpu_count).
+DB_CHAINS = {t: [('dll-loader-%s' % t, [])] for t in ('account', 'accountlog', 'gamelog', 'login')}
 
 # The chain as it was before handle-layout-2026, for reproducing build/Zone.maps.npc.dmg.exe exactly.
 LEGACY = {'npc-object-pool-cap': []}
@@ -146,7 +151,7 @@ def verify(target, recipe, sets, stock, built):
 
 def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument('--target', choices=('zone', 'character', 'worldmanager'), default='zone')
+    ap.add_argument('--target', choices=('zone', 'character', 'worldmanager', 'account', 'accountlog', 'gamelog', 'login'), default='zone')
     ap.add_argument('--exe', required=True, help='the STOCK Zone.exe (or Character.exe / WorldManager.exe); opened read-only')
     ap.add_argument('--out', required=True)
     ap.add_argument('--upto', help='stop after this recipe')
@@ -155,7 +160,7 @@ def main():
     a = ap.parse_args()
 
     chain = []
-    for name, sets in {'character': CHARACTER_CHAIN, 'worldmanager': WORLDMANAGER_CHAIN}.get(a.target, CHAIN):
+    for name, sets in dict({'character': CHARACTER_CHAIN, 'worldmanager': WORLDMANAGER_CHAIN}, **DB_CHAINS).get(a.target, CHAIN):
         chain.append((name, LEGACY.get(name, sets) if a.legacy else sets))
         if name == a.upto:
             break

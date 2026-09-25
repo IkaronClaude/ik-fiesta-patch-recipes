@@ -1,0 +1,24 @@
+{
+  "name": "dll-loader-accountlog",
+  "summary": "Make AccountLog.exe load the companion hook DLL (fiestahook.dll) before its entry point - the same loader Zone.exe gets.",
+  "status": "WRITTEN 2026-09-25 (Fiesta2026on2016 Q53: runtime thread counts via the cpu_count plugin).",
+  "target": {
+    "file": "AccountLog/AccountLog.exe",
+    "sha256": "b01f455cf566fab9e889e51b6fa8b81ee78440db95b4aac54e4b2ff139f278d0",
+    "size": 285696
+  },
+  "params": {},
+  "consts": {},
+  "why": [
+    "The same loader as dll-loader (read that recipe): one import of fiestahook.dll!ZoneHookInit appended to a",
+    "copy of the import descriptors, no code patched. AccountLog.exe has no bound-import directory (checked at apply",
+    "time) and imports StartServiceCtrlDispatcherA, where the loader starts its plugins - from AccountLog/hooks/, a folder",
+    "of its own. With an empty hooks/ the exe runs exactly as before."
+  ],
+  "add_import": {
+    "dll": "fiestahook.dll",
+    "function": "ZoneHookInit",
+    "section": ".zhook"
+  },
+  "edits": []
+}
