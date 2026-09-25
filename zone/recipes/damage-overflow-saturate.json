@@ -1,7 +1,7 @@
 {
   "name": "damage-overflow-saturate",
   "summary": "Huge damage wraps to a negative and then clamps to 1. Saturate at a maximum instead.",
-  "status": "BUILT AND STATICALLY VERIFIED -- not yet run by a zone process.",
+  "status": "Sites 1-2 RUNNING on every zone since 2026-09-24; sites 3-4 (skill attack power) added 2026-09-25 after the operator saw level-144 skills land 1 on level-1 slimes while auto-attacks were fine.",
   "target": {
     "file": "Zone00/Zone.exe",
     "sha256": "7ef3532da08194a377558322ca2bd06d1ce5bdb2813796e033173b72d9ff883d",
@@ -17,7 +17,13 @@
     "next_insn": "0x0050618C",
     "call_site2_rel32": "0x00504A28",
     "old_rel32_2": "0x001527D4",
-    "next_insn2": "0x00504A2C"
+    "next_insn2": "0x00504A2C",
+    "call_site3_rel32": "0x00506E2C",
+    "old_rel32_3": "0x001503D0",
+    "next_insn3": "0x00506E30",
+    "call_site4_rel32": "0x00507190",
+    "old_rel32_4": "0x0015006C",
+    "next_insn4": "0x00507194"
   },
   "why": [
     "RulesOfEngagement::roe_CalcDamage (0x505C00) returns int, but the damage pipeline underneath it",
@@ -79,7 +85,16 @@
     "DELIBERATELY NOT PATCHED: 0x5046D8 in roe_GetAttackPower, which converts attack POWER rather than",
     "damage. It could overflow by the same mechanism, but saturating it changes an input to the damage",
     "formula instead of the result, which is a wider behaviour change than was asked for. Worth revisiting",
-    "if huge attack power turns out to be a real case."
+    "if huge attack power turns out to be a real case.",
+    "",
+    "SKILLS (added 2026-09-25): operator - 'skills can still land 1 ... these skills should hit 100k+ damage on lvl 1",
+    "slimes'. Skills do not reach the result through the two sites above alone: RulesOfEngagementPhisycalSkill::",
+    "roe_AttackPower (0x506E2B) and RulesOfEngagementMagicalSkill::roe_AttackPower (0x50718F) roll the skill's attack",
+    "power as min + random(range) and convert it with the same call __ftol2_sse. At level-144 Rebalanced power that",
+    "value leaves int32, the indefinite 0x80000000 becomes a hugely negative POWER, and the damage that follows is <= 0",
+    "and lands on the clamp to 1. Auto-attacks do not take this path. Both calls now go to the same wrapper (positive",
+    "overflow -> saturate_to; negative / NaN unchanged). Wire in the bridge log 2026-09-25 10:59-11:01: skill hits",
+    "(0x2452) of 1 on 25-HP slimes between normal 26-damage hits."
   ],
   "new_section": {
     "name": ".dmgfix",
@@ -128,6 +143,18 @@
       "at": "call_site2_rel32",
       "expect": "old_rel32_2",
       "write": "@newbase - next_insn2"
+    },
+    {
+      "why": "RulesOfEngagementPhisycalSkill::roe_AttackPower: the skill power roll's conversion at 0x506E2B -> the same wrapper",
+      "at": "call_site3_rel32",
+      "expect": "old_rel32_3",
+      "write": "@newbase - next_insn3"
+    },
+    {
+      "why": "RulesOfEngagementMagicalSkill::roe_AttackPower: the same conversion at 0x50718F -> the same wrapper",
+      "at": "call_site4_rel32",
+      "expect": "old_rel32_4",
+      "write": "@newbase - next_insn4"
     }
   ]
 }
