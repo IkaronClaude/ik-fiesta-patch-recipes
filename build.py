@@ -80,6 +80,9 @@ EXPERIMENTAL = [
     ('abstate-template-cap', []),
     # A quest give-up is refused for 10 s after the last quest dialog (err 0x0B49); operator 2026-09-25: about 3 s.
     ('quest-giveup-delay', []),
+    # Q32: EXP gains 64-bit end to end - sp_GainExp takes the high dword from the quest_exp plugin's slot and the
+    # 0x240B packet carries it (12 bytes). Pairs with client/recipes/client-2026-exp-gain-u64.json.
+    ('exp-gain-u64', []),
     # NOT a recipe: the disconnect a same-zone link onto an unmarkable spot causes (error 1669) cannot be skipped -
     # so_Unmark has already run and the exe never re-marks, so the player ends up in limbo (tried 2026-09-23,
     # withdrawn). The quest_gate plugin pre-checks a GM &linkto destination instead.

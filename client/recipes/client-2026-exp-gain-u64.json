@@ -1,0 +1,129 @@
+{
+  "name": "client-2026-exp-gain-u64",
+  "summary": "2026 client: NC_BAT_EXPGAIN (0x240B) is read as {u32 low, u16 handle, u32 high} - the EXP bar adds the u64 and \"Obtained %s Exp.\" prints the full 64-bit amount.",
+  "status": "WRITTEN 2026-09-25 (ticket Q32; pairs with zone recipe exp-gain-u64, which always sends the 12-byte form).",
+  "target": {
+    "file": "Fiesta.exe",
+    "sha256": "79762e9a7f7bdf1a66f2b7826fa70945a1debe5b016ec5c9e8d600eb7357a730",
+    "size": 9264128
+  },
+  "params": {},
+  "consts": {
+    "alloc_imm8": "0x0058F6A8",
+    "ctor_site": "0x0073F0AF",
+    "ctor_rel32": "0x0073F0B0",
+    "ctor_after_jmp": "0x0073F0B4",
+    "ctor_back": "0x0073F0B4",
+    "handler_site": "0x0073F110",
+    "handler_rel32": "0x0073F111",
+    "handler_after_jmp": "0x0073F115",
+    "format_call": "0x0073F12F",
+    "no_print": "0x0073F26B",
+    "cave_ctor": "0x0",
+    "cave_handler": "0x20"
+  },
+  "why": [
+    "0x240B: case 0x58F6A7 news a 0x18-byte object and constructs it with the payload pointer (ctor 0x73F050):",
+    "",
+    "    0073F0AF  8B 01              mov  eax, [ecx]              ; payload u32 exp",
+    "    0073F0B1  89 46 10           mov  [esi+0x10], eax",
+    "    0073F0B4  0F B7 41 04        movzx eax, word [ecx+4]      ; handle -> +0x14 and +8",
+    "",
+    "The queued object's handler 0x73F0E0 (vtable 0xB4B5B4 slot 0):",
+    "",
+    "    0073F110  FF 73 10           push [ebx+0x10]",
+    "    0073F113  B9 08 BB C1 00     mov  ecx, 0xC1BB08",
+    "    0073F118  E8 ..              call 0x7949E0                ; add [ecx+0x192],v / adc [ecx+0x196],0",
+    "    0073F11D  8B 43 10 85 C0     mov eax,[ebx+0x10] / test    ; 0 EXP: no line",
+    "    0073F122  0F 84 ..           je   0x73F26B",
+    "    0073F128  6A 00              push 0                       ; HIGH dword of the amount",
+    "    0073F12A  50                 push eax                     ; low dword",
+    "    0073F12B  8D 45 D8           lea  eax, [ebp-0x28]",
+    "    0073F12E  50                 push eax",
+    "    0073F12F  E8 ..              call 0x796200                ; localised number of a SIGNED 64-bit value",
+    "",
+    "The client's EXP total (+0x192/+0x196) and its number formatter (0x796200 -> 0x796710: args buf, low, high) are",
+    "already 64-bit; only the packet read and the two pushes of 0 cut it to 32. The zone recipe exp-gain-u64 sends",
+    "{low, handle, high}, so: the object grows to 0x20, the ctor copies the high dword (payload +6) to +0x18, and the",
+    "handler adds low/high with add/adc, skips the line when both are 0, and passes high to the formatter. A negative",
+    "amount (sign-extended by the zone) adds and prints as negative, which the stock 32-bit add could not.",
+    "REQUIRES a server that sends the 12-byte 0x240B (our zones with exp-gain-u64): against a stock 6-byte server the",
+    "high dword would be read from past the payload."
+  ],
+  "new_section": {
+    "name": ".expgain64",
+    "size": "0x80",
+    "materialise": true,
+    "execute": true,
+    "note": "Two caves: the ctor copy at +0, the handler at +0x20."
+  },
+  "code": [
+    {
+      "why": "ctor: high dword (payload +6) -> +0x18, then the original low-dword copy",
+      "at": "@newbase + cave_ctor",
+      "emit": [
+        "8B4106",
+        "894618",
+        "8B01",
+        "894610",
+        "E9", {"rel32": "ctor_back"}
+      ]
+    },
+    {
+      "why": "handler: u64 add into the EXP total, no line for 0, formatter gets (buf, low, high)",
+      "at": "@newbase + cave_handler",
+      "emit": [
+        "B908BBC100",
+        "8B4310",
+        "018192010000",
+        "8B4318",
+        "118196010000",
+        "8B4310",
+        "0B4318",
+        "0F84", {"rel32": "no_print"},
+        "FF7318",
+        "FF7310",
+        "8D45D8",
+        "50",
+        "E9", {"rel32": "format_call"}
+      ]
+    }
+  ],
+  "edits": [
+    {
+      "why": "the queued EXPGAIN object: 0x18 -> 0x20 bytes (room for the high dword at +0x18)",
+      "at": "alloc_imm8",
+      "width": 1,
+      "expect": "0x18",
+      "write": "0x20"
+    },
+    {
+      "why": "ctor: mov eax,[ecx] opcode -> jmp rel32",
+      "at": "ctor_site",
+      "width": 1,
+      "expect": "0x8B",
+      "write": "0xE9"
+    },
+    {
+      "why": "ctor -> its cave",
+      "at": "ctor_rel32",
+      "width": 4,
+      "expect": "0x10468901",
+      "write": "@newbase + cave_ctor - ctor_after_jmp"
+    },
+    {
+      "why": "handler: push [ebx+0x10] opcode -> jmp rel32",
+      "at": "handler_site",
+      "width": 1,
+      "expect": "0xFF",
+      "write": "0xE9"
+    },
+    {
+      "why": "handler -> its cave (0x73F115..0x73F12E become unreachable)",
+      "at": "handler_rel32",
+      "width": 4,
+      "expect": "0x08B91073",
+      "write": "@newbase + cave_handler - handler_after_jmp"
+    }
+  ]
+}

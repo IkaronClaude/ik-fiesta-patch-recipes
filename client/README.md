@@ -47,7 +47,16 @@ so stock data displays unchanged). Server side: the zone plugin `quest_exp`.
 
 ```bash
 python apply.py client/recipes/client-2026-dll-loader.json   --exe <Client2026patched>/Fiesta.exe --out build/client2026/Fiesta.step1.exe --allow-hash-mismatch
-python apply.py client/recipes/client-2026-quest-exp-u64.json --exe build/client2026/Fiesta.step1.exe --out build/client2026/Fiesta.exe --allow-hash-mismatch
+python apply.py client/recipes/client-2026-quest-exp-u64.json --exe build/client2026/Fiesta.step1.exe --out build/client2026/Fiesta.step2.exe --allow-hash-mismatch
+python apply.py client/recipes/client-2026-exp-gain-u64.json  --exe build/client2026/Fiesta.step2.exe --out build/client2026/Fiesta.exe --allow-hash-mismatch
 # deploy: Fiesta.exe + build/fiestahook.dll into the client folder, plugins (if any) in hooks/
 ```
 Both untested in a live client as of 2026-09-24.
+
+## `client-2026-exp-gain-u64` - EXP gains are 64-bit
+
+`NC_BAT_EXPGAIN` (0x240B) read as `{u32 low, u16 handle, u32 high}`: the queued object grows to 0x20, the ctor copies
+the high dword, the handler adds low/high into the (already 64-bit) EXP total and passes high to the (already
+64-bit) number formatter, so "Obtained %s Exp." shows a quest reward above 2^32 in one line. Needs the zone recipe
+`exp-gain-u64` (the zone always sends the 12-byte form); against a stock 6-byte server it would misread. The
+third step of the chain above.
