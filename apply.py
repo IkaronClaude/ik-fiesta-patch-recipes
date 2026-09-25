@@ -107,6 +107,57 @@ class Pe:
         rva, size = struct.unpack_from("<II", self.d, at)
         return rva, size, at
 
+    def relocations(self):
+        """Every IMAGE_REL_BASED_HIGHLOW site of the base relocation directory, as RVAs."""
+        rva, size, _ = self.data_directory(5)
+        out = set()
+        if not rva or not size:
+            return out
+        off = self.offset_of(self.image_base + rva)
+        if off is None:
+            raise ValueError("base relocation directory is not backed by file bytes")
+        end = off + size
+        while off + 8 <= end:
+            page, block = struct.unpack_from("<II", self.d, off)
+            if block < 8:
+                break
+            for i in range(8, block, 2):
+                e = struct.unpack_from("<H", self.d, off + i)[0]
+                if e >> 12 == 3:                    # IMAGE_REL_BASED_HIGHLOW
+                    out.add(page + (e & 0xFFF))
+            off += block
+        return out
+
+    def add_relocations(self, vas):
+        """Make the loader relocate these absolute operands too (IMAGE_REL_BASED_HIGHLOW).
+
+        WHY: the 2026 client is DYNAMICBASE and Windows loads it at a random base, so an absolute address a
+        recipe writes into a cave is wrong at run time unless the base relocation directory lists it - the
+        loader only fixes what that directory names. (client-2026-exp-gain-u64 v1 crashed exactly so: a
+        cave's `mov ecx, 0xC1BB08` pointed into nothing at base 0xD70000.) The directory cannot grow in
+        place - .reloc is followed by other sections - so it is COPIED into a data-arena region with the
+        new blocks appended, and DataDirectory[5] repointed. The original .reloc stays, unreferenced."""
+        new = sorted({va - self.image_base for va in vas} - self.relocations())
+        if not new:
+            return None
+        rva, size, at = self.data_directory(5)
+        old = bytes(self.d[self.offset_of(self.image_base + rva):][:size]) if rva and size else b""
+        blocks = bytearray()
+        pages = {}
+        for r in new:
+            pages.setdefault(r & ~0xFFF, []).append(r & 0xFFF)
+        for page, offs in sorted(pages.items()):
+            entries = [(3 << 12) | o for o in offs]
+            if len(entries) % 2:
+                entries.append(0)                   # IMAGE_REL_BASED_ABSOLUTE pad: blocks are 4-byte aligned
+            blocks += struct.pack("<II", page, 8 + 2 * len(entries)) + struct.pack("<%dH" % len(entries), *entries)
+        total = len(old) + len(blocks)
+        va = self.reserve(total, materialise=True, label="base relocations")
+        o = self.offset_of(va)
+        self.d[o:o + total] = old + blocks
+        struct.pack_into("<II", self.d, at, va - self.image_base, total)
+        return dict(added=len(new), va=va, bytes=total, old=(rva, size))
+
     def add_import(self, dll: str, func: str, section: str = ".zhook"):
         """Make the loader pull `dll` in before the entry point runs, by rebuilding the import descriptor
         array in a new section with one extra entry.
@@ -600,7 +651,7 @@ def main():
     # A recipe sometimes needs to place INSTRUCTIONS, not just change a constant -- e.g. a saturating
     # wrapper around a CRT helper. Each blob is literal hex plus computed fields, so the recipe stays
     # readable and relative addresses are worked out at apply time instead of by hand.
-    blobs = []
+    blobs, abs_sites = [], []
     for c in r.get("code", []):
         at = evaluate(c["at"], env)
         out = bytearray()
@@ -609,6 +660,11 @@ def main():
                 out += bytes.fromhex(piece.replace(" ", ""))
             elif "u32" in piece:
                 out += struct.pack("<I", evaluate(piece["u32"], env) & 0xFFFFFFFF)
+            elif "abs32" in piece:
+                # an absolute address the loader must relocate (a DYNAMICBASE image moves): recorded as a
+                # base relocation - see Pe.add_relocations. Use it for EVERY address operand in a cave.
+                abs_sites.append(at + len(out))
+                out += struct.pack("<I", evaluate(piece["abs32"], env) & 0xFFFFFFFF)
             elif "rel32" in piece:
                 # x86 rel32 is relative to the address of the NEXT instruction, i.e. just past this field
                 out += struct.pack("<i", evaluate(piece["rel32"], env) - (at + len(out) + 4))
@@ -620,7 +676,12 @@ def main():
         print(f"  {why}\n    {len(out)} bytes at VA 0x{at:08X}: {out.hex()}")
 
     if a.verify:
-        print(f"\nVERIFIED: all {len(plan)} sites hold their patched values, section present.")
+        missing = [va for va in abs_sites if va - reader.image_base not in reader.relocations()]
+        if missing:
+            raise SystemExit("VERIFY FAILED: absolute operand(s) without a base relocation: "
+                             + ", ".join(f"0x{va:08X}" for va in missing))
+        print(f"\nVERIFIED: all {len(plan)} sites hold their patched values, section present"
+              f"{f', {len(abs_sites)} absolute operand(s) relocated' if abs_sites else ''}.")
         return
     if a.dry_run:
         print(f"\nDRY RUN: {len(plan)} sites validated, nothing written.")
@@ -637,6 +698,12 @@ def main():
             raise SystemExit(f"code blob at 0x{at:08X} is not backed by file bytes -- the section it "
                              f'lands in needs "materialise": true')
         pe.d[off:off + len(out)] = out
+
+    if abs_sites:
+        info = pe.add_relocations(abs_sites)
+        if info:
+            print(f"relocs : {info['added']} absolute operand(s) added; directory RVA 0x{info['old'][0]:08X} "
+                  f"size 0x{info['old'][1]:X} -> VA 0x{info['va']:08X} size 0x{info['bytes']:X}")
 
     os.makedirs(os.path.dirname(os.path.abspath(a.out)), exist_ok=True)
     with open(a.out, "wb") as f:
