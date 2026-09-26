@@ -41,6 +41,14 @@ id. Fixed: the quest is taken at `CQuestZone::Send_NC_QUEST_DB_DONE_REQ` (0x5BBE
 releaser uses (verified against the quest's slot) when no pending entry exists. The file's header comment has the
 disassembly.
 
+### `quest_abandon` - giving up a quest takes its quest items
+
+The stock give-up (`CQuestZone::Recv_NC_QUEST_GIVE_UP_REQ` 0x5BD960) clears the quest and leaves its items in the bag.
+After a give-up that went through, the plugin takes the items the quest was dropping (`QUEST_DATA.Action` ThenType 1)
+with the hand-in path's own call (`sp_DestroyItem(handle, item, 0 = all, 0)`, what `DELETE_ITEM ... ALL` runs).
+Only `IS_QUEST` items (ItemInfoServer.ItemSort_Index) - a few quests also drop ordinary materials - and never an item
+another quest in progress drops or asks for. One `quest_abandon:` log line per item.
+
 ### `vault_jobs` - Mystery Vault rows for one job (Fiesta2026on2016 Q22)
 
 A MysteryVaultServer row with ChrClass `100 + class id` passes `IsCheckClassType` only for a player whose CURRENT
