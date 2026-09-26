@@ -1,0 +1,56 @@
+{
+  "name": "dismantle-above-uplimit",
+  "summary": "Karis dismantle accepts an item enchanted above its ItemInfo.UpLimit (a lowered enchant cap) instead of refusing it with 'Upgrade Info Error' (0x1687).",
+  "status": "WRITTEN 2026-09-26 (Fiesta2026on2016 ticket P1 KARIS DISMANTLE).",
+
+  "target": {
+    "file": "Zone00/Zone.exe",
+    "sha256": "7ef3532da08194a377558322ca2bd06d1ce5bdb2813796e033173b72d9ff883d",
+    "size": 4673536
+  },
+
+  "params": {},
+
+  "consts": {
+    "jb_opcode": "0x0052967A",
+    "jb_rel32": "0x0052967C"
+  },
+
+  "why": [
+    "ShinePlayer::sp_NC_ITEM_DISMANTLE_REQ 0x5293C0 reads the cell's upgrade level (+N) into [ebp-0x21A5]",
+    "(0x5295CD..0x5295F6, record +0xA or +0x12 by item class), checks the ItemInfo row (Class 4..8 at +0x66, UpLimit",
+    "at +0xF0 <= 12) and then:",
+    "",
+    "    0x529668   mov  al, [edi+0xF0]        ; ItemInfo.UpLimit",
+    "    0x52966E   cmp  al, 0xC",
+    "    0x529670   ja   -> 0x1686",
+    "    0x529672   mov  cl, [ebp-0x21A5]      ; the item's +N",
+    "    0x529678   cmp  al, cl",
+    "    0x52967A   jb   0x52984E              ; UpLimit < +N -> NC_ITEM_DISMANTLE_ACK 0x1687 'Upgrade Info Error'",
+    "    0x529680   movzx ecx, cl; push ecx; GetRecord(+N) on the dismantle table 0x13295968",
+    "",
+    "With stock data an item can never be above its UpLimit (enchanting stops there), so the branch never fires.",
+    "Fiesta2026on2016 Rebalanced 0017-enchant-caps LOWERS UpLimit (e.g. Moon Rouemen Staff 10 -> 6) and owned items",
+    "keep their level: the operator's +9 staff (item 14514, 2026-09-25 17:21 bridge log: 0x302A {slot 114} -> 0x302B",
+    "0x1687) could not be dismantled. The lookup that follows is by +N (<= 12, the zone's enchant maximum), which works",
+    "for any real item, so the branch is removed: `jb rel32` (0F 82 CE 01 00 00) -> a 6-byte NOP (66 0F 1F 44 00 00).",
+    "Parity behaviour is unchanged (the branch was unreachable there)."
+  ],
+
+  "edits": [
+    {
+      "why": "dismantle: jb 0x52984E (UpLimit < +N) -> nop word 66 0F ...",
+      "at": "jb_opcode",
+      "width": 2,
+      "expect": "0x820F",
+      "write": "0x0F66"
+    },
+    {
+      "why": "dismantle: ... rel32 CE 01 00 00 -> 1F 44 00 00 (6-byte NOP)",
+      "at": "jb_rel32",
+      "width": 4,
+      "expect": "0x000001CE",
+      "write": "0x0000441F"
+    }
+  ]
+}
