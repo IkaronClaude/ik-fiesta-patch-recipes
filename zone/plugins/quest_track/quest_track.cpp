@@ -82,18 +82,21 @@ int tracked_count(void* quests) {
     return n;
 }
 
+// Our OWN packet, never the zone's global one (zone::global::gpp): SetQuestDone runs while the zone is building its
+// script packet in gpp, and writing 0x4422 there corrupted that packet (2026-09-26: a remote hand-in's QSC_DONE went out
+// as command 0 + garbage, the client never closed the script and the player was stuck in a mode that refuses items -
+// could not dismount).
 void reply(void* player, unsigned short op, unsigned short result, unsigned short quest) {
-    void* packet = zone::global::gpp();
-    unsigned char* b = packet ? *(unsigned char**)packet : nullptr;
-    if (!b) return;
-    *(unsigned short*)(b + 0) = op;
-    *(unsigned short*)(b + 2) = result;
-    *(unsigned short*)(b + 4) = quest;
-    if (!zone::fn::ProtocolPacket__pp_SetPacketLen()(packet, 0, 6)) return;
+    unsigned char buf[16] = {};
+    zone::types::ProtocolPacket packet{buf, (int)sizeof buf, 0};
+    *(unsigned short*)(buf + 0) = op;
+    *(unsigned short*)(buf + 2) = result;
+    *(unsigned short*)(buf + 4) = quest;
+    if (!zone::fn::ProtocolPacket__pp_SetPacketLen()(&packet, 0, 6)) return;
     void* stream = zone::fn::ShineObjectClass__ShinePlayer__so_GetDataSocketStream()(player, 0);
     if (!stream) return;
     typedef void(__fastcall * Send)(void* stream, void* edx, void* player, void* packet);
-    ((Send)(*(void***)stream)[0xC / 4])(stream, 0, player, packet);
+    ((Send)(*(void***)stream)[0xC / 4])(stream, 0, player, &packet);
 }
 
 unsigned char_no(void* player) {
