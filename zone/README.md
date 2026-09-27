@@ -54,6 +54,14 @@ An inventory sort (0x304A) swaps cells asynchronously; mid-swap each auto-use it
 `so_ply_UseItemMinimon_SlotItemCheck` (0x564C90) cleared its slot, then switched auto-buff off. The check is skipped
 while `so_ply_IsArrangeInven` (sort counter at player+0x2AB18) is non-zero. Always on (parity-neutral).
 
+### `kq_box_rewards` - KQ boxes bought / &makeitem hold the KQ rewards (flag-gated)
+
+A Kingdom Quest box made outside a KQ went through sp_MagicContainerMake, which needs a TreasureReward container
+(KQ boxes have none) - so the shop refused it and &makeitem made nothing. The plugin fills the chest with
+sp_KQReward's own rolls (well512(1000) < RewardRate per KingdomQuestRew row, item rewards via tcm_ItemMake) and
+answers an empty Container row so the stock code puts the chest in the bag. Active only with
+`9Data/Shine/KQBoxRewards.flag`.
+
 ### `shop_random_option` - cen-shop gear rolls random options like a drop (flag-gated)
 
 Every item-creation path rolls `rot_FillOption` (0x493590) - drops, vaults, rewards, the coin shop - except the cen
