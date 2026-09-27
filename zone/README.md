@@ -48,6 +48,12 @@ The stock merge (`sp_NC_ITEM_MOVER_UPGRADE_REQ` 0x51C850) lets only LifeDust-fed
 The four feed comparisons compare with 0xFFFF (no item = `-`) instead. The not-timed checks after them are stock.
 Active only when `9Data/Shine/MoverMergeNoFeed.flag` exists (the QoL layer ships it).
 
+### `minimon_sort` - sorting the inventory keeps the mini pet's auto-buff on
+
+An inventory sort (0x304A) swaps cells asynchronously; mid-swap each auto-use item is briefly in no cell and
+`so_ply_UseItemMinimon_SlotItemCheck` (0x564C90) cleared its slot, then switched auto-buff off. The check is skipped
+while `so_ply_IsArrangeInven` (sort counter at player+0x2AB18) is non-zero. Always on (parity-neutral).
+
 ### `quest_abandon` - giving up a quest takes its quest items
 
 The stock give-up (`CQuestZone::Recv_NC_QUEST_GIVE_UP_REQ` 0x5BD960) leaves the quest's items in the bag. A repeatable
