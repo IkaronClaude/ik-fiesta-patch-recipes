@@ -6,8 +6,13 @@
 // ---- THE STOCK GIVE-UP (read from Zone.exe) ------------------------------------------------------------------------
 //   ShinePlayer::sp_NC_QUEST_GIVE_UP_REQ 0x578910 (the delay check, recipe quest-giveup-delay)
 //     -> CQuestZone::Recv_NC_QUEST_GIVE_UP_REQ(PROTO_NC_QUEST_GIVE_UP_REQ*) 0x5BD960:
-//        GetQuestInfo / GetQuestData / IsDoingQuest, SetQuestInfoClearRepeat, Send_NC_QUEST_DB_SET_INFO_REQ,
-//        Send_NC_QUEST_DB_GIVE_UP_REQ, Send_NC_QUEST_GIVE_UP_ACK. Nothing touches the inventory.
+//        GetQuestInfo / GetQuestData / IsDoingQuest, then by QUEST_DATA +0x12 (repeatable):
+//          repeatable     -> SetQuestInfoClearRepeat + Send_NC_QUEST_DB_SET_INFO_REQ: the quest ends HERE;
+//          not repeatable -> Send_NC_QUEST_DB_GIVE_UP_REQ only: the quest is still in progress when this returns. It ends
+//            in CQuestZone::Recv_NC_QUEST_DB_GIVE_UP_ACK 0x5BAFC0 when the Character DB answers ErrorType 0xB41 (ok):
+//            AddQuestInfo(status 0x14) then Send_NC_QUEST_GIVE_UP_ACK.
+//        Nothing touches the inventory. So the items are taken in both places: after the REQ when the quest ended there,
+//        after an ok DB ACK otherwise (found 2026-09-27: "Green Maria 2" kept its Rock Dust - v1 hooked only the REQ).
 //
 // ---- WHICH ITEMS -------------------------------------------------------------------------------------------------------
 // The quest's drop rules: QUEST_DATA.Action[i] with ThenType 1, ThenTarget = the item a kill drops while the quest is
@@ -42,8 +47,9 @@ const unsigned kQuestZoneData = 0x4;         // CQuest -> CQuestData*
 const unsigned kQuestCount = 0x8;            // CQuest: number of quest records
 const unsigned kPlayerHandle = 0x4;          // what DELETE_ITEM passes: movzx edx, word [player+4]
 const unsigned char kStatusDoing = 6, kStatusReady = 8;   // 6 doing, 7 failed, 8 reward pending
+const unsigned short kDbGiveUpOk = 0xB41;   // PROTO_NC_QUEST_DB_GIVE_UP_ACK.ErrorType on success
 
-zone::Detour g_give_up;
+zone::Detour g_give_up, g_db_ack;
 
 bool in_progress(const PLAYER_QUEST_INFO* qi) { return qi && qi->Status >= kStatusDoing && qi->Status <= kStatusReady; }
 
@@ -113,8 +119,23 @@ void __fastcall give_up(void* quests, void*, const unsigned short* req) {
     const bool was = in_progress(zone::fn::CQuest__GetQuestInfo()(quests, nullptr, id));
     ((void(__fastcall*)(void*, void*, const unsigned short*))g_give_up.trampoline)(quests, nullptr, req);
     void* player = quests ? *(void**)((char*)quests + kQuestZonePlayer) : nullptr;
-    if (!was || !player || in_progress(zone::fn::CQuest__GetQuestInfo()(quests, nullptr, id))) return;   // refused
+    if (!was || !player) return;
+    if (in_progress(zone::fn::CQuest__GetQuestInfo()(quests, nullptr, id))) {
+        zone::log("quest_abandon: quest %u give-up sent to the Character DB, items are taken on its ACK", id);
+        return;
+    }
     take_items(quests, player, id);
+}
+
+void __fastcall db_ack(void* quests, void*, const zone::types::PROTO_NC_QUEST_DB_GIVE_UP_ACK* ack) {
+    ((void(__fastcall*)(void*, void*, const void*))g_db_ack.trampoline)(quests, nullptr, ack);
+    void* player = quests ? *(void**)((char*)quests + kQuestZonePlayer) : nullptr;
+    if (!ack || !player) return;
+    if (ack->ErrorType != kDbGiveUpOk) {
+        zone::log("quest_abandon: quest %u give-up refused by the Character DB (0x%X), items kept", ack->nQuestID, ack->ErrorType);
+        return;
+    }
+    take_items(quests, player, ack->nQuestID);
 }
 
 }  // namespace
@@ -122,4 +143,6 @@ void __fastcall give_up(void* quests, void*, const unsigned short* req) {
 ZONEHOOK_PLUGIN("quest_abandon") {
     zone::hook_function("CQuestZone::Recv_NC_QUEST_GIVE_UP_REQ 0x5BD960 (a given-up quest's drop items are taken)",
                         (void*)zone::fn::CQuestZone__Recv_NC_QUEST_GIVE_UP_REQ(), (void*)give_up, &g_give_up);
+    zone::hook_function("CQuestZone::Recv_NC_QUEST_DB_GIVE_UP_ACK 0x5BAFC0 (a non-repeatable quest ends here)",
+                        (void*)zone::fn::CQuestZone__Recv_NC_QUEST_DB_GIVE_UP_ACK(), (void*)db_ack, &g_db_ack);
 }

@@ -43,8 +43,9 @@ disassembly.
 
 ### `quest_abandon` - giving up a quest takes its quest items
 
-The stock give-up (`CQuestZone::Recv_NC_QUEST_GIVE_UP_REQ` 0x5BD960) clears the quest and leaves its items in the bag.
-After a give-up that went through, the plugin takes the items the quest was dropping (`QUEST_DATA.Action` ThenType 1)
+The stock give-up (`CQuestZone::Recv_NC_QUEST_GIVE_UP_REQ` 0x5BD960) leaves the quest's items in the bag. A repeatable
+quest ends right there; a non-repeatable one only when the Character DB answers (`Recv_NC_QUEST_DB_GIVE_UP_ACK`
+0x5BAFC0, ErrorType 0xB41), so both are hooked. After a give-up that went through, the plugin takes the items the quest was dropping (`QUEST_DATA.Action` ThenType 1)
 with the hand-in path's own call (`sp_DestroyItem(handle, item, 0 = all, 0)`, what `DELETE_ITEM ... ALL` runs).
 Only `IS_QUEST` items (ItemInfoServer.ItemSort_Index) - a few quests also drop ordinary materials - and never an item
 another quest in progress drops or asks for. One `quest_abandon:` log line per item.
