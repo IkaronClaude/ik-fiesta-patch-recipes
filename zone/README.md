@@ -54,6 +54,15 @@ An inventory sort (0x304A) swaps cells asynchronously; mid-swap each auto-use it
 `so_ply_UseItemMinimon_SlotItemCheck` (0x564C90) cleared its slot, then switched auto-buff off. The check is skipped
 while `so_ply_IsArrangeInven` (sort counter at player+0x2AB18) is non-zero. Always on (parity-neutral).
 
+### `client_checksums` - the zone checks the 2026 client's OWN table checksums (list-gated)
+
+`CShnDataFileCheckSum::DataFileCheck` (0x631350) compares the 49 map-login checksums with the zone's own; the 2026
+client's tables never match, so the proxy used to swap in the zone's values (nothing verified the client). Detoured:
+a slot passes on the zone's own checksum, OR one listed for it in `9Data/Shine/ClientChecksums.txt` (the legitimate
+client's files; Fiesta2026on2016 `tools/client_checksums.py`), OR `*` (MapLinkPoint/MapWayPoint - the 2026 client
+does not check them). ik-fiesta-proxy forwards the client's real checksums mapped to the zone slots when it has no
+CHECKSUMS file. Refusals are logged with the table and both hashes. No list = stock.
+
 ### `kq_box_rewards` - KQ boxes bought / &makeitem hold the KQ rewards (flag-gated)
 
 A Kingdom Quest box made outside a KQ went through sp_MagicContainerMake, which needs a TreasureReward container
