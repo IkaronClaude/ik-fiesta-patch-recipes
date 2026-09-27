@@ -77,3 +77,24 @@ handler's one quest-record lookup (0x5C5550) with a copy whose type says so; no 
 On NC_SKILL_SKILL_LEARNSUC_CMD the client (0x5AD110) upgrades the bar slots of that skill found at the highest level on
 the bar - a lone level-1 slot included. The plugin hides, for that one call, the matching slots below the level being
 replaced (new level - 1), puts them back and redraws the bars (0x57E2D0): only slots at your current level upgrade.
+
+
+## `include/pgwin_msg.h` - hooking the client's window messaging (header-only)
+
+Every 2026 client window (`PgWin`) receives its messages through one non-virtual funnel, `PgWin::ProcessMsg(msg, wParam,
+lParam)` (0x8784C0), fed by the queue (`PgWin::PostMsg`, 0x877A40, via the window manager `PgWinMgr` 0xD1B810) and by
+`SendMsg` (inlined in 2026). `pgwin_msg.h` hooks both and lets a plugin watch, change or swallow any message:
+
+```cpp
+#include <pgwin_msg.h>
+bool on_msg(pgwin::Message& m) {                       // before the receiver handles it
+    if (m.msg == pgwin::kCommand && pgwin::is(m.window, "FullMapWin")) hook::log("map command %u", m.wparam);
+    return false;                                      // true = swallow
+}
+HOOK_PLUGIN("x") { pgwin::on_process(on_msg); pgwin::install(); }
+```
+
+It also has `pgwin::process()` (deliver now, as `SendMsg`), `post()`, `alive()` (`PgWinMgr::IsIn`), `class_of()` /
+`is()` (RTTI class names) and the message table read from both clients (1 close, 4 edit notify, 5 command to the owner
+-> `OnCommand`, 7 button state 0 hover / 1 press / 2 release). Several plugins may each `install()`: the detours chain.
+First user: `plugins/win_msg_probe` (diagnostic).
