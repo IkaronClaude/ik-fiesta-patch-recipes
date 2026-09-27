@@ -54,6 +54,13 @@ An inventory sort (0x304A) swaps cells asynchronously; mid-swap each auto-use it
 `so_ply_UseItemMinimon_SlotItemCheck` (0x564C90) cleared its slot, then switched auto-buff off. The check is skipped
 while `so_ply_IsArrangeInven` (sort counter at player+0x2AB18) is non-zero. Always on (parity-neutral).
 
+### `shop_random_option` - cen-shop gear rolls random options like a drop (flag-gated)
+
+Every item-creation path rolls `rot_FillOption` (0x493590) - drops, vaults, rewards, the coin shop - except the cen
+shop `ii_BuyAll` (0x523CE0). The plugin detours `iti_mkregnum` (0x640710) and, only for the call from ii_BuyAll
+(return 0x523E51), runs the coin shop's roll first. Items listed in `9Data/Shine/ShopRandomOption.flag` (InxNames,
+one per line; `*` = all) - written by the variant step that lays such a shop. No flag = stock.
+
 ### `quest_abandon` - giving up a quest takes its quest items
 
 The stock give-up (`CQuestZone::Recv_NC_QUEST_GIVE_UP_REQ` 0x5BD960) leaves the quest's items in the bag. A repeatable
