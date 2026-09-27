@@ -41,6 +41,13 @@ id. Fixed: the quest is taken at `CQuestZone::Send_NC_QUEST_DB_DONE_REQ` (0x5BBE
 releaser uses (verified against the quest's slot) when no pending entry exists. The file's header comment has the
 disassembly.
 
+### `mover_merge` - mounts merge when they need no feeding (Fiesta2026on2016 QoL)
+
+The stock merge (`sp_NC_ITEM_MOVER_UPGRADE_REQ` 0x51C850) lets only LifeDust-fed mounts merge (feed item ==
+`[0x14D504D0]` = 2529); 2026 removed feeding (every `MoverHG.FeedType` is `-`), so every merge failed with 0x322A.
+The four feed comparisons compare with 0xFFFF (no item = `-`) instead. The not-timed checks after them are stock.
+Active only when `9Data/Shine/MoverMergeNoFeed.flag` exists (the QoL layer ships it).
+
 ### `quest_abandon` - giving up a quest takes its quest items
 
 The stock give-up (`CQuestZone::Recv_NC_QUEST_GIVE_UP_REQ` 0x5BD960) leaves the quest's items in the bag. A repeatable
