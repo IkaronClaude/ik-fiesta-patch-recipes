@@ -76,11 +76,22 @@ inline const char* class_of(const void* w) {
     }
 }
 
-// is(w, "SlideListWin") - exact class (not a base class)
+// is(w, "SlideListWin") - exact class (not a base class). Safe on ANY pointer: plugins probe arbitrary object fields
+// (map_legend_focus scans a list's first fields for its owner), and a non-object there yields a garbage "name". The
+// compare used to run outside the guard and crashed the client in the CRT's strncmp when a TITLE list got a command
+// (operator 2026-09-27, BugTrap report 260927-130110: ACCESS_VIOLATION in map_legend_focus.dll). Now every byte is
+// read inside __try, one at a time, against the exact expected name.
 inline bool is(const void* w, const char* cls) {
     const char* n = class_of(w);
-    size_t k = std::strlen(cls);
-    return std::strncmp(n, ".?AV", 4) == 0 && std::strncmp(n + 4, cls, k) == 0 && std::strcmp(n + 4 + k, "@@") == 0;
+    __try {
+        const char* want[3] = {".?AV", cls, "@@"};
+        for (const char* part : want)
+            for (const char* p = part; *p; ++p, ++n)
+                if (*n != *p) return false;
+        return *n == 0;
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        return false;
+    }
 }
 
 inline void* vtable_entry(const void* w, int slot) { return w ? (*(void***)w)[slot] : nullptr; }
