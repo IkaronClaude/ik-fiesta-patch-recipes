@@ -150,6 +150,7 @@ common/include/hook_core.h       detours (with trampolines), vtable and IAT hook
                                  arena_region() - the core, exe-agnostic
 zone/include/zonehook.h          packet-handler hooks (ZONE_HOOK_PACKET), the zone:: namespace
 zone/include/zonehook_lua.h      the zone's Lua 5.2 engine: register functions, observe every script call
+zone/include/zone_shn.h          SHN injection: serve other bytes for a table file, in memory (chains across plugins)
 zone/include/zone_types.h        466 enums, 3540 structs, 54 unions        - generated from Zone.pdb
 zone/include/zone_functions.h    ~11,000 typed function pointers          - generated
 zone/include/zone_globals.h      ~1,000 typed globals, ~800 vtables       - generated

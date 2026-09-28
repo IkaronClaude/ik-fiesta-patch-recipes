@@ -10,19 +10,20 @@
 //   files. 40 of the 49 the 2016 zone reads exactly as the 2026 client writes them.
 //
 // ---- THIS PLUGIN ---------------------------------------------------------------------------------------------------------
-//   Detours CDataReader::Read. For a table listed in 9Data/Shine/ClientTableLayouts.txt (ActiveSkill, ChargedEffect,
+//   Injects (zone::shn::inject) every table listed in the layout file and detours CDataReader::Read. For a table listed in 9Data/Shine/ClientTableLayouts.txt (ActiveSkill, ChargedEffect,
 //   ItemDismantle, ItemInfo, MobInfo, SubAbstate, UpgradeInfo) it reads the client's file, re-lays every row into the
 //   2016 table's columns (names, types, widths - from the layout file: 2026-only columns dropped, strings re-sized, wider
 //   integers CLAMPED, never wrapped), applies the rules below, orders the rows like the table's server-only lockstep
-//   companion (MobInfoServer, ItemInfoServer - the zone asserts "DataOrder mismatch" otherwise), writes the result to
-//   9Data/ConvertedTables/<same name> and lets the zone read THAT - then puts the checksum of the client's ORIGINAL into
-//   the table's checksum slot, so the stock check compares the client with itself. A table listed "unchecked"
+//   companion (MobInfoServer, ItemInfoServer - the zone asserts "DataOrder mismatch" otherwise) and hands the zone that
+//   image instead of the file's bytes (zone_shn.h: in memory, at Read's fread - nothing is written to disk). After Read
+//   it puts the checksum of the client's ORIGINAL into the table's checksum slot, so the stock check compares the client with itself. A table listed "unchecked"
 //   (MapLinkPoint, MapWayPoint: 2016-only, the 2026 client neither has nor checks them) gets 32 '0's - what the proxy
 //   forwards for them. The rules mirror Fiesta2026on2016 tools/client_to_server.py (the offline form of the same thing).
 //   No layout file = stock.
 #include <zonehook.h>
 #include <zone_functions.h>
 #include <zone_globals.h>
+#include <zone_shn.h>
 
 #include <windows.h>
 #include <wincrypt.h>
@@ -39,7 +40,6 @@
 namespace {
 
 const char* kLayouts = "../9Data/Shine/ClientTableLayouts.txt";
-const char* kOutDir = "../9Data/ConvertedTables/";
 const char* kMobLoca = "../9Data/Shine/Loca/MobLoca.shn";
 const unsigned kVaRead = 0x0062A780u;
 
@@ -180,7 +180,7 @@ bool parse(const std::vector<unsigned char>& file, Table& t, char md5[33]) {
     return true;
 }
 
-bool write_shn(const std::string& path, const Layout& L, const std::vector<Row>& rows) {
+std::vector<unsigned char> build_shn(const Layout& L, const std::vector<Row>& rows) {
     std::vector<unsigned char> body;
     auto put32 = [&](unsigned x) { for (int k = 0; k < 4; ++k) body.push_back((unsigned char)(x >> (8 * k))); };
     unsigned reclen = 2;
@@ -230,14 +230,11 @@ bool write_shn(const std::string& path, const Layout& L, const std::vector<Row>&
         body.insert(body.end(), rb.begin(), rb.end());
     }
     shn_crypt(body.data(), body.size());
-    FILE* f = std::fopen(path.c_str(), "wb");
-    if (!f) return false;
-    std::fwrite(L.crypt.data(), 1, 32, f);
+    std::vector<unsigned char> img(L.crypt.begin(), L.crypt.end());
     unsigned total = (unsigned)body.size() + 36;
-    std::fwrite(&total, 4, 1, f);
-    std::fwrite(body.data(), 1, body.size(), f);
-    std::fclose(f);
-    return true;
+    for (int k = 0; k < 4; ++k) img.push_back((unsigned char)(total >> (8 * k)));
+    img.insert(img.end(), body.begin(), body.end());
+    return img;
 }
 
 // ---- the rules: 2026 values the 2016 zone cannot take (mirror tools/client_to_server.py) -------------------------------
@@ -282,15 +279,72 @@ void rules(const std::string& table, Row& r) {
     }
 }
 
+// ---- UpgradeInfo at 32 bits (operator 2026-09-28: "just change the column type in the shn to a 32 bit one") ------------
+//   The 2026 client widened UpgradeInfo's 12 per-enchant-level values (Updata, Undefined0-10) from u16 to u32; 72 values
+//   of 57 endgame weapons exceed 65535. The zone keeps the FILE's row layout (UpgradeDataBox::udb_Load indexes
+//   CDataReader::GetRecord rows), so a 32-bit column only needs:
+//     - BinaryDataBox<UpGradeInfo>::bdb_ReadData's expected row size (Read(file, 0xA2B, 62) at 0x596178): 62 -> 86;
+//     - the ONE reader, ShinePlayer::so_RecalcEquipParam (0x4CB2F3..0x4CB38A): Updata[level] is read as a word at
+//       +0x24 + level*2 and ADDED to 32-bit player stats - re-encoded to a dword at +0x22 + level*4 (same bytes, NOP pad).
+//   All or nothing: every site is checked first; any unexpected byte -> nothing patched, the values stay clamped to 16
+//   bits (the 2016 layout).
+struct Patch { unsigned va; unsigned char orig[5]; unsigned char neu[5]; int n; };
+const Patch kWide[] = {
+    {0x596178, {0x6A, 0x3E}, {0x6A, 0x56}, 2},                                    // push 62 -> push 86 (row size)
+    {0x4CB2F3, {0x0F, 0xB7, 0x44, 0x50, 0x24}, {0x8B, 0x44, 0x90, 0x22, 0x90}, 5}, // movzx eax,w[eax+edx*2+24] -> mov eax,[eax+edx*4+22]
+    {0x4CB307, {0x0F, 0xB7, 0x54, 0x48, 0x24}, {0x8B, 0x54, 0x88, 0x22, 0x90}, 5}, // movzx edx,w[eax+ecx*2+24] -> mov edx,[eax+ecx*4+22]
+    {0x4CB318, {0x8D, 0x44, 0x48, 0x24}, {0x8D, 0x44, 0x88, 0x22}, 4},             // lea eax,[eax+ecx*2+24] -> [eax+ecx*4+22]
+    {0x4CB31C, {0x0F, 0xB7, 0x10}, {0x8B, 0x10, 0x90}, 3},                         // movzx edx,w[eax] -> mov edx,[eax]
+    {0x4CB325, {0x0F, 0xB7, 0x00}, {0x8B, 0x00, 0x90}, 3},                         // movzx eax,w[eax] -> mov eax,[eax]
+    {0x4CB334, {0x8D, 0x44, 0x48, 0x24}, {0x8D, 0x44, 0x88, 0x22}, 4},
+    {0x4CB338, {0x0F, 0xB7, 0x10}, {0x8B, 0x10, 0x90}, 3},
+    {0x4CB341, {0x0F, 0xB7, 0x00}, {0x8B, 0x00, 0x90}, 3},
+    {0x4CB350, {0x0F, 0xB7, 0x54, 0x48, 0x24}, {0x8B, 0x54, 0x88, 0x22, 0x90}, 5},
+    {0x4CB361, {0x8D, 0x44, 0x48, 0x24}, {0x8D, 0x44, 0x88, 0x22}, 4},
+    {0x4CB365, {0x0F, 0xB7, 0x10}, {0x8B, 0x10, 0x90}, 3},
+    {0x4CB36E, {0x0F, 0xB7, 0x08}, {0x8B, 0x08, 0x90}, 3},                         // movzx ecx,w[eax] -> mov ecx,[eax]
+    {0x4CB37D, {0x8D, 0x44, 0x48, 0x24}, {0x8D, 0x44, 0x88, 0x22}, 4},
+    {0x4CB381, {0x0F, 0xB7, 0x10}, {0x8B, 0x10, 0x90}, 3},
+    {0x4CB38A, {0x0F, 0xB7, 0x00}, {0x8B, 0x00, 0x90}, 3},
+};
+bool g_wide_upgrade = false;
+
+bool widen_upgradeinfo() {
+    for (auto& p : kWide)
+        if (std::memcmp(zone::rebase(p.va), p.orig, p.n)) {
+            zone::log("client_tables: UpgradeInfo stays 16-bit - unexpected bytes at 0x%X", p.va);
+            return false;
+        }
+    for (auto& p : kWide)
+        if (!zone::write_code(zone::rebase(p.va), p.neu, p.n)) {
+            zone::log("client_tables: UpgradeInfo patch at 0x%X FAILED to write - the zone may be half-patched", p.va);
+            return false;
+        }
+    return true;
+}
+
+bool upgrade_value_column(const std::string& name) {
+    return name == "Updata" || (name.rfind("Undefined", 0) == 0 && name.size() <= 11);
+}
+
 // ---- the conversion ----------------------------------------------------------------------------------------------------
-bool convert(const std::string& table, const Layout& L, const char* src, const std::string& dst, char md5[33]) {
-    std::vector<unsigned char> f;
+bool convert(const std::string& table, const Layout& L, const unsigned char* data, unsigned len,
+             std::vector<unsigned char>& out, char md5[33]) {
+    std::vector<unsigned char> f(data, data + len);
     Table t;
-    if (!read_file(src, f) || !parse(f, t, md5)) {
-        zone::log("client_tables: %s - cannot read/parse %s", table.c_str(), src);
+    if (!parse(f, t, md5)) {
+        zone::log("client_tables: %s - cannot parse the client's file", table.c_str());
         return false;
     }
     for (auto& r : t.rows) rules(table, r);
+    Layout wide;
+    const Layout* use = &L;
+    if (table == "upgradeinfo" && g_wide_upgrade) {           // the 12 values at 32 bits, as the 2026 client has them
+        wide = L;
+        for (auto& c : wide.cols)
+            if (upgrade_value_column(c.name)) { c.type = 22; c.len = 4; }   // the 2026 file's own type (22 = u32, 21 = u16)
+        use = &wide;
+    }
     if (!L.companion.empty()) {                                   // the order of the lockstep companion
         std::vector<unsigned char> cf;
         Table ct;
@@ -319,12 +373,18 @@ bool convert(const std::string& table, const Layout& L, const char* src, const s
         for (auto& pr : pos) sorted.push_back(std::move(t.rows[pr.second]));
         t.rows.swap(sorted);
     }
-    CreateDirectoryA(kOutDir, nullptr);
-    if (!write_shn(dst, L, t.rows)) {
-        zone::log("client_tables: %s - cannot write %s", table.c_str(), dst.c_str());
-        return false;
-    }
+    out = build_shn(*use, t.rows);
     return true;
+}
+
+// one per layout table: what the injector did for the Read in progress (the Read detour reports it and sets the slot)
+struct Job { std::string key; bool done = false; char sum[33] = {}; };
+std::map<std::string, Job> g_jobs;
+
+bool inject(void* ctx, const char*, const unsigned char* data, unsigned len, std::vector<unsigned char>& out) {
+    Job& j = *(Job*)ctx;
+    j.done = convert(j.key, g_layouts[j.key], data, len, out, j.sum);
+    return j.done;
 }
 
 void set_slot_checksum(const std::string& file, const char* sum) {
@@ -344,16 +404,18 @@ int __fastcall read(void* self, void*, char* file) {
     if (!file) return real(self, nullptr, file);
     std::string bn = base_name(file), key = lower(stem(bn));
     auto it = g_layouts.find(key);
-    if (it != g_layouts.end()) {
-        char sum[33] = {};
-        std::string dst = std::string(kOutDir) + bn;
-        if (convert(key, it->second, file, dst, sum)) {
-            int r = real(self, nullptr, (char*)dst.c_str());
-            set_slot_checksum(bn, sum);                           // the check compares the client with its own file
-            zone::log("client_tables: %s converted from the client's file (checksum %s)", bn.c_str(), sum);
-            return r;
+    auto jt = g_jobs.find(key);
+    if (it != g_layouts.end() && jt != g_jobs.end()) {
+        Job& j = jt->second;
+        j.done = false;
+        int r = real(self, nullptr, file);                        // the injector converts inside, at the fread
+        if (j.done) {
+            set_slot_checksum(bn, j.sum);                         // the check compares the client with its own file
+            zone::log("client_tables: %s converted from the client's file in memory (checksum %s)", bn.c_str(), j.sum);
+        } else {
+            zone::log("client_tables: %s NOT converted - the zone reads it as it is", bn.c_str());
         }
-        zone::log("client_tables: %s NOT converted - the zone reads it as it is", bn.c_str());
+        return r;
     }
     int r = real(self, nullptr, file);
     if (g_unchecked.count(key)) set_slot_checksum(bn, "00000000000000000000000000000000");
@@ -403,6 +465,20 @@ ZONEHOOK_PLUGIN("client_tables") {
     if (!load_layouts()) {
         zone::log("client_tables: no %s (or no usable layout) - the zone reads its tables as they are (stock)", kLayouts);
         return;
+    }
+    if (g_layouts.count("upgradeinfo")) {
+        g_wide_upgrade = widen_upgradeinfo();
+        zone::log("client_tables: UpgradeInfo %s", g_wide_upgrade ? "WIDE - its 12 values read at 32 bits (16 sites patched)"
+                                                                : "16-bit (clamped)");
+    }
+    for (auto& l : g_layouts) {
+        Job& j = g_jobs[l.first];
+        j.key = l.first;
+        if (!zone::shn::inject((l.first + ".shn").c_str(), inject, &j)) {
+            g_jobs.clear();
+            zone::log("client_tables: no SHN injection point - the zone reads its tables as they are (stock)");
+            return;
+        }
     }
     zone::hook_function("CDataReader::Read 0x62A780 (the 2026 client's tables, converted on the fly)",
                         zone::rebase(kVaRead), (void*)read, &g_read);
