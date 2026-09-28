@@ -32,10 +32,14 @@
 #include <zone_globals.h>
 
 #include <cstring>
+#include <unordered_map>
 #include <vector>
 
 namespace {
 
+using zone::types::CDataReader;
+using zone::types::CDataReader__FIELD;
+using zone::types::CDataReader__HEAD;
 using zone::types::PLAYER_QUEST_INFO;
 using zone::types::QUEST_DATA;
 
@@ -57,6 +61,68 @@ QUEST_DATA* quest_data(void* quests, unsigned short id) {
     return zone::fn::CQuestData__GetQuestData()(*(void**)((char*)quests + kQuestZoneData), nullptr, id);
 }
 
+// A column of any width the reader declares, by name.
+struct Col { int off = -1, size = 0; };
+unsigned long field(const unsigned char* rec, const Col& c) {
+    if (c.off < 0) return 0;
+    if (c.size == 1) return rec[c.off];
+    if (c.size == 2) return *(const unsigned short*)(rec + c.off);
+    return *(const unsigned long*)(rec + c.off);
+}
+
+// Reads a 9Data table with the zone's own CDataReader and calls per_row(record, cols) for each record; cols[k] is
+// the column named names[k]. False (logged) when the file or a column is missing.
+template <class F>
+bool read_table(const char* path, const char* const* names, int n, F per_row) {
+    void* reader = ::operator new(sizeof(CDataReader));
+    zone::fn::CDataReader__CDataReader()(reader, nullptr);
+    bool ok = zone::fn::CDataReader__Read()(reader, nullptr, (char*)path) != 0;
+    std::vector<Col> c(n);
+    if (!ok) {
+        zone::log("cannot read %s", path);
+    } else {
+        CDataReader* r = (CDataReader*)reader;
+        const CDataReader__FIELD* f = (const CDataReader__FIELD*)((const unsigned char*)r->m_pHead + sizeof(CDataReader__HEAD));
+        int off = 0;
+        for (unsigned i = 0; i < r->m_pHead->nNumOfField; ++i) {
+            for (int k = 0; k < n; ++k)
+                if (!std::strcmp(f[i].Name, names[k])) { c[k].off = off; c[k].size = (int)f[i].Size; }
+            off += (int)f[i].Size;
+        }
+        for (int k = 0; k < n && ok; ++k)
+            if (c[k].off < 0) { zone::log("%s has no %s column", path, names[k]); ok = false; }
+    }
+    if (ok) {
+        unsigned long rows = zone::fn::CDataReader__GetNumOfRecord()(reader, nullptr);
+        for (unsigned long i = 0; i < rows; ++i) {
+            const unsigned char* rec = (const unsigned char*)zone::fn::CDataReader__GetRecord()(reader, nullptr, i);
+            if (rec) per_row(rec, c.data());
+        }
+    }
+    zone::fn::CDataReader___CDataReader()(reader, nullptr);
+    ::operator delete(reader);
+    return ok;
+}
+
+// 2026's QuestAction table: the kill -> drop rows past a quest's 10 QUEST_DATA actions, which quest_ext rolls (found
+// 2026-09-28: quest 100's Goblin Captain's Helmet, Q_GoblinCap, drops ONLY from its QuestAction row, so a give-up
+// kept it). Result 1 = drop ResultTarget. Read once at load with the zone's own reader, like quest_ext.
+std::unordered_map<unsigned short, std::vector<unsigned short>> g_extra;   // quest id -> items its extra rows drop
+
+void load_extra() {
+    const char* names[] = {"ID", "Result", "ResultTarget"};
+    unsigned long rows = 0;
+    if (!read_table("../9Data/Shine/QuestAction.shn", names, 3, [&](const unsigned char* rec, const Col* c) {
+            if (field(rec, c[1]) != kThenDropItem) return;
+            g_extra[(unsigned short)field(rec, c[0])].push_back((unsigned short)field(rec, c[2]));
+            ++rows;
+        })) {
+        zone::log("quest_abandon: no QuestAction.shn - only the QUEST_DATA drop items are taken");
+        return;
+    }
+    zone::log("quest_abandon: %lu QuestAction drop rows for %u quests (taken on give-up too)", rows, (unsigned)g_extra.size());
+}
+
 std::vector<unsigned short> drop_items(const QUEST_DATA* q) {
     std::vector<unsigned short> v;
     for (int i = 0; q && i < q->NumOfAction && i < kActions; ++i) {
@@ -66,6 +132,15 @@ std::vector<unsigned short> drop_items(const QUEST_DATA* q) {
         bool seen = false;
         for (unsigned short x : v) seen |= x == item;
         if (!seen) v.push_back(item);
+    }
+    if (q) {
+        auto it = g_extra.find(q->ID);
+        if (it != g_extra.end())
+            for (unsigned short item : it->second) {
+                bool seen = false;
+                for (unsigned short x : v) seen |= x == item;
+                if (!seen) v.push_back(item);
+            }
     }
     return v;
 }
@@ -141,6 +216,7 @@ void __fastcall db_ack(void* quests, void*, const zone::types::PROTO_NC_QUEST_DB
 }  // namespace
 
 ZONEHOOK_PLUGIN("quest_abandon") {
+    load_extra();
     zone::hook_function("CQuestZone::Recv_NC_QUEST_GIVE_UP_REQ 0x5BD960 (a given-up quest's drop items are taken)",
                         (void*)zone::fn::CQuestZone__Recv_NC_QUEST_GIVE_UP_REQ(), (void*)give_up, &g_give_up);
     zone::hook_function("CQuestZone::Recv_NC_QUEST_DB_GIVE_UP_ACK 0x5BAFC0 (a non-repeatable quest ends here)",
