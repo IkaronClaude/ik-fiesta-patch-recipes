@@ -26,12 +26,12 @@ unsigned g_kept = 0;
 
 void __fastcall normal_clear(void* player, void*, unsigned char slot) {
     ++g_kept;                                    // kept: the item comes back into use when the player has it again
-    (void)player; (void)slot;
+    zone::log("minimon_keep: normal slot %u of player %p used up - kept (stock would clear it) [%u kept]", slot, player, g_kept);
 }
 
 void __fastcall charged_clear(void* player, void*, unsigned char slot) {
     ++g_kept;
-    (void)player; (void)slot;
+    zone::log("minimon_keep: charged slot %u of player %p used up - kept (stock would clear it) [%u kept]", slot, player, g_kept);
 }
 
 }  // namespace
