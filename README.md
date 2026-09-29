@@ -57,12 +57,13 @@ common\loader\build.bat                          # -> build\fiestahook.dll
 common\build_plugin.bat zone void_bag             # -> build\plugins\void_bag.dll
 common\build_plugin.bat zone quest_gate           # -> build\plugins\quest_gate.dll  (quest-gated map entry, the 2026 rule)
 common\build_plugin.bat zone main_wake            # -> build\plugins\main_wake.dll   (idle main loop waits for network data, max 15 ms)
-common	estuild.bat                             # the hook library self-test (detour / trampoline / vtable swap): a plain 32-bit exe, must PASS
+common\test\build.bat                             # the hook library self-test (detour / trampoline / vtable swap): a plain 32-bit exe, must PASS
 common\build_plugin.bat character char_void       # -> build\plugins\char_void.dll
 
-# the generated headers (after a new exe/pdb)
-python zone/tools/mk_types.py --pdb Z:/ServerSource/Zone00/Zone.pdb --exe Z:/ServerSource/Zone00/Zone.exe --out zone/include
-python zone/tools/mk_symbols.py
+# the generated headers - from YOUR OWN Zone.exe + Zone.pdb (BYO, like every game file); not shipped,
+# gitignored, needed before any zone plugin builds. Rerun after a new exe/pdb.
+python zone/tools/mk_types.py   --pdb <path>/Zone.pdb --exe <path>/Zone.exe --out zone/include   # types, functions, globals
+python zone/tools/mk_symbols.py --pdb <path>/Zone.pdb --exe <path>/Zone.exe                      # -> zone/include/zone_symbols.h
 python character/tools/mk_char_symbols.py
 ```
 

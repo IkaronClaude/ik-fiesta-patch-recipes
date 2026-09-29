@@ -14,7 +14,9 @@ __pycache__/
 # debug symbols, which are BYO like every other game file here, and they are ~7MB. Regenerate:
 #   python zone/tools/mk_types.py --pdb Z:/ServerSource/Zone00/Zone.pdb \
 #                                 --exe Z:/ServerSource/Zone00/Zone.exe --out zone/include
-# (zone_symbols.h and character_symbols.h stay committed - short address tables, no layouts.)
+#   python zone/tools/mk_symbols.py --pdb <Zone.pdb> --exe <Zone.exe>      (-> zone/include/zone_symbols.h)
+# (character_symbols.h stays committed: our own names for addresses, no PDB behind it.)
 zone/include/zone_types.h
 zone/include/zone_functions.h
 zone/include/zone_globals.h
+zone/include/zone_symbols.h

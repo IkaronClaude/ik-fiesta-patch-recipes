@@ -7,7 +7,7 @@ Everything that patches or extends **Zone.exe**: its recipes, its hook plugins a
 recipes/     the byte patches, in chain order in ../build.py (CHAIN, then EXPERIMENTAL)
 plugins/     void_bag/ - the 2026 Void Inventory (bag 18)
 include/     zonehook.h (the zone layer of the hook library), zonehook_lua.h, zone_shn.h (SHN injection),
-             zone_symbols.h (committed), zone_types/functions/globals.h (generated, gitignored)
+             zone_symbols.h + zone_types/functions/globals.h (generated from YOUR Zone.pdb, gitignored)
 tools/       mk_types.py / mk_symbols.py (headers from Zone.pdb), recipe generators
 docs/        HOOK-TARGETS.md - where to hook what, and with which tool
 ```

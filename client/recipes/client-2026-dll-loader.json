@@ -21,8 +21,7 @@
     "loads hooks/*.dll on the first call - WinMain on the main thread, everything initialised, no window yet.",
     "With no plugins the client runs exactly as before (the loader logs to fiestahook.log beside the exe).",
     "",
-    "Deploy: fiestahook.dll next to Fiesta.exe, plugins in a hooks/ subfolder. XIGNCODE must already be",
-    "neutralised (Client2026patched is): an injected DLL is exactly what it scans for."
+    "Deploy: fiestahook.dll next to Fiesta.exe, plugins in a hooks/ subfolder."
   ],
   "add_import": {
     "dll": "fiestahook.dll",

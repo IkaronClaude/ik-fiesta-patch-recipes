@@ -36,7 +36,7 @@ when testing this recipe so it is the patch being tested and not the bridge. **U
 The same import injection as the zone's `dll-loader`, into the 2026 `Fiesta.exe`. The shared loader
 (`common/loader`) has a CLIENT MODE: the client is not a service, so it swaps the `CreateWindowExA` import and
 loads `hooks\*.dll` on the first call (WinMain, main thread, before any window). With no plugins the client runs
-as before. Needs XIGNCODE neutralised (Client2026patched is).
+as before.
 
 ## `client-2026-quest-exp-u64` - quest EXP above 4.29 billion in the reward window
 
