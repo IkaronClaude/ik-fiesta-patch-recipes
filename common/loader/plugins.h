@@ -28,7 +28,8 @@
 
 namespace hook {
 
-// Load every *.dll in `<folder beside the exe>`. Returns how many loaded. A failure is logged with its
+// Load every *.dll in `<folder beside the exe>`, honouring each one's optional `<name>.ini` ([plugin] enabled=0 skips it,
+// after=a,b orders it after those; see plugins.cpp and the README). Returns how many loaded. A failure is logged with its
 // reason and skipped - one bad plugin must not stop the others or the zone.
 int load_plugins(const wchar_t* folder = L"hooks");
 

@@ -36,6 +36,8 @@
 #include <windows.h>
 #include <stdarg.h>
 
+extern "C" IMAGE_DOS_HEADER __ImageBase;   // this module's own base (hook::config_* find the .ini beside it)
+
 
 namespace hook {
 
@@ -507,6 +509,44 @@ inline bool hook_function(const char* what, void* target, void* replacement, Det
 inline void uninstall_all() {
     for (int i = detail::g_hook_count - 1; i >= 0; i--) undetour(detail::g_hooks[i]);
     detail::g_hook_count = 0;
+}
+
+}  // namespace hook
+
+namespace hook {
+
+// ---- the plugin's own settings: hooks\<name>.ini --------------------------------------------------
+//
+// The loader reads [plugin] enabled= / after= from hooks\<name>.ini beside hooks\<name>.dll (common/loader/plugins.cpp).
+// A plugin reads its OWN settings from the same file, [config] by default:
+//     int n = hook::config_int("max_items", 10);
+//     char path[260]; hook::config_str("table", "default.txt", path, sizeof path);
+// "Own" = the DLL this code is compiled into (__ImageBase), so every plugin finds its file with no loader API.
+// No .ini = every call returns its default.
+namespace detail {
+inline bool own_ini(char* out, unsigned cap) {
+    DWORD n = GetModuleFileNameA((HMODULE)&__ImageBase, out, cap);
+    if (!n || n >= cap || n < 4) return false;
+    out[n - 3] = 'i'; out[n - 2] = 'n'; out[n - 1] = 'i';        // x.dll -> x.ini
+    return true;
+}
+}  // namespace detail
+
+inline int config_int(const char* key, int def, const char* section = "config") {
+    char ini[MAX_PATH];
+    return detail::own_ini(ini, MAX_PATH) ? (int)GetPrivateProfileIntA(section, key, def, ini) : def;
+}
+
+inline void config_str(const char* key, const char* def, char* out, unsigned cap, const char* section = "config") {
+    char ini[MAX_PATH];
+    if (detail::own_ini(ini, MAX_PATH)) GetPrivateProfileStringA(section, key, def, out, cap, ini);
+    else { unsigned i = 0; for (; def[i] && i + 1 < cap; i++) out[i] = def[i]; if (cap) out[i] = 0; }
+}
+
+// whether this plugin's .ini exists and says [plugin] enabled=1 - for a plugin that should be OFF unless a variant ships
+// its .ini (the loader itself loads a plugin with no .ini)
+inline bool ini_opted_in() {
+    return config_int("enabled", 0, "plugin") != 0;
 }
 
 }  // namespace hook

@@ -214,6 +214,23 @@ The same plugin pre-checks a GM `&linkto` destination with the zone's own block 
 `fm_IsBlock`): a blocked spot used to disconnect the player (error 1669), and a recipe that skipped that
 disconnect left the player unmarked in limbo - the check has to run before the exe unwinds anything.
 
+**Per-plugin settings: `hooks\<name>.ini`** beside `hooks\<name>.dll` (optional; no file = defaults):
+
+```ini
+[plugin]
+enabled=0          ; the loader skips this DLL (default 1)
+after=void_bag     ; load after these plugins (comma list, DLL names without .dll); a missing name or a cycle is
+                   ; logged and the plugin still loads
+[config]           ; the plugin's own settings
+max_items=10
+```
+
+The loader reads `[plugin]`; a plugin reads its own `[config]` with `hook::config_int("max_items", 10)` /
+`hook::config_str(...)` (hook_core.h - the file is found from the plugin's own DLL path, no loader API). A plugin
+that must stay OFF unless something ships its file checks `hook::ini_opted_in()` (= `[plugin] enabled=1` present):
+`enhance_no_warning` does, and the Fiesta2026on2016 Avocado layer ships its `.ini`. `common\test\build_loader_test.bat`
+checks the rules on dummy plugins (order, disable, missing dependency, cycle, `[config]`); it must print PASS.
+
 ### Live
 
 Proven under Wine in the docker stack on 2026-09-19. Zone.exe and Character.exe both run with the loader, and

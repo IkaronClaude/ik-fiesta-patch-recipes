@@ -13,7 +13,7 @@
 //
 // ---- THIS PLUGIN -------------------------------------------------------------------------------------------------------
 //   The jne (75 0E) becomes two NOPs: Enhance always sends. Only the Rebalanced client (enhancing always succeeds
-//   there, server EnchantAlwaysSucceeds.flag): active only when hooks\enhance_no_warning.flag exists - the Rebalanced
+//   there, server EnchantAlwaysSucceeds.flag): active only when hooks\enhance_no_warning.ini says [plugin] enabled=1 - the Rebalanced
 //   layer ships it (migrations-rebalance/0023-enhance-no-warning.py).
 #include <hook_core.h>
 
@@ -21,7 +21,6 @@
 
 namespace {
 
-const char* kFlag = "hooks\\enhance_no_warning.flag";
 const unsigned kVaWarnJump = 0x00646A41u;
 const unsigned char kStock[2] = {0x75, 0x0E};      // jne 0x646a51
 const unsigned char kGoOn[2] = {0x90, 0x90};
@@ -29,8 +28,8 @@ const unsigned char kGoOn[2] = {0x90, 0x90};
 }  // namespace
 
 HOOK_PLUGIN("enhance_no_warning") {
-    if (GetFileAttributesA(kFlag) == INVALID_FILE_ATTRIBUTES) {
-        hook::log("no %s - the protection-stone warning stays (stock)", kFlag);
+    if (!hook::ini_opted_in()) {
+        hook::log("enhance_no_warning.ini does not say enabled=1 - the protection-stone warning stays (stock)");
         return;
     }
     unsigned char* p = (unsigned char*)hook::rebase(kVaWarnJump);
@@ -39,5 +38,5 @@ HOOK_PLUGIN("enhance_no_warning") {
         return;
     }
     if (hook::write_code(p, kGoOn, sizeof kGoOn))
-        hook::log("%s present - Enhance no longer asks about protection stones", kFlag);
+        hook::log("enhance_no_warning.ini: enabled - Enhance no longer asks about protection stones");
 }
