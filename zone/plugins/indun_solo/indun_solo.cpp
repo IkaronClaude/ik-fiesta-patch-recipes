@@ -28,12 +28,14 @@
 // (Fiesta2026on2016 migrations-qol/0013-indun-solo.py -> 9Data/Shine/IndunSolo.flag).
 #include <zonehook.h>
 #include <zone_functions.h>
+#include <zone_globals.h>
 
 #include <cstring>
 
 namespace {
 
 using zone::types::FieldOption__InstanceDungeonInfo;
+using zone::types::FieldMap;
 
 const char* kFlag = "../9Data/Shine/IndunSolo.flag";
 const int kErrNeedParty = 4;                     // ENTER_MAP_ERR_NEED_PARTY_OR_QUEST
@@ -112,6 +114,41 @@ bool patch_gate_answer() {
     return hook::write_code(p, jmp, sizeof jmp);
 }
 
+// ---- a party inherits a member's solo instance (Fiesta2026on2016 P4, operator 2026-09-27) ----------------------------
+// "A player in their OWN solo instance who joins a party: if the party has no instance of that dungeon open, the solo
+// instance BECOMES the party's (members can enter it)". The instance a key opens is looked up on the zone that hosts
+// the map by MapClusterManager::ClusterManager::cm_FindExistByRegnum(map, regnum, category, &level) 0x486400. When a
+// PARTY key (category 0, regnum = the party number < 0x10000) finds nothing, this looks again with each member's solo
+// key (0x10000 + chrregnum, from the zone's party table partycontainer: PARTY_SLOT.Members[].MemberInform.Member) and
+// returns the first solo instance found - the members walk into it, and the member who opened it, now in the party,
+// finds it the same way. A party that already has its own instance keeps it (the stock lookup finds that first).
+// NOT DONE: the "your progress will be lost" warning when a party WITH an instance is joined - the player's next entry
+// simply goes to the party's instance (the solo one empties and closes as stock).
+const unsigned long kCategoryParty = 0;
+zone::Detour g_find;
+
+typedef FieldMap*(__fastcall* FindFn)(void*, void*, char*, unsigned long, void*, void*);
+
+FieldMap* __fastcall find_instance(void* self, void*, char* map, unsigned long regnum, void* category, void* level) {
+    auto orig = (FindFn)g_find.trampoline;
+    FieldMap* r = orig(self, nullptr, map, regnum, category, level);
+    if (r || (unsigned long)category != kCategoryParty || regnum >= kSoloKeyBase) return r;
+    const zone::types::CParty* parties = zone::global::partycontainer();
+    if (!parties || !parties->m_Array || (int)regnum >= parties->m_NumOfParty) return r;
+    const auto& slot = parties->m_Array[regnum];
+    for (int i = 0; i < slot.NumOfMember && i < 5; ++i) {
+        const unsigned long chr = slot.Members[i].MemberInform.Member.chrregnum;
+        if (!chr) continue;
+        FieldMap* solo = orig(self, nullptr, map, kSoloKeyBase + chr, category, level);
+        if (solo) {
+            zone::log("indun_solo: party %lu has no %.13s instance - enters member %lu's solo instance (key %lu)", regnum, map,
+                      chr, kSoloKeyBase + chr);
+            return solo;
+        }
+    }
+    return r;
+}
+
 }  // namespace
 
 ZONEHOOK_PLUGIN("indun_solo") {
@@ -121,6 +158,8 @@ ZONEHOOK_PLUGIN("indun_solo") {
     }
     zone::hook_function("FieldContainer::fc_CanEnterIndun (solo entry)",
                         (void*)zone::fn::FieldContainer__fc_CanEnterIndun(), (void*)can_enter, &g_can_enter);
+    zone::hook_function("ClusterManager::cm_FindExistByRegnum (a party inherits a member's solo instance)",
+                        (void*)zone::fn::MapClusterManager__ClusterManager__cm_FindExistByRegnum(), (void*)find_instance, &g_find);
     if (patch_gate_answer())
         zone::log("indun_solo: gate answer 0x5A93B1 -> solo key (>= 0x10000) with no party goes on as key type 0");
     zone::log("indun_solo: %s present - a character with no party / raid enters party instances on its own key",
