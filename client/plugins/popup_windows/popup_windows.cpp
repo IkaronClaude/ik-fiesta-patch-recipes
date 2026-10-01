@@ -34,6 +34,7 @@
 
 #include <windows.h>
 
+#include <cstdio>
 #include <cstdlib>
 #include <cstring>
 
@@ -187,6 +188,54 @@ void check_quests() {
     if (changed) update_quest("a quest list change (accept / item / hand-in)");
 }
 
+// OWN POSITION FILE (operator 2026-10-01: the positions "save only until zone restart, they survive 'Switch Character' but
+// ... after a while they're back where they started"). MachineOpt keeps them in memory and writes its option file only on a
+// clean client exit - a kick (zone restart) or a crash skips that, so the next start loads the old file. Each drop is
+// written at once to <hooks>/popup_windows.pos.ini (x, y as 1/100000 of the screen, the way MachineOpt stores them) and
+// applied after the client's own restore at every login.
+const int kPosScale = 100000;
+
+const char* pos_file() {
+    static char path[MAX_PATH] = {0};
+    if (!path[0]) {
+        HMODULE me = nullptr;
+        GetModuleHandleExA(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
+                           (LPCSTR)&pos_file, &me);
+        GetModuleFileNameA(me, path, MAX_PATH);
+        char* slash = std::strrchr(path, '\\');
+        char* name = slash ? slash + 1 : path;
+        strcpy_s(name, MAX_PATH - (name - path), "popup_windows.pos.ini");
+    }
+    return path;
+}
+
+void save_pos(int k, void* w) {
+    if (k < 0) return;
+    int sw = *(int*)hook::rebase(kVaScreenW), sh = *(int*)hook::rebase(kVaScreenH);
+    if (sw <= 0 || sh <= 0) return;
+    char v[48];
+    wsprintfA(v, "%d,%d", MulDiv(vcall_int(w, kSlotX), kPosScale, sw), MulDiv(vcall_int(w, kSlotY), kPosScale, sh));
+    WritePrivateProfileStringA("positions", kWindows[k], v, pos_file());
+}
+
+void load_positions() {
+    int sw = *(int*)hook::rebase(kVaScreenW), sh = *(int*)hook::rebase(kVaScreenH);
+    if (sw <= 0 || sh <= 0) return;
+    for (int i = 0; i < kNumWindows; i++) {
+        char v[48] = {0};
+        int fx, fy;
+        if (!g_win[i] || !GetPrivateProfileStringA("positions", kWindows[i], "", v, sizeof v, pos_file()) ||
+            sscanf_s(v, "%d,%d", &fx, &fy) != 2)
+            continue;
+        __try {
+            ((MoveFn)pgwin::vtable_entry(g_win[i], kSlotMove))(g_win[i], 0, MulDiv(fx, sw, kPosScale), MulDiv(fy, sh, kPosScale));
+            hook::log("popup_windows: %s placed from %s at %d,%d", kWindows[i], "popup_windows.pos.ini",
+                      MulDiv(fx, sw, kPosScale), MulDiv(fy, sh, kPosScale));
+        } __except (EXCEPTION_EXECUTE_HANDLER) {
+        }
+    }
+}
+
 LRESULT CALLBACK msg_hook(int code, WPARAM wp, LPARAM lp) {
     if (code == HC_ACTION && wp == PM_REMOVE) check_quests();
     if (code == HC_ACTION && wp == PM_REMOVE) {
@@ -227,6 +276,7 @@ LRESULT CALLBACK msg_hook(int code, WPARAM wp, LPARAM lp) {
                     m->lParam = MAKELPARAM((WORD)(short)-30000, (WORD)(short)-30000);
                     hook::log("popup_windows: dropped %s at %d,%d", kWindows[which(g_drag.win)],
                               vcall_int(g_drag.win, kSlotX), vcall_int(g_drag.win, kSlotY));
+                    save_pos(which(g_drag.win), g_drag.win);
                 }
                 g_drag.win = nullptr;
             }
@@ -286,6 +336,7 @@ void __fastcall fw_register_impl(void* self, void* /*edx*/) {
 void __fastcall fw_restore_impl(void* self, void* /*edx*/) {
     ((FwFn)g_fw_restore.trampoline)(self, 0);
     apply(self, kVaSetPos, "restore");
+    load_positions();                                   // our own file wins: it is written on every drop
     ensure_msg_hook();                                  // runs on the UI thread
 }
 
