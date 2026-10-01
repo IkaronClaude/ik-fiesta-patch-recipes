@@ -38,7 +38,8 @@ const ThinkSite kSites[] = {
 };
 const int kNumSites = sizeof kSites / sizeof kSites[0];
 
-const unsigned kOffArgMob = 4, kOffHandle = 4, kOffTarget = 0x24AE;
+const unsigned kOffArgMob = 4, kOffHandle = 4, kOffTarget = 0x24AE, kOffDataBox = 0x1F90;
+const unsigned kOnlyMob = 519;                          // MobInfo "Miner" (Burning Rock), the mob under investigation
 const unsigned kMaxHandle = 0x5000;
 
 zone::Detour g_detours[kNumSites];
@@ -71,6 +72,11 @@ void* think(int site, void* action, void* arg) {
     __try {
         char* mob = arg ? *(char**)((char*)arg + kOffArgMob) : nullptr;
         if (!mob) return next;
+        // only the one mob being investigated - every other mob returns here, before any RTTI / logging (operator
+        // 2026-10-01: "The zone is lagging wayyyy too hard ... restrict to only 'Miner' enemy in Burning Rock" / "519").
+        // MobInfo ID = [[mob + 0x1F90]] u16 (ShineMob::so_mob_MobID 0x556AB0)
+        char* box = *(char**)(mob + kOffDataBox);
+        if (!box || *(unsigned short*)(*(char**)box) != kOnlyMob) return next;
         unsigned h = *(unsigned short*)(mob + kOffHandle);
         unsigned tgt = *(unsigned short*)(mob + kOffTarget);
         int to = next ? site_of_class(class_of(next)) : -1;
