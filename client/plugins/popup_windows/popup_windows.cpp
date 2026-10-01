@@ -56,19 +56,23 @@ const DWORD kSwallowMs = 400;                           // after a drop: the cli
 // accepted, "but they just sit in the quest log as Reward without ever showing in the small popup (unless you relog)";
 // "Don't call it every second, instead, add a call right after starting a new quest"). QuestFinishWin::UpdateQuest
 // (2026 0x730250) pops it; the client runs it on a quest mob kill, an item pick-up or a quest script command, not on an
-// accept. CQuest::SetQuestAccept (2016 0x727CA0, 2026 0x901F70: sets the player quest's status byte +2 to 6; its only
-// caller is On_NC_QUEST_SCRIPT_CMD_REQ) is hooked: after it, UpdateQuest runs on the next UI message, and once more
-// kAcceptLateMs later for a delivery item that arrives just after the accept. Its already-shown list stops repeats.
+// accept. (First try: a hook on what looked like CQuest::SetQuestAccept, 2026 0x901F70 - it never ran on the operator's
+// accepts.) So the player's quest list is watched instead: the quest manager (0x7EB840, what UpdateQuest asks) holds it
+// at +4 count / +8 present / +0xC entries of 0x25 bytes, quest id u16 at +0 (2026 GetNewQuestStatus(QUEST_DATA*)
+// 0x8FF5C0). At most every kQuestCheckMs, on a UI message, each quest's COMPUTED status (GetNewQuestStatus(id) 0x8FF590 -
+// a delivery quest turns 8 when its item is in the bag, the stored byte does not) is folded into a fingerprint; when it
+// changes - an accept, an item arriving, a hand-in - UpdateQuest runs once. Its already-shown list stops repeats.
 const unsigned kVaUpdateQuest = 0x00730250u;
-const unsigned kVaSetQuestAccept = 0x00901F70u;
-const DWORD kAcceptLateMs = 1500;
+const unsigned kVaGetQuestMgr = 0x007EB840u;
+const unsigned kVaGetStatus = 0x008FF590u;
+const unsigned kOffQuestCount = 0x4, kOffQuestList = 0x8, kOffQuestEntries = 0xC, kQuestEntry = 0x25;
+const DWORD kQuestCheckMs = 250;
 
 hook::Detour g_fw_register, g_fw_restore, g_fw_terminate;
 void* g_win[kNumWindows] = {};                          // the popups, as found in the GameFrameWork
 HHOOK g_msg_hook = nullptr;
-hook::Detour g_accept;
-bool g_update_now = false;                              // a quest was accepted: UpdateQuest on the next UI message
-DWORD g_update_late_at = 0;                             // ... and once more at this tick (0 = none)
+DWORD g_quest_checked_at = 0;
+unsigned g_quest_print = 0;                             // fingerprint of the quest list (0 = not taken yet)
 
 struct Drag {
     void* win = nullptr;
@@ -147,29 +151,44 @@ void update_quest(const char* why) {
     }
 }
 
-void run_pending_updates() {
-    if (g_update_now) {
-        g_update_now = false;
-        update_quest("a quest accept");
+typedef void*(__cdecl* GetQuestMgr)();
+typedef int(__fastcall* GetStatus)(void* mgr, void* edx, unsigned id);
+
+// fingerprint of (count, every quest's id + computed status); 0 if the list cannot be read
+unsigned quest_print() {
+    unsigned h = 2166136261u;
+    __try {
+        char* mgr = (char*)((GetQuestMgr)hook::rebase(kVaGetQuestMgr))();
+        if (!mgr || !*(void**)(mgr + kOffQuestList)) return 0;
+        int n = *(int*)(mgr + kOffQuestCount);
+        char* e = *(char**)(mgr + kOffQuestEntries);
+        if (n < 0 || n > 4096 || !e) return 0;
+        GetStatus status = (GetStatus)hook::rebase(kVaGetStatus);
+        h = (h ^ (unsigned)n) * 16777619u;
+        for (int i = 0; i < n; i++) {
+            unsigned id = *(unsigned short*)(e + i * kQuestEntry);
+            h = (h ^ id) * 16777619u;
+            h = (h ^ (unsigned)status(mgr, 0, id)) * 16777619u;
+        }
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        return 0;
     }
-    if (g_update_late_at && (int)(GetTickCount() - g_update_late_at) >= 0) {
-        g_update_late_at = 0;
-        update_quest("a quest accept (late, for a delivery item)");
-    }
+    return h ? h : 1;
 }
 
-int __fastcall accept_impl(void* self, void* /*edx*/, unsigned id) {
-    typedef int(__fastcall * Orig)(void*, void*, unsigned);
-    int r = ((Orig)g_accept.trampoline)(self, 0, id);
-    hook::log("popup_windows: quest %u accepted - the completed popup is checked next", id & 0xFFFF);
-    g_update_now = true;
-    g_update_late_at = GetTickCount() + kAcceptLateMs;
-    if (!g_update_late_at) g_update_late_at = 1;
-    return r;
+void check_quests() {
+    DWORD now = GetTickCount();
+    if (now - g_quest_checked_at < kQuestCheckMs || !g_win[0]) return;
+    g_quest_checked_at = now;
+    unsigned p = quest_print();
+    if (!p) return;
+    bool changed = g_quest_print && p != g_quest_print;
+    g_quest_print = p;
+    if (changed) update_quest("a quest list change (accept / item / hand-in)");
 }
 
 LRESULT CALLBACK msg_hook(int code, WPARAM wp, LPARAM lp) {
-    if (code == HC_ACTION && wp == PM_REMOVE) run_pending_updates();
+    if (code == HC_ACTION && wp == PM_REMOVE) check_quests();
     if (code == HC_ACTION && wp == PM_REMOVE) {
         MSG* m = (MSG*)lp;
         __try {
@@ -274,6 +293,7 @@ void __fastcall fw_terminate_impl(void* self, void* /*edx*/) {
     apply(self, kVaRegisterPos, "store before terminate");
     for (int i = 0; i < kNumWindows; i++) g_win[i] = nullptr;
     g_drag.win = g_drag.released_win = nullptr;
+    g_quest_print = 0;                                  // the next character's list is not a "change"
     ((FwFn)g_fw_terminate.trampoline)(self, 0);
 }
 
@@ -286,13 +306,6 @@ HOOK_PLUGIN("popup_windows") {
                         (void*)fw_restore_impl, &g_fw_restore);
     hook::hook_function("GameFrameWork::TerminateWindow 0x56F4F0 (+popups)", hook::rebase(kVaFwTerminate),
                         (void*)fw_terminate_impl, &g_fw_terminate);
-    const unsigned char kAcceptStock[7] = {0x55, 0x8B, 0xEC, 0x83, 0x79, 0x08, 0x00};   // push ebp; mov ebp,esp; cmp [ecx+8],0
-    unsigned char* acc = (unsigned char*)hook::rebase(kVaSetQuestAccept);
-    if (std::memcmp(acc, kAcceptStock, sizeof kAcceptStock) == 0)
-        hook::hook_function("CQuest::SetQuestAccept 0x901F70 (completed popup after an accept)", acc, (void*)accept_impl,
-                            &g_accept);
-    else
-        hook::log("popup_windows: unexpected bytes at CQuest::SetQuestAccept 0x901F70 - accept hook NOT installed");
     pgwin::on_process(swallow_click);
     pgwin::install();
 }
