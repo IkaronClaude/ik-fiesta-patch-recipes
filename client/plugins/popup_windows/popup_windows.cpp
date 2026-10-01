@@ -188,52 +188,115 @@ void check_quests() {
     if (changed) update_quest("a quest list change (accept / item / hand-in)");
 }
 
-// OWN POSITION FILE (operator 2026-10-01: the positions "save only until zone restart, they survive 'Switch Character' but
-// ... after a while they're back where they started"). MachineOpt keeps them in memory and writes its option file only on a
-// clean client exit - a kick (zone restart) or a crash skips that, so the next start loads the old file. Each drop is
-// written at once to <hooks>/popup_windows.pos.ini (x, y as 1/100000 of the screen, the way MachineOpt stores them) and
-// applied after the client's own restore at every login.
-const int kPosScale = 100000;
+// POSITIONS IN THE CHARACTER DB, WITH THE OTHER WINDOWS (operator 2026-10-01: "It should be stored in the character db
+// with the other windows"). The client's window layout is one 392-byte blob, tCharacterOptions.sWindowsPos, sent with
+// NC_CHAR_OPTION_SET_WINDOWPOS_CMD 0x7015 when leaving the world and read back with GET_WINDOWPOS_ACK 0x700D at
+// character select (WorldManager / Character.exe store it as is). The 2026 client fills only its first 298 bytes:
+//     save GameFrameWork 0x571B70: blob global 0xC31A48 (count +6 = 33 windows, x/y fractions from +10, chat sizes and
+//          the screen size after) -> rep movsd 0x4A dwords + movsw = 298 bytes into the packet, memset(0) of the other 94,
+//          PgNet::SendNetMsg 0x890B00(buf, 0x188)
+//     load 0x55E330(a, ack) / 0x55FCC0(ack) (and a copy inside 0x55F09B): version check, then the same 298 bytes into the
+//          global - bytes 298-391 are never read.
+// The stored blob's last non-zero byte is 295 (Annaaa, 2026-10-01). So the popups ride in that unused tail, at
+// kExtraOff: "PPW1" + per popup {u8 present, float x, float y} (fractions of the screen, like the client's own entries).
+// Written by the save (SendNetMsg while 0x571B70 runs), read by either load, applied after SetWindowsPosOption. A future
+// client that grew its blob past 298 bytes would break the marker, and the plugin would then ignore the tail.
+const unsigned kVaSaveWinPos = 0x00571B70u;
+const unsigned kVaSendNetMsg = 0x00890B00u;
+const unsigned kVaLoadA = 0x0055E330u;           // (a, ack), ret 8
+const unsigned kVaLoadB = 0x0055FCC0u;           // (ack), ret 4
+const unsigned kBlobLen = 0x188, kBlobUsed = 298, kExtraOff = 320;
+const char kMagic[4] = {'P', 'P', 'W', '1'};
 
-const char* pos_file() {
-    static char path[MAX_PATH] = {0};
-    if (!path[0]) {
-        HMODULE me = nullptr;
-        GetModuleHandleExA(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
-                           (LPCSTR)&pos_file, &me);
-        GetModuleFileNameA(me, path, MAX_PATH);
-        char* slash = std::strrchr(path, '\\');
-        char* name = slash ? slash + 1 : path;
-        strcpy_s(name, MAX_PATH - (name - path), "popup_windows.pos.ini");
+hook::Detour g_save, g_send, g_load_a, g_load_b;
+bool g_saving = false;
+struct SavedPos {
+    bool present;
+    float x, y;
+} g_saved[kNumWindows];
+
+void read_extra(const unsigned char* blob) {
+    if (std::memcmp(blob + kExtraOff, kMagic, 4) != 0) {
+        hook::log("popup_windows: no popup positions in the stored window blob yet");
+        return;
     }
-    return path;
+    const unsigned char* p = blob + kExtraOff + 4;
+    for (int i = 0; i < kNumWindows; i++, p += 9) {
+        g_saved[i].present = p[0] != 0;
+        std::memcpy(&g_saved[i].x, p + 1, 4);
+        std::memcpy(&g_saved[i].y, p + 5, 4);
+    }
+    hook::log("popup_windows: popup positions read from the character's window blob");
 }
 
-void save_pos(int k, void* w) {
-    if (k < 0) return;
+void write_extra(unsigned char* blob) {
     int sw = *(int*)hook::rebase(kVaScreenW), sh = *(int*)hook::rebase(kVaScreenH);
-    if (sw <= 0 || sh <= 0) return;
-    char v[48];
-    wsprintfA(v, "%d,%d", MulDiv(vcall_int(w, kSlotX), kPosScale, sw), MulDiv(vcall_int(w, kSlotY), kPosScale, sh));
-    WritePrivateProfileStringA("positions", kWindows[k], v, pos_file());
-}
-
-void load_positions() {
-    int sw = *(int*)hook::rebase(kVaScreenW), sh = *(int*)hook::rebase(kVaScreenH);
-    if (sw <= 0 || sh <= 0) return;
     for (int i = 0; i < kNumWindows; i++) {
-        char v[48] = {0};
-        int fx, fy;
-        if (!g_win[i] || !GetPrivateProfileStringA("positions", kWindows[i], "", v, sizeof v, pos_file()) ||
-            sscanf_s(v, "%d,%d", &fx, &fy) != 2)
-            continue;
+        if (!g_win[i] || sw <= 0 || sh <= 0) continue;          // not created: keep what was loaded
         __try {
-            ((MoveFn)pgwin::vtable_entry(g_win[i], kSlotMove))(g_win[i], 0, MulDiv(fx, sw, kPosScale), MulDiv(fy, sh, kPosScale));
-            hook::log("popup_windows: %s placed from %s at %d,%d", kWindows[i], "popup_windows.pos.ini",
-                      MulDiv(fx, sw, kPosScale), MulDiv(fy, sh, kPosScale));
+            g_saved[i].present = true;
+            g_saved[i].x = (float)vcall_int(g_win[i], kSlotX) / (float)sw;
+            g_saved[i].y = (float)vcall_int(g_win[i], kSlotY) / (float)sh;
         } __except (EXCEPTION_EXECUTE_HANDLER) {
         }
     }
+    std::memcpy(blob + kExtraOff, kMagic, 4);
+    unsigned char* p = blob + kExtraOff + 4;
+    for (int i = 0; i < kNumWindows; i++, p += 9) {
+        p[0] = g_saved[i].present ? 1 : 0;
+        std::memcpy(p + 1, &g_saved[i].x, 4);
+        std::memcpy(p + 5, &g_saved[i].y, 4);
+    }
+}
+
+void place_saved() {
+    int sw = *(int*)hook::rebase(kVaScreenW), sh = *(int*)hook::rebase(kVaScreenH);
+    for (int i = 0; i < kNumWindows; i++) {
+        if (!g_win[i] || !g_saved[i].present || sw <= 0 || sh <= 0) continue;
+        int x = (int)(g_saved[i].x * sw), y = (int)(g_saved[i].y * sh);
+        __try {
+            ((MoveFn)pgwin::vtable_entry(g_win[i], kSlotMove))(g_win[i], 0, x, y);
+            hook::log("popup_windows: %s placed at %d,%d from the character's window blob", kWindows[i], x, y);
+        } __except (EXCEPTION_EXECUTE_HANDLER) {
+        }
+    }
+}
+
+void __fastcall save_impl(void* self, void* /*edx*/) {
+    g_saving = true;
+    ((FwFn)g_save.trampoline)(self, 0);
+    g_saving = false;
+}
+
+void __fastcall send_impl(void* net, void* /*edx*/, unsigned char* buf, int len) {
+    if (g_saving && buf && len == (int)kBlobLen) {
+        __try {
+            write_extra(buf);
+            hook::log("popup_windows: popup positions added to the window blob sent to the server");
+        } __except (EXCEPTION_EXECUTE_HANDLER) {
+        }
+    }
+    typedef void(__fastcall * Orig)(void*, void*, unsigned char*, int);
+    ((Orig)g_send.trampoline)(net, 0, buf, len);
+}
+
+// ack = {u8 result, blob[392]}
+void __fastcall load_a_impl(void* self, void* /*edx*/, void* a, unsigned char* ack) {
+    __try {
+        if (ack && ack[0]) read_extra(ack + 1);
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+    }
+    typedef void(__fastcall * Orig)(void*, void*, void*, unsigned char*);
+    ((Orig)g_load_a.trampoline)(self, 0, a, ack);
+}
+
+void __fastcall load_b_impl(void* self, void* /*edx*/, unsigned char* ack) {
+    __try {
+        if (ack && ack[0]) read_extra(ack + 1);
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+    }
+    typedef void(__fastcall * Orig)(void*, void*, unsigned char*);
+    ((Orig)g_load_b.trampoline)(self, 0, ack);
 }
 
 LRESULT CALLBACK msg_hook(int code, WPARAM wp, LPARAM lp) {
@@ -276,7 +339,6 @@ LRESULT CALLBACK msg_hook(int code, WPARAM wp, LPARAM lp) {
                     m->lParam = MAKELPARAM((WORD)(short)-30000, (WORD)(short)-30000);
                     hook::log("popup_windows: dropped %s at %d,%d", kWindows[which(g_drag.win)],
                               vcall_int(g_drag.win, kSlotX), vcall_int(g_drag.win, kSlotY));
-                    save_pos(which(g_drag.win), g_drag.win);
                 }
                 g_drag.win = nullptr;
             }
@@ -336,7 +398,7 @@ void __fastcall fw_register_impl(void* self, void* /*edx*/) {
 void __fastcall fw_restore_impl(void* self, void* /*edx*/) {
     ((FwFn)g_fw_restore.trampoline)(self, 0);
     apply(self, kVaSetPos, "restore");
-    load_positions();                                   // our own file wins: it is written on every drop
+    place_saved();                                      // the positions from the character's window blob
     ensure_msg_hook();                                  // runs on the UI thread
 }
 
@@ -357,6 +419,14 @@ HOOK_PLUGIN("popup_windows") {
                         (void*)fw_restore_impl, &g_fw_restore);
     hook::hook_function("GameFrameWork::TerminateWindow 0x56F4F0 (+popups)", hook::rebase(kVaFwTerminate),
                         (void*)fw_terminate_impl, &g_fw_terminate);
+    hook::hook_function("GameFrameWork save window positions 0x571B70 (+popups)", hook::rebase(kVaSaveWinPos),
+                        (void*)save_impl, &g_save);
+    hook::hook_function("PgNet::SendNetMsg 0x890B00 (popup positions into the window blob)", hook::rebase(kVaSendNetMsg),
+                        (void*)send_impl, &g_send);
+    hook::hook_function("window positions load 0x55E330 (popup positions from the blob)", hook::rebase(kVaLoadA),
+                        (void*)load_a_impl, &g_load_a);
+    hook::hook_function("window positions load 0x55FCC0 (popup positions from the blob)", hook::rebase(kVaLoadB),
+                        (void*)load_b_impl, &g_load_b);
     pgwin::on_process(swallow_click);
     pgwin::install();
 }
