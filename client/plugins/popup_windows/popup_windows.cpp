@@ -51,10 +51,24 @@ const unsigned kVaScreenW = 0x00C321C0u, kVaScreenH = 0x00C321C4u;
 const unsigned kScanFrom = 0x100, kScanTo = 0x1400;     // GameFrameWork's window-pointer fields
 const int kSlotWidth = 0x90 / 4, kSlotHeight = 0x94 / 4, kSlotX = 0xA4 / 4, kSlotY = 0xA8 / 4, kSlotMove = 0x134 / 4;
 const int kDragPixels = 4;                              // UI units the cursor moves before it is a drag, not a click
+const DWORD kSwallowMs = 400;                           // after a drop: the click messages to the popup are dropped
+// QUEST-COMPLETED POPUP AFTER ACCEPTING (operator 2026-10-01: a talk / delivery quest is completable the moment it is
+// accepted, "but they just sit in the quest log as Reward without ever showing in the small popup (unless you relog)";
+// "Don't call it every second, instead, add a call right after starting a new quest"). QuestFinishWin::UpdateQuest
+// (2026 0x730250) pops it; the client runs it on a quest mob kill, an item pick-up or a quest script command, not on an
+// accept. CQuest::SetQuestAccept (2016 0x727CA0, 2026 0x901F70: sets the player quest's status byte +2 to 6; its only
+// caller is On_NC_QUEST_SCRIPT_CMD_REQ) is hooked: after it, UpdateQuest runs on the next UI message, and once more
+// kAcceptLateMs later for a delivery item that arrives just after the accept. Its already-shown list stops repeats.
+const unsigned kVaUpdateQuest = 0x00730250u;
+const unsigned kVaSetQuestAccept = 0x00901F70u;
+const DWORD kAcceptLateMs = 1500;
 
 hook::Detour g_fw_register, g_fw_restore, g_fw_terminate;
 void* g_win[kNumWindows] = {};                          // the popups, as found in the GameFrameWork
 HHOOK g_msg_hook = nullptr;
+hook::Detour g_accept;
+bool g_update_now = false;                              // a quest was accepted: UpdateQuest on the next UI message
+DWORD g_update_late_at = 0;                             // ... and once more at this tick (0 = none)
 
 struct Drag {
     void* win = nullptr;
@@ -122,7 +136,40 @@ void* popup_at(int x, int y) {
     return nullptr;
 }
 
+void update_quest(const char* why) {
+    void* w = g_win[0];                                 // QuestFinishWin
+    if (!w) return;
+    __try {
+        ((FwFn)hook::rebase(kVaUpdateQuest))(w, 0);
+        hook::log("popup_windows: QuestFinishWin::UpdateQuest after %s", why);
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        hook::log("popup_windows: exception in UpdateQuest after %s", why);
+    }
+}
+
+void run_pending_updates() {
+    if (g_update_now) {
+        g_update_now = false;
+        update_quest("a quest accept");
+    }
+    if (g_update_late_at && (int)(GetTickCount() - g_update_late_at) >= 0) {
+        g_update_late_at = 0;
+        update_quest("a quest accept (late, for a delivery item)");
+    }
+}
+
+int __fastcall accept_impl(void* self, void* /*edx*/, unsigned id) {
+    typedef int(__fastcall * Orig)(void*, void*, unsigned);
+    int r = ((Orig)g_accept.trampoline)(self, 0, id);
+    hook::log("popup_windows: quest %u accepted - the completed popup is checked next", id & 0xFFFF);
+    g_update_now = true;
+    g_update_late_at = GetTickCount() + kAcceptLateMs;
+    if (!g_update_late_at) g_update_late_at = 1;
+    return r;
+}
+
 LRESULT CALLBACK msg_hook(int code, WPARAM wp, LPARAM lp) {
+    if (code == HC_ACTION && wp == PM_REMOVE) run_pending_updates();
     if (code == HC_ACTION && wp == PM_REMOVE) {
         MSG* m = (MSG*)lp;
         __try {
@@ -157,6 +204,8 @@ LRESULT CALLBACK msg_hook(int code, WPARAM wp, LPARAM lp) {
                 if (g_drag.moved) {
                     g_drag.released_at = GetTickCount();
                     g_drag.released_win = g_drag.win;
+                    // the release lands far off the window, so a button that clicks on "released over me" does not
+                    m->lParam = MAKELPARAM((WORD)(short)-30000, (WORD)(short)-30000);
                     hook::log("popup_windows: dropped %s at %d,%d", kWindows[which(g_drag.win)],
                               vcall_int(g_drag.win, kSlotX), vcall_int(g_drag.win, kSlotY));
                 }
@@ -170,11 +219,18 @@ LRESULT CALLBACK msg_hook(int code, WPARAM wp, LPARAM lp) {
 }
 
 // the click a drag ends with: the button's release (message 7, wParam 2) reaching the popup right after the drop
+// (operator 2026-10-01: swallowing the release alone was not enough - "the button press still goes through at the end of
+// the drag"): the command the button sends its window (message 5) is swallowed too, for kSwallowMs after the drop.
 bool swallow_click(pgwin::Message& m) {
-    if (m.msg != pgwin::kButtonState || m.wparam != pgwin::kRelease || !g_drag.released_win) return false;
-    if (m.window != g_drag.released_win || GetTickCount() - g_drag.released_at > 500) return false;
-    g_drag.released_win = nullptr;
-    hook::log("popup_windows: click after the drag swallowed");
+    if (!g_drag.released_win || m.window != g_drag.released_win) return false;
+    if (GetTickCount() - g_drag.released_at > kSwallowMs) {
+        g_drag.released_win = nullptr;
+        return false;
+    }
+    bool release = m.msg == pgwin::kButtonState && m.wparam == pgwin::kRelease;
+    if (!release && m.msg != pgwin::kCommand) return false;
+    hook::log("popup_windows: %s after the drag swallowed (msg %u, wparam %u)", release ? "button release" : "command",
+              m.msg, m.wparam);
     return true;
 }
 
@@ -230,6 +286,13 @@ HOOK_PLUGIN("popup_windows") {
                         (void*)fw_restore_impl, &g_fw_restore);
     hook::hook_function("GameFrameWork::TerminateWindow 0x56F4F0 (+popups)", hook::rebase(kVaFwTerminate),
                         (void*)fw_terminate_impl, &g_fw_terminate);
+    const unsigned char kAcceptStock[7] = {0x55, 0x8B, 0xEC, 0x83, 0x79, 0x08, 0x00};   // push ebp; mov ebp,esp; cmp [ecx+8],0
+    unsigned char* acc = (unsigned char*)hook::rebase(kVaSetQuestAccept);
+    if (std::memcmp(acc, kAcceptStock, sizeof kAcceptStock) == 0)
+        hook::hook_function("CQuest::SetQuestAccept 0x901F70 (completed popup after an accept)", acc, (void*)accept_impl,
+                            &g_accept);
+    else
+        hook::log("popup_windows: unexpected bytes at CQuest::SetQuestAccept 0x901F70 - accept hook NOT installed");
     pgwin::on_process(swallow_click);
     pgwin::install();
 }
