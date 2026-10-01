@@ -5,12 +5,20 @@
 //   QuestFinishWin   the "quest completed - rewards available from this NPC" popup
 //   QuestNewsWin     the new-quest notice (Game/NewQuest.nif)
 //   MysteryVaultWin  the Mystery Vault icon (OnReachTheLevel)
-// All three are PgWinFrames (their constructors call PgWinFrame's, 2016 0x8B0A20).
 //
-// DRAG - PgWinFrame::ProcessMeInput (2016 0x8B0BC0) moves a window on a press only if the virtual GetMovable (vtable
-// +0x20C) says so; GetMovable returns the frame's movable byte, which none of the three sets:
-//     2016 0x402390 / 2026 0x459150   8A 81 34 01 00 00 C3   mov al, [ecx+0x134] ; ret
-// Detoured: the three answer true, every other window its own byte.
+// DRAG - press, move, release; a press released in place is still a click (operator: "Try option 2 first").
+// The popups are PgWinFrames, but their whole face is a child button (QuestFinishWin::OnQuestCheckClick), so the frame's
+// own drag (PgWinFrame::ProcessMeInput 2016 0x8B0BC0: only on a press on the frame's OWN surface, then GetMovable) never
+// starts - forcing GetMovable true (first try) changed nothing. So the drag is done here, from the raw mouse messages
+// (a WH_GETMESSAGE hook on the UI thread):
+//   WM_LBUTTONDOWN inside a SHOWN popup's rectangle -> remember the cursor and the window position (the press still goes
+//       to the game). "Shown" = PgWinMgr::IsIn (2016: CloseWin removes the window from the manager's list).
+//   WM_MOUSEMOVE with the button held -> past kDragPixels the window follows the cursor (its own move, vtable +0x134,
+//       the call MachineOpt::SetWinPostion makes).
+//   release after a drag -> the button's release (PgWin message 7, wParam 2 - the click) to the popup is swallowed.
+// Rectangle: GetXPos / GetYPos (vtable +0xA4 / +0xA8, the calls MachineOpt::RegistereWinPostion makes), GetWidth /
+// GetHeight (+0x90 / +0x94, 2016 PgWin; below the slot where the 2026 table shifts). Cursor pixels -> UI units by the
+// screen size globals SetWinPostion scales with (2026 0xC321C0 width, 0xC321C4 height) over the client rectangle.
 //
 // POSITION - the client's own window-position option (MachineOpt, saved with the other UI options, keyed by window
 // name, x/y as a fraction of the screen):
@@ -19,14 +27,14 @@
 //     GameFrameWork::RegistereWinPostion()     2026 0x569F70  thiscall - stores the ~43 windows the game tracks
 //     GameFrameWork::SetWindowsPosOption()     2026 0x56A2D0  thiscall - restores them
 //     GameFrameWork::TerminateWindow()         2026 0x56F4F0  thiscall - stores each window, then destroys it
-// (found from the 2016 PDB names: the 43-call register run, GetWinPosInList 0x7DADC0 and its two callers, the list
-// globals 0xC31C6C..0xC31C78). Our three are added to those passes: stored after RegistereWinPostion and before
-// TerminateWindow, restored after SetWindowsPosOption. The windows are found in the GameFrameWork object by RTTI.
+// Our three are added to those passes (stored after RegistereWinPostion and before TerminateWindow, restored after
+// SetWindowsPosOption); they are found in the GameFrameWork object by RTTI.
 #include <hook_core.h>
 #include <pgwin_msg.h>
 
 #include <windows.h>
 
+#include <cstdlib>
 #include <cstring>
 
 namespace {
@@ -34,20 +42,32 @@ namespace {
 const char* const kWindows[] = {"QuestFinishWin", "QuestNewsWin", "MysteryVaultWin"};
 const int kNumWindows = sizeof kWindows / sizeof kWindows[0];
 
-const unsigned kVaGetMovable = 0x00459150u;
 const unsigned kVaRegisterPos = 0x007D8A60u;
 const unsigned kVaSetPos = 0x007D8C30u;
 const unsigned kVaFwRegister = 0x00569F70u;
 const unsigned kVaFwRestore = 0x0056A2D0u;
 const unsigned kVaFwTerminate = 0x0056F4F0u;
-const unsigned char kGetMovableStock[7] = {0x8A, 0x81, 0x34, 0x01, 0x00, 0x00, 0xC3};
+const unsigned kVaScreenW = 0x00C321C0u, kVaScreenH = 0x00C321C4u;
 const unsigned kScanFrom = 0x100, kScanTo = 0x1400;     // GameFrameWork's window-pointer fields
+const int kSlotWidth = 0x90 / 4, kSlotHeight = 0x94 / 4, kSlotX = 0xA4 / 4, kSlotY = 0xA8 / 4, kSlotMove = 0x134 / 4;
+const int kDragPixels = 4;                              // UI units the cursor moves before it is a drag, not a click
 
-hook::Detour g_get_movable, g_fw_register, g_fw_restore, g_fw_terminate;
-bool g_logged_drag = false;
+hook::Detour g_fw_register, g_fw_restore, g_fw_terminate;
+void* g_win[kNumWindows] = {};                          // the popups, as found in the GameFrameWork
+HHOOK g_msg_hook = nullptr;
+
+struct Drag {
+    void* win = nullptr;
+    int cursor_x = 0, cursor_y = 0, win_x = 0, win_y = 0;
+    bool moved = false;
+    DWORD released_at = 0;                              // GetTickCount of the release ending a real drag
+    void* released_win = nullptr;
+} g_drag;
 
 typedef bool(__cdecl* WinPosFn)(void* win);
 typedef void(__fastcall* FwFn)(void* self, void* edx);
+typedef int(__fastcall* IntGetter)(void* self, void* edx);
+typedef void(__fastcall* MoveFn)(void* self, void* edx, int x, int y);
 
 int which(const void* w) {
     for (int i = 0; i < kNumWindows; i++)
@@ -55,53 +75,132 @@ int which(const void* w) {
     return -1;
 }
 
-// the three windows held by the GameFrameWork (null where not created)
-void find_windows(void* fw, void* out[kNumWindows]) {
-    for (int i = 0; i < kNumWindows; i++) out[i] = nullptr;
+int vcall_int(void* w, int slot) { return ((IntGetter)pgwin::vtable_entry(w, slot))(w, 0); }
+
+void find_windows(void* fw) {
+    void* found[kNumWindows] = {};
     for (unsigned o = kScanFrom; o < kScanTo; o += 4) {
         void* p = nullptr;
         __try {
             p = *(void**)((char*)fw + o);
         } __except (EXCEPTION_EXECUTE_HANDLER) {
-            return;
+            break;
         }
         if (!p || (unsigned)p < 0x10000) continue;
         int k = which(p);
-        if (k >= 0 && !out[k]) out[k] = p;
+        if (k >= 0 && !found[k]) found[k] = p;
+    }
+    for (int i = 0; i < kNumWindows; i++) g_win[i] = found[i];
+}
+
+// cursor (client pixels of the message's window) -> UI units
+void to_ui(HWND hwnd, LPARAM lp, int* x, int* y) {
+    int px = (short)LOWORD(lp), py = (short)HIWORD(lp);
+    RECT rc;
+    int sw = *(int*)hook::rebase(kVaScreenW), sh = *(int*)hook::rebase(kVaScreenH);
+    if (hwnd && GetClientRect(hwnd, &rc) && rc.right > 0 && rc.bottom > 0 && sw > 0 && sh > 0) {
+        *x = MulDiv(px, sw, rc.right);
+        *y = MulDiv(py, sh, rc.bottom);
+    } else {
+        *x = px;
+        *y = py;
     }
 }
 
+void* popup_at(int x, int y) {
+    for (int i = 0; i < kNumWindows; i++) {
+        void* w = g_win[i];
+        if (!w) continue;
+        __try {
+            if (!pgwin::alive(w)) continue;              // not shown
+            int wx = vcall_int(w, kSlotX), wy = vcall_int(w, kSlotY);
+            int ww = vcall_int(w, kSlotWidth), wh = vcall_int(w, kSlotHeight);
+            if (x >= wx && x < wx + ww && y >= wy && y < wy + wh) return w;
+        } __except (EXCEPTION_EXECUTE_HANDLER) {
+        }
+    }
+    return nullptr;
+}
+
+LRESULT CALLBACK msg_hook(int code, WPARAM wp, LPARAM lp) {
+    if (code == HC_ACTION && wp == PM_REMOVE) {
+        MSG* m = (MSG*)lp;
+        __try {
+            if (m->message == WM_LBUTTONDOWN) {
+                int x, y;
+                to_ui(m->hwnd, m->lParam, &x, &y);
+                void* w = popup_at(x, y);
+                g_drag.win = w;
+                g_drag.moved = false;
+                if (w) {
+                    g_drag.cursor_x = x;
+                    g_drag.cursor_y = y;
+                    g_drag.win_x = vcall_int(w, kSlotX);
+                    g_drag.win_y = vcall_int(w, kSlotY);
+                }
+            } else if (m->message == WM_MOUSEMOVE && g_drag.win) {
+                if (!(m->wParam & MK_LBUTTON) || !pgwin::alive(g_drag.win)) {
+                    g_drag.win = nullptr;
+                } else {
+                    int x, y;
+                    to_ui(m->hwnd, m->lParam, &x, &y);
+                    int dx = x - g_drag.cursor_x, dy = y - g_drag.cursor_y;
+                    if (!g_drag.moved && (std::abs(dx) > kDragPixels || std::abs(dy) > kDragPixels)) {
+                        g_drag.moved = true;
+                        hook::log("popup_windows: dragging %s %p", kWindows[which(g_drag.win)], g_drag.win);
+                    }
+                    if (g_drag.moved)
+                        ((MoveFn)pgwin::vtable_entry(g_drag.win, kSlotMove))(g_drag.win, 0, g_drag.win_x + dx,
+                                                                              g_drag.win_y + dy);
+                }
+            } else if (m->message == WM_LBUTTONUP && g_drag.win) {
+                if (g_drag.moved) {
+                    g_drag.released_at = GetTickCount();
+                    g_drag.released_win = g_drag.win;
+                    hook::log("popup_windows: dropped %s at %d,%d", kWindows[which(g_drag.win)],
+                              vcall_int(g_drag.win, kSlotX), vcall_int(g_drag.win, kSlotY));
+                }
+                g_drag.win = nullptr;
+            }
+        } __except (EXCEPTION_EXECUTE_HANDLER) {
+            g_drag.win = nullptr;
+        }
+    }
+    return CallNextHookEx(g_msg_hook, code, wp, lp);
+}
+
+// the click a drag ends with: the button's release (message 7, wParam 2) reaching the popup right after the drop
+bool swallow_click(pgwin::Message& m) {
+    if (m.msg != pgwin::kButtonState || m.wparam != pgwin::kRelease || !g_drag.released_win) return false;
+    if (m.window != g_drag.released_win || GetTickCount() - g_drag.released_at > 500) return false;
+    g_drag.released_win = nullptr;
+    hook::log("popup_windows: click after the drag swallowed");
+    return true;
+}
+
+void ensure_msg_hook() {
+    if (g_msg_hook) return;
+    g_msg_hook = SetWindowsHookExA(WH_GETMESSAGE, msg_hook, nullptr, GetCurrentThreadId());
+    hook::log("popup_windows: mouse hook on UI thread %u %s", GetCurrentThreadId(), g_msg_hook ? "installed" : "FAILED");
+}
+
 void apply(void* fw, unsigned va, const char* what) {
-    void* w[kNumWindows];
-    find_windows(fw, w);
+    find_windows(fw);
     WinPosFn fn = (WinPosFn)hook::rebase(va);
     for (int i = 0; i < kNumWindows; i++) {
-        if (!w[i]) {
+        if (!g_win[i]) {
             hook::log("popup_windows: %s - %s not created yet", what, kWindows[i]);
             continue;
         }
         bool ok = false;
         __try {
-            ok = fn(w[i]);
+            ok = fn(g_win[i]);
         } __except (EXCEPTION_EXECUTE_HANDLER) {
             hook::log("popup_windows: %s - exception on %s", what, kWindows[i]);
             continue;
         }
-        hook::log("popup_windows: %s %s %p -> %s", what, kWindows[i], w[i], ok ? "ok" : "nothing stored / no name");
+        hook::log("popup_windows: %s %s %p -> %s", what, kWindows[i], g_win[i], ok ? "ok" : "nothing stored / no name");
     }
-}
-
-bool __fastcall get_movable_impl(void* self, void* /*edx*/) {
-    int k = which(self);
-    if (k >= 0) {
-        if (!g_logged_drag) {
-            g_logged_drag = true;
-            hook::log("popup_windows: %s %p asked GetMovable - answering true (draggable)", kWindows[k], self);
-        }
-        return true;
-    }
-    typedef bool(__fastcall * Orig)(void*, void*);
-    return ((Orig)g_get_movable.trampoline)(self, 0);
 }
 
 void __fastcall fw_register_impl(void* self, void* /*edx*/) {
@@ -112,26 +211,25 @@ void __fastcall fw_register_impl(void* self, void* /*edx*/) {
 void __fastcall fw_restore_impl(void* self, void* /*edx*/) {
     ((FwFn)g_fw_restore.trampoline)(self, 0);
     apply(self, kVaSetPos, "restore");
+    ensure_msg_hook();                                  // runs on the UI thread
 }
 
 void __fastcall fw_terminate_impl(void* self, void* /*edx*/) {
     apply(self, kVaRegisterPos, "store before terminate");
+    for (int i = 0; i < kNumWindows; i++) g_win[i] = nullptr;
+    g_drag.win = g_drag.released_win = nullptr;
     ((FwFn)g_fw_terminate.trampoline)(self, 0);
 }
 
 }  // namespace
 
 HOOK_PLUGIN("popup_windows") {
-    unsigned char* gm = (unsigned char*)hook::rebase(kVaGetMovable);
-    if (std::memcmp(gm, kGetMovableStock, sizeof kGetMovableStock) != 0) {
-        hook::log("popup_windows: unexpected bytes at PgWinFrame::GetMovable 0x459150 - NOTHING hooked");
-        return;
-    }
-    hook::hook_function("PgWinFrame::GetMovable 0x459150 (popups draggable)", gm, (void*)get_movable_impl, &g_get_movable);
     hook::hook_function("GameFrameWork::RegistereWinPostion 0x569F70 (+popups)", hook::rebase(kVaFwRegister),
                         (void*)fw_register_impl, &g_fw_register);
-    hook::hook_function("GameFrameWork::SetWindowsPosOption 0x56A2D0 (+popups)", hook::rebase(kVaFwRestore),
+    hook::hook_function("GameFrameWork::SetWindowsPosOption 0x56A2D0 (+popups, mouse hook)", hook::rebase(kVaFwRestore),
                         (void*)fw_restore_impl, &g_fw_restore);
     hook::hook_function("GameFrameWork::TerminateWindow 0x56F4F0 (+popups)", hook::rebase(kVaFwTerminate),
                         (void*)fw_terminate_impl, &g_fw_terminate);
+    pgwin::on_process(swallow_click);
+    pgwin::install();
 }
