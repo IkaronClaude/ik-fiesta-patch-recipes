@@ -39,7 +39,10 @@ const ThinkSite kSites[] = {
 const int kNumSites = sizeof kSites / sizeof kSites[0];
 
 const unsigned kOffArgMob = 4, kOffHandle = 4, kOffTarget = 0x24AE, kOffDataBox = 0x1F90;
-const unsigned kOnlyMob = 519;                          // MobInfo "Miner" (Burning Rock), the mob under investigation
+// the mobs under investigation: Kidmon 518 (Burning Rock) and Deep Kidmon 4545 (FireDn02) - operator 2026-10-01: "Log for
+// kidmon - They appear to have a separate detarget issue" (was Miner 519, whose bug mob_chase_after_swing fixed)
+const unsigned short kOnlyMobs[] = {518, 4545};
+const unsigned short kNoTarget = 0xFFFF;
 const unsigned kMaxHandle = 0x5000;
 
 zone::Detour g_detours[kNumSites];
@@ -76,17 +79,21 @@ void* think(int site, void* action, void* arg) {
         // 2026-10-01: "The zone is lagging wayyyy too hard ... restrict to only 'Miner' enemy in Burning Rock" / "519").
         // MobInfo ID = [[mob + 0x1F90]] u16 (ShineMob::so_mob_MobID 0x556AB0)
         char* box = *(char**)(mob + kOffDataBox);
-        if (!box || *(unsigned short*)(*(char**)box) != kOnlyMob) return next;
+        if (!box) return next;
+        unsigned short id = *(unsigned short*)(*(char**)box);
+        bool wanted = false;
+        for (unsigned short m : kOnlyMobs) wanted |= id == m;
+        if (!wanted) return next;
         unsigned h = *(unsigned short*)(mob + kOffHandle);
         unsigned tgt = *(unsigned short*)(mob + kOffTarget);
         int to = next ? site_of_class(class_of(next)) : -1;
         if (h >= kMaxHandle) return next;
         int from = site;
         if (to == from && g_last[h] == from + 1) return next;   // no change
-        bool interesting = tgt != 0 || kSites[from].combat;
+        bool interesting = tgt != kNoTarget || kSites[from].combat;   // 0xFFFF = no target (0 is a real handle)
         g_last[h] = (unsigned char)(to + 1);
         if (interesting)
-            zone::log("mob %u tgt %u: %s -> %s", h, tgt, kSites[from].name,
+            zone::log("mob %u (id %u) tgt %u: %s -> %s", h, id, tgt, kSites[from].name,
                       to >= 0 ? kSites[to].name : (next ? class_of(next) : "null"));
     } __except (EXCEPTION_EXECUTE_HANDLER) {
     }
