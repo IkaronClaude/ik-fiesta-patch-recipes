@@ -21,6 +21,18 @@
 // the quest type; > 2 (a quiz, e.g. Robin's "It's the HOME key") -> no auto-advance, a click on the option is
 // needed. Done by answering the handler's ONE quest-record lookup with a copy whose type byte says "not EPIC"
 // (advance) or "EPIC" (block); every later lookup (the base handler) sees the real record.
+//
+// ---- GUARDED quests: their real choice pages keep the stock EPIC rule (operator 2026-10-02) --------------------------
+//
+// "Decision [Job Change Quest] ... does NOT allow spacebar advance on the screen with the class selection. It currently
+// does and picks the FIRST option. This is irreversible": its pages ("It'll be the Gladiator / Knight", then "Yes / No")
+// have 2 buttons each, so the gate above advanced them to the first - and SCENARIO 16 changed the class. Operator: the
+// stock EPIC rule (no advance on a window click or space) already exists and this plugin lifts it - "restore this
+// functionality JUST for these pages, the ones with a REAL dialogue choice". So a GUARDED quest's page with 2+ choices
+// keeps it (kBlock): only a click on the option answers.
+// The guarded quests come from hooks\dialog_advance.ini, [config] click_required_quests=<id,id,...>, written by the
+// build (Fiesta2026on2016 tools/build_variant.py): every quest whose START script runs a SCENARIO (job changes, the
+// promotion / Over Time and Space / Prelude War instance entries) - data-derived, no list in here. No .ini = none.
 #include <hook_core.h>
 
 #include <cstring>
@@ -32,6 +44,11 @@ const unsigned kVaLookup = 0x005C5550u;    // cdecl quest record lookup (u16 que
 const unsigned kVaAttr = 0x0097FAD0u;      // thiscall control->attribute(const char* name) -> attr*
 const unsigned kControls = 0x1BC, kCount = 0x1A0, kFirst = 0x1A4, kAttrValue = 0xC, kType = 2;
 const int kEpic = 2, kMaxAutoChoices = 2;
+const unsigned kQuestId = 0x1E0;                          // NpcDialogWin -> u16 quest id (the handler's lookup argument)
+const int kMaxGuarded = 256;
+unsigned short g_guarded[kMaxGuarded];
+int g_nguarded = 0;
+unsigned short g_logged_quest = 0;
 
 enum Mode { kNone, kAdvance, kBlock };
 thread_local Mode t_mode = kNone;
@@ -55,10 +72,29 @@ int quest_ack_controls(void* win) {
     return found;
 }
 
+bool guarded(unsigned short quest) {
+    for (int i = 0; i < g_nguarded; i++)
+        if (g_guarded[i] == quest) return true;
+    return false;
+}
+
 void __fastcall handler_impl(void* self, void*, int arg) {
     typedef void(__fastcall * Orig)(void*, void*, int);
     t_choices = quest_ack_controls(self);
     t_mode = t_choices > kMaxAutoChoices ? kBlock : kAdvance;
+    if (g_nguarded && t_choices >= 2) {
+        unsigned short quest = 0;
+        __try {
+            quest = *(unsigned short*)((char*)self + kQuestId);
+        } __except (EXCEPTION_EXECUTE_HANDLER) {
+        }
+        if (guarded(quest)) {
+            t_mode = kBlock;
+            if (g_logged_quest != quest)
+                hook::log("quest %u: guarded quest, %d-choice page - stock EPIC rule kept (click the option)", quest, t_choices);
+            g_logged_quest = quest;
+        }
+    }
     ((Orig)g_handler.trampoline)(self, 0, arg);
     t_mode = kNone;
 }
@@ -83,7 +119,27 @@ void __declspec(naked) handler_thunk() { __asm { jmp handler_impl } }
 
 }  // namespace
 
+void load_guarded() {
+    char buf[4096];
+    hook::config_str("click_required_quests", "", buf, sizeof buf);
+    unsigned v = 0;
+    bool in_num = false;
+    for (const char* p = buf;; p++) {
+        if (*p >= '0' && *p <= '9') {
+            v = v * 10 + (unsigned)(*p - '0');
+            in_num = true;
+        } else {
+            if (in_num && v <= 0xFFFF && g_nguarded < kMaxGuarded) g_guarded[g_nguarded++] = (unsigned short)v;
+            v = 0;
+            in_num = false;
+            if (!*p) break;
+        }
+    }
+    hook::log("dialog_advance: %d guarded quest(s) - their choice pages keep the stock EPIC rule", g_nguarded);
+}
+
 HOOK_PLUGIN("dialog_advance") {
+    load_guarded();
     hook::hook_function("NpcDialogWin input handler 0x7275C0", hook::rebase(kVaHandler), (void*)handler_thunk, &g_handler);
     hook::hook_function("quest record lookup 0x5C5550", hook::rebase(kVaLookup), (void*)lookup_impl, &g_lookup);
 }
