@@ -33,7 +33,7 @@
 // pick-up path read 2026-10-02 is all-or-nothing: ShinePlayer::so_ply_PickupItem 0x52FAF0 merges the WHOLE stack into one
 // inventory cell (ii_PickMerge 0x52F440, only when cell + stack <= MaxLot) or stores it in an empty cell (ii_PickAll
 // 0x52F1B0, else error 0x346), then removes the ground object. So this plugin detours so_ply_PickupItem: when a quest in
-// progress drops the item and still needs k < the stack's lot L of it, it
+// progress asks for the item (End.ItemList) and still needs k < the stack's lot L of it, it
 //   1. lets the stock function pick up a COPY of the ground item with lot k (attr slot 0x20 iac_SetLot) - the original item
 //      key goes into the bag through the normal DB path and the ground object goes away as usual;
 //   2. on success drops a NEW stack of L - k at the picker's feet, owned by the picker - exactly the way the zone drops a
@@ -65,7 +65,8 @@ const int kAttrGetLot = 0x1C;
 const int kAttrSetLot = 0x20;
 const int kDropItemDrop = 0x544;            // ShineDropItem::so_ItemDrop
 const unsigned short kDropOk = 0x301;
-const unsigned short kObjectTypeDrop = 1;   // som_AllocObject type, as sp_QuestItemGet allocates
+const unsigned short kObjectTypeDrop = 1;
+const int kItemTypeQuest = 3;               // ItemInfo.Type of quest items (Q_..., the 2026 event items)   // som_AllocObject type, as sp_QuestItemGet allocates
 
 zone::Detour g_drop_item, g_pickup;
 unsigned g_refused = 0;
@@ -104,8 +105,10 @@ int __fastcall is_quest_drop_item(void* self, void*, unsigned short item) {
     return stock;                                    // a quest_ext row the record does not hold: leave it to stock
 }
 
-// what the quests in progress that DROP this item still need of it: -1 = none counts it (no limit), else the largest
-// shortfall among them (0 = all have enough)
+// what the quests in progress still need of this item - every quest whose End.ItemList asks for it, with or without a
+// drop row (the quest items that lie on the ground in STACKS come from normal drop groups, e.g. Goblin Mushroom 1-3 from
+// its nodes, never from a quest drop row: QuestActionMobKill drops lot 1 per sp_QuestItemGet). -1 = no quest asks for
+// it, else the largest shortfall (0 = all have enough).
 int still_needed(void* qz, unsigned short item) {
     void* quest_data = *(void**)((char*)qz + 4);
     const int count = *(int*)((char*)qz + 8);
@@ -115,12 +118,8 @@ int still_needed(void* qz, unsigned short item) {
         if (!qi || qi->Status != kStatusDoing) continue;
         QUEST_DATA* q = zone::fn::CQuestData__GetQuestData()(quest_data, nullptr, qi->ID);
         if (!q) continue;
-        bool drops = false;
-        for (int j = 0; j < q->NumOfAction && j < 10; ++j)
-            if (q->Action[j].ThenType == kThenDrop && (unsigned short)q->Action[j].ThenTarget == item) drops = true;
-        if (!drops) continue;
         const int need = zone::fn::CQuestZone__GetSuccessItemCount()(qz, nullptr, q, item);
-        if (need <= 0) return -1;                    // a script item: no count to respect
+        if (need <= 0) continue;                     // this quest does not ask for it
         if (have < 0) have = zone::fn::CQuestZone__GetQuestPlayerItemLot()(qz, nullptr, item);
         if (need - have > best) best = need - have;
     }
@@ -157,6 +156,9 @@ unsigned char __fastcall pickup(void* self, void*, void* drop, ItemTotalInformat
     const unsigned short item = info->iti_itemstruct.itemid;
     void* attr = zone::fn::ItemAttributeClassContainer__operator__()(zone::global::itmattcontainer(), nullptr, item);
     if (!attr || !slot<unsigned char (__thiscall*)(void*)>(attr, kAttrIsLot)(attr)) return stock(self, nullptr, drop, info, a3);
+    // quest items only (ItemInfo.Type 3): an ore / dust a quest also asks for may be picked up whole
+    auto* idx = zone::fn::ItemDataBox__operator__()(zone::global::itemdatabox(), nullptr, item);
+    if (!idx || !idx->data || (int)idx->data->Type != kItemTypeQuest) return stock(self, nullptr, drop, info, a3);
     const int k = still_needed((char*)self + kQuestZoneInPlayer, item);
     if (k <= 0) return stock(self, nullptr, drop, info, a3);
     const unsigned long lot = slot<unsigned long (__thiscall*)(void*, void*)>(attr, kAttrGetLot)(attr, &info->iti_itemstruct);
