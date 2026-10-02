@@ -32,21 +32,19 @@
 // Ground stacks of quest items exist (ItemDropGroup Q_GoblinMushroom / Herb / Fruit / Q_SandHerb: 1-3 per drop). The
 // pick-up path read 2026-10-02 is all-or-nothing: ShinePlayer::so_ply_PickupItem 0x52FAF0 merges the WHOLE stack into one
 // inventory cell (ii_PickMerge 0x52F440, only when cell + stack <= MaxLot) or stores it in an empty cell (ii_PickAll
-// 0x52F1B0, else error 0x346), then removes the ground object. So this plugin detours so_ply_PickupItem: when a quest in
-// progress asks for the item (End.ItemList) and still needs k < the stack's lot L of it, it
-//   1. lets the stock function pick up a COPY of the ground item with lot k (attr slot 0x20 iac_SetLot) - the original item
-//      key goes into the bag through the normal DB path and the ground object goes away as usual;
-//   2. on success drops a NEW stack of L - k where the original lay, with the original's loot rights - the way the zone
-//      drops an item (ShinePlayer::sp_QuestItemGet 0x528240): ItemAttributeClassContainer[item], iti_mkregnum(item, 2,
-//      zone, world) = a fresh item key, iac_itemcreate (slot 0x14), iac_SetLot (slot 0x20), som_AllocObject(&handle, 1),
-//      drop->so_ItemDrop (slot 0x544)(handle, where, info, type, &owner, quest flag) == 0x301. so_ItemDrop (0x52A7A0)
-//      copies the position of `where` exactly (+0x66 coords, +0x76, +0x7A, layer) and then so_MapMarking; `owner` (12 B)
-//      becomes drop+0x208, `type` drop+0x204, the quest flag goes through slot 0xE20 (read back by 0xE24 = +0x28A).
-//      `where` = the ORIGINAL drop: so_itempicked (slot 0x54C, 0x555340) only blanks its item (key -1, id 0xFFFF), the
-//      object itself lives on until the manager clears it, so its position is still there. Owner, type and flag are
-//      copied from it before the stock pick (an unflagged normal drop must stay unflagged: a flagged one goes through
-//      so_ply_QuestItemCheck, which only passes items a quest DROP ROW names - Goblin Mushroom has none).
-//      No item key is ever on the ground and in a bag at once.
+// 0x52F1B0, else error 0x346), then calls the drop's so_itempicked (slot 0x54C, 0x555340), which blanks the item inside it
+// (key -1, id 0xFFFF); the blanked object is then deleted from everyone's view (BRIEFINFO delete 0x1805). There is no
+// "reduce a ground stack" packet - a ground stack is a drop object whose lot only lives in the server's ItemTotalInformation
+// (drop+0x18D), which the client never displays. So the partial pick-up is the stock pick with one call held back:
+//   1. a copy of the ground item with lot k (iac_SetLot, slot 0x20) and a fresh item key (iti_mkregnum - it only matters
+//      when the k land in a NEW cell; a merge keeps the cell's own key) goes through the stock so_ply_PickupItem: bag, DB
+//      and the picker's pick result exactly as stock;
+//   2. while that call runs, ShineDropItem::so_itempicked is a no-op for this drop - the ground object keeps its item, its
+//      cell, its handle and its loot rights, and nobody is told it went away;
+//   3. its lot then becomes L - k (iac_SetLot on drop+0x18D in place).
+// And once every quest that asks for it has enough (k == 0), a quest item is refused here too - stacks from normal drop
+// groups never pass so_ply_QuestItemCheck (CanLooting asks it only for quest-flagged drops) - with the zone's own loot
+// refusal: so_ply_itempickresult (player slot 0x6C0)(0x345, 0xFFFF), as sp_NC_ITEM_PICK_REQ sends when CanLooting fails.
 // Items no quest counts, and stacks that fit whole, take the stock path untouched.
 
 #include <zonehook.h>
@@ -60,21 +58,20 @@ namespace {
 using zone::types::ItemTotalInformation;
 using zone::types::PLAYER_QUEST_INFO;
 using zone::types::QUEST_DATA;
-using zone::types::ShineMultiTypeHandle;
 
 const unsigned char kStatusDoing = 6;       // PLAYER_QUEST_STATUS: in progress
 const unsigned char kThenDrop = 1;          // QUEST_ACTION ThenType: drop an item
 const int kQuestZoneInPlayer = 0x173E8;     // ShinePlayer -> its CQuestZone (the getter at 0x450350 is "mov eax, ecx")
-const int kAttrItemCreate = 0x14;           // ItemAttributeClass slots
+// ItemAttributeClass slots
 const int kAttrIsLot = 0x18;                //   stackable test (what so_ply_PickupItem asks before merging)
 const int kAttrGetLot = 0x1C;
 const int kAttrSetLot = 0x20;
-const int kDropItemDrop = 0x544;            // ShineDropItem::so_ItemDrop
-const unsigned short kDropOk = 0x301;
 const unsigned short kObjectTypeDrop = 1;
-const int kItemTypeQuest = 3;               // ItemInfo.Type of quest items (Q_..., the 2026 event items)   // som_AllocObject type, as sp_QuestItemGet allocates
+const int kItemTypeQuest = 3;
+const int kPlyPickResult = 0x6C0;           // ShinePlayer::so_ply_itempickresult(err, handle)
+const unsigned short kPickRefused = 0x345;  // what sp_NC_ITEM_PICK_REQ sends when CanLooting fails               // ItemInfo.Type of quest items (Q_..., the 2026 event items)   // som_AllocObject type, as sp_QuestItemGet allocates
 
-zone::Detour g_drop_item, g_pickup;
+zone::Detour g_drop_item, g_pickup, g_picked;
 unsigned g_refused = 0;
 
 template <typename F> F slot(void* obj, int off) { return (F)(*(void***)obj)[off / 4]; }
@@ -132,38 +129,16 @@ int still_needed(void* qz, unsigned short item) {
     return best < 0 ? -1 : best;
 }
 
-struct DropTraits {                         // what so_ItemDrop stored on the original drop
-    ShineMultiTypeHandle owner;             // +0x208
-    unsigned long type;                     // +0x204
-    unsigned char quest;                    // +0x28A (slot 0xE24 reads it)
-};
+void* g_hold_drop = nullptr;                 // the drop whose so_itempicked is held back during a partial pick-up
 
-bool drop_remainder(void* where, const DropTraits& t, unsigned short item, unsigned long lot) {
-    void* attr = zone::fn::ItemAttributeClassContainer__operator__()(zone::global::itmattcontainer(), nullptr, item);
-    if (!attr) return false;
-    ItemTotalInformation info;
-    std::memset(&info, 0, sizeof info);
-    const auto* wd = zone::fn::ZoneServer__zs_worlddata()(zone::global::zoneserver(), nullptr);
-    zone::fn::ItemTotalInformation__iti_mkregnum()(&info, nullptr, item, 2, wd->nZoneNo, wd->nWorldNo);
-    info.iti_itemstruct.itemid = item;
-    static char reason[] = "quest_item_enough remainder";
-    slot<void (__thiscall*)(void*, unsigned short, ItemTotalInformation*, char*)>(attr, kAttrItemCreate)(attr, item, &info,
-                                                                                                         reason);
-    slot<void (__thiscall*)(void*, void*, unsigned long)>(attr, kAttrSetLot)(attr, &info.iti_itemstruct, lot);
-    unsigned short handle = 0;
-    void* drop = zone::fn::ShineObjectManager__som_AllocObject()(zone::global::shineobjmanager(), nullptr, &handle, kObjectTypeDrop);
-    if (!drop) return false;
-    ShineMultiTypeHandle owner = t.owner;
-    const unsigned short r =
-        slot<unsigned short (__thiscall*)(void*, unsigned short, void*, ItemTotalInformation*, unsigned long, void*,
-                                          unsigned char)>(drop, kDropItemDrop)(drop, handle, where, &info, t.type, &owner,
-                                                                               t.quest);
-    return r == kDropOk;
+void __fastcall item_picked(void* self, void*) {
+    if (self == g_hold_drop) return;
+    ((void (__fastcall*)(void*, void*))g_picked.trampoline)(self, nullptr);
 }
 
 unsigned char __fastcall pickup(void* self, void*, void* drop, ItemTotalInformation* info, unsigned short a3) {
     auto stock = (unsigned char (__fastcall*)(void*, void*, void*, ItemTotalInformation*, unsigned short))g_pickup.trampoline;
-    if (!info) return stock(self, nullptr, drop, info, a3);
+    if (!info || !drop) return stock(self, nullptr, drop, info, a3);
     const unsigned short item = info->iti_itemstruct.itemid;
     void* attr = zone::fn::ItemAttributeClassContainer__operator__()(zone::global::itmattcontainer(), nullptr, item);
     if (!attr || !slot<unsigned char (__thiscall*)(void*)>(attr, kAttrIsLot)(attr)) return stock(self, nullptr, drop, info, a3);
@@ -171,20 +146,26 @@ unsigned char __fastcall pickup(void* self, void*, void* drop, ItemTotalInformat
     auto* idx = zone::fn::ItemDataBox__operator__()(zone::global::itemdatabox(), nullptr, item);
     if (!idx || !idx->data || (int)idx->data->Type != kItemTypeQuest) return stock(self, nullptr, drop, info, a3);
     const int k = still_needed((char*)self + kQuestZoneInPlayer, item);
-    if (k <= 0) return stock(self, nullptr, drop, info, a3);
+    if (k < 0) return stock(self, nullptr, drop, info, a3);                // no quest asks for it
+    if (k == 0) {                                                           // every quest asking for it has enough
+        slot<void (__thiscall*)(void*, unsigned short, unsigned short)>(self, kPlyPickResult)(self, kPickRefused, 0xFFFF);
+        if (g_refused++ < 200 || g_refused % 1000 == 0)
+            zone::log("refused pick-up of quest item %u (normal drop): the quests asking for it have enough (refusal #%u)",
+                      item, g_refused);
+        return 0;
+    }
     const unsigned long lot = slot<unsigned long (__thiscall*)(void*, void*)>(attr, kAttrGetLot)(attr, &info->iti_itemstruct);
     if (lot <= (unsigned long)k) return stock(self, nullptr, drop, info, a3);
-    DropTraits traits;
-    std::memcpy(&traits.owner, (char*)drop + 0x208, sizeof traits.owner);
-    traits.type = *(unsigned long*)((char*)drop + 0x204);
-    traits.quest = *(unsigned char*)((char*)drop + 0x28A);
     ItemTotalInformation part = *info;
     slot<void (__thiscall*)(void*, void*, unsigned long)>(attr, kAttrSetLot)(attr, &part.iti_itemstruct, (unsigned long)k);
+    const auto* wd = zone::fn::ZoneServer__zs_worlddata()(zone::global::zoneserver(), nullptr);
+    zone::fn::ItemTotalInformation__iti_mkregnum()(&part, nullptr, item, 2, wd->nZoneNo, wd->nWorldNo);
+    g_hold_drop = drop;
     const unsigned char r = stock(self, nullptr, drop, &part, a3);
-    if (r != 1) return r;
-    const bool left = drop_remainder(drop, traits, item, lot - k);
-    zone::log("partial pick-up of quest item %u: took %d of %lu, %lu left on the ground%s", item, k, lot, lot - k,
-              left ? "" : " - REMAINDER DROP FAILED");
+    g_hold_drop = nullptr;
+    if (r != 1) return r;                                                   // nothing taken: the stack stays as it was
+    slot<void (__thiscall*)(void*, void*, unsigned long)>(attr, kAttrSetLot)(attr, &info->iti_itemstruct, lot - k);
+    zone::log("partial pick-up of quest item %u: took %d of %lu, the original stack keeps %lu", item, k, lot, lot - k);
     return r;
 }
 
@@ -195,4 +176,6 @@ HOOK_PLUGIN("quest_item_enough") {
                         (void*)zone::fn::CQuestZone__IsQuestDropItem(), (void*)is_quest_drop_item, &g_drop_item);
     zone::hook_function("ShinePlayer::so_ply_PickupItem (partial pick-up of a quest item stack)",
                         (void*)zone::fn::ShineObjectClass__ShinePlayer__so_ply_PickupItem(), (void*)pickup, &g_pickup);
+    zone::hook_function("ShineDropItem::so_itempicked (held back during a partial pick-up)",
+                        (void*)zone::fn::ShineObjectClass__ShineDropItem__so_itempicked(), (void*)item_picked, &g_picked);
 }
