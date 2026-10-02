@@ -36,11 +36,17 @@
 // progress asks for the item (End.ItemList) and still needs k < the stack's lot L of it, it
 //   1. lets the stock function pick up a COPY of the ground item with lot k (attr slot 0x20 iac_SetLot) - the original item
 //      key goes into the bag through the normal DB path and the ground object goes away as usual;
-//   2. on success drops a NEW stack of L - k at the picker's feet, owned by the picker - exactly the way the zone drops a
-//      quest item (ShinePlayer::sp_QuestItemGet 0x528240): ItemAttributeClassContainer[item], iti_mkregnum(item, 2, zone,
-//      world) = a fresh item key, iac_itemcreate (slot 0x14), iac_SetLot (slot 0x20), som_AllocObject(&handle, 1),
-//      ShineMultiTypeHandle::SetShineObject(player), drop->so_ItemDrop (slot 0x544)(handle, player, info, 1, &owner, 1)
-//      == 0x301. No item key is ever on the ground and in a bag at once.
+//   2. on success drops a NEW stack of L - k where the original lay, with the original's loot rights - the way the zone
+//      drops an item (ShinePlayer::sp_QuestItemGet 0x528240): ItemAttributeClassContainer[item], iti_mkregnum(item, 2,
+//      zone, world) = a fresh item key, iac_itemcreate (slot 0x14), iac_SetLot (slot 0x20), som_AllocObject(&handle, 1),
+//      drop->so_ItemDrop (slot 0x544)(handle, where, info, type, &owner, quest flag) == 0x301. so_ItemDrop (0x52A7A0)
+//      copies the position of `where` exactly (+0x66 coords, +0x76, +0x7A, layer) and then so_MapMarking; `owner` (12 B)
+//      becomes drop+0x208, `type` drop+0x204, the quest flag goes through slot 0xE20 (read back by 0xE24 = +0x28A).
+//      `where` = the ORIGINAL drop: so_itempicked (slot 0x54C, 0x555340) only blanks its item (key -1, id 0xFFFF), the
+//      object itself lives on until the manager clears it, so its position is still there. Owner, type and flag are
+//      copied from it before the stock pick (an unflagged normal drop must stay unflagged: a flagged one goes through
+//      so_ply_QuestItemCheck, which only passes items a quest DROP ROW names - Goblin Mushroom has none).
+//      No item key is ever on the ground and in a bag at once.
 // Items no quest counts, and stacks that fit whole, take the stock path untouched.
 
 #include <zonehook.h>
@@ -126,7 +132,13 @@ int still_needed(void* qz, unsigned short item) {
     return best < 0 ? -1 : best;
 }
 
-bool drop_remainder(void* player, unsigned short item, unsigned long lot) {
+struct DropTraits {                         // what so_ItemDrop stored on the original drop
+    ShineMultiTypeHandle owner;             // +0x208
+    unsigned long type;                     // +0x204
+    unsigned char quest;                    // +0x28A (slot 0xE24 reads it)
+};
+
+bool drop_remainder(void* where, const DropTraits& t, unsigned short item, unsigned long lot) {
     void* attr = zone::fn::ItemAttributeClassContainer__operator__()(zone::global::itmattcontainer(), nullptr, item);
     if (!attr) return false;
     ItemTotalInformation info;
@@ -141,12 +153,11 @@ bool drop_remainder(void* player, unsigned short item, unsigned long lot) {
     unsigned short handle = 0;
     void* drop = zone::fn::ShineObjectManager__som_AllocObject()(zone::global::shineobjmanager(), nullptr, &handle, kObjectTypeDrop);
     if (!drop) return false;
-    ShineMultiTypeHandle owner;
-    zone::fn::ShineMultiTypeHandle__ShineMultiTypeHandle()(&owner, nullptr);
-    zone::fn::ShineMultiTypeHandle__SetShineObject()(&owner, nullptr, (zone::types::ShineObjectClass__ShineObject*)player);
+    ShineMultiTypeHandle owner = t.owner;
     const unsigned short r =
         slot<unsigned short (__thiscall*)(void*, unsigned short, void*, ItemTotalInformation*, unsigned long, void*,
-                                          unsigned char)>(drop, kDropItemDrop)(drop, handle, player, &info, 1, &owner, 1);
+                                          unsigned char)>(drop, kDropItemDrop)(drop, handle, where, &info, t.type, &owner,
+                                                                               t.quest);
     return r == kDropOk;
 }
 
@@ -163,11 +174,15 @@ unsigned char __fastcall pickup(void* self, void*, void* drop, ItemTotalInformat
     if (k <= 0) return stock(self, nullptr, drop, info, a3);
     const unsigned long lot = slot<unsigned long (__thiscall*)(void*, void*)>(attr, kAttrGetLot)(attr, &info->iti_itemstruct);
     if (lot <= (unsigned long)k) return stock(self, nullptr, drop, info, a3);
+    DropTraits traits;
+    std::memcpy(&traits.owner, (char*)drop + 0x208, sizeof traits.owner);
+    traits.type = *(unsigned long*)((char*)drop + 0x204);
+    traits.quest = *(unsigned char*)((char*)drop + 0x28A);
     ItemTotalInformation part = *info;
     slot<void (__thiscall*)(void*, void*, unsigned long)>(attr, kAttrSetLot)(attr, &part.iti_itemstruct, (unsigned long)k);
     const unsigned char r = stock(self, nullptr, drop, &part, a3);
     if (r != 1) return r;
-    const bool left = drop_remainder(self, item, lot - k);
+    const bool left = drop_remainder(drop, traits, item, lot - k);
     zone::log("partial pick-up of quest item %u: took %d of %lu, %lu left on the ground%s", item, k, lot, lot - k,
               left ? "" : " - REMAINDER DROP FAILED");
     return r;
