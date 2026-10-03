@@ -510,6 +510,19 @@ def evaluate(expr, env):
     return v
 
 
+def client_symbols(src):
+    """'@Name' -> address for the 2026 client build `src` is (its PE TimeDateStamp), from client/addresses/builds/<stamp>.json
+    (client/addresses/client_sigs.py resolve). Empty when the build is unknown - a recipe naming '@' symbols then fails."""
+    e_lfanew = struct.unpack_from("<I", src, 0x3C)[0]
+    stamp = struct.unpack_from("<I", src, e_lfanew + 8)[0]
+    path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "client", "addresses", "builds", "%08X.json" % stamp)
+    if not os.path.exists(path):
+        return {}, stamp
+    with open(path, encoding="utf-8") as f:
+        b = json.load(f)
+    return {"@" + k: int(v, 16) for k, v in b["symbols"].items()}, stamp
+
+
 def load_recipe(path, overrides):
     with open(path, encoding="utf-8") as f:
         r = json.load(f)
@@ -542,7 +555,18 @@ def main():
 
     src = open(a.exe, "rb").read()
     digest = hashlib.sha256(src).hexdigest()
+    # a recipe that names client symbols ('@Name') works on every client build client/addresses knows: the
+    # addresses come from that build, and every edit still checks its expected bytes - so the file hash is not
+    # required to match the build the recipe was written against
+    syms, stamp = client_symbols(src)
+    uses_syms = any(isinstance(v, str) and "@" in v for v in r.get("consts", {}).values())
+    if uses_syms and not syms:
+        raise SystemExit(f"REFUSING: the recipe names client symbols but build {stamp:08X} is unknown - run "
+                         f"client/addresses/client_sigs.py resolve <this exe> && header first")
     want = r.get("target", {}).get("sha256")
+    if uses_syms and syms:
+        want = None
+        print(f"client build {stamp:08X}: addresses from client/addresses ({len(syms)} symbols)")
     if want and digest != want:
         msg = (f"input sha256 {digest}\n  recipe expects {want}\n"
                "  This recipe was written against a specific build. Every offset in it was read out of "
@@ -556,7 +580,7 @@ def main():
     # consts/params may be written as hex STRINGS ("0x19B8000") -- decimal transcription of an address
     # read out of a disassembler is a reliable way to get it wrong, so the recipe is allowed to keep the
     # hex it was read as. Resolve to ints once, here, so edits only ever see numbers.
-    env = {}
+    env = dict(syms)
     for k, v in list(r.get("consts", {}).items()) + list(r.get("params", {}).items()):
         env[k] = evaluate(v, env) if isinstance(v, str) else v
 

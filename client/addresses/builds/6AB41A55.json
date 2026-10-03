@@ -57,6 +57,7 @@
   "MapSingletonAtexit": "0x00AEB700",
   "PgWinPostMsg": "0x00878190",
   "PgWinProcessMsg": "0x00878C10",
-  "WinMgrIsIn": "0x008824F0"
+  "WinMgrIsIn": "0x008824F0",
+  "RewardWinExpHighStore": "0x006983DD"
  }
 }
