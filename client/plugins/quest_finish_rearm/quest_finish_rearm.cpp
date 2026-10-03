@@ -11,13 +11,13 @@
 // in and done again stays silent. This hook runs that missing cleanup before UpdateQuest: every already-shown id whose
 // quest is no longer completable is dropped, so the next completion pops again. A quest still completable stays listed,
 // so the popup does not repeat on every kill.
-// It also CLOSES the popup when an update empties the displayed list (a quest that was completable and is not any more -
-// "<X>'s Blessing" quests are accepted and handed in by one dialogue, operator 2026-10-03).
+// It also drops a quest that is no longer completable from the popup's DISPLAYED list after every update (a quest handed
+// in is skipped by UpdateQuest's own cleanup - "<X>'s Blessing" quests, operator 2026-10-03); the popup's live draw then
+// removes its dot and hides the window only when the list is empty.
 //
 // 2026 US Fiesta.exe: 0x7EB840 returns the quest manager (UpdateQuest's own `call 0x7eb840` at 0x7302C2),
 // 0x8FF590 = its GetNewQuestStatus(WORD id), thiscall (UpdateQuest's call at 0x73033F, then `cmp eax, 8`).
 #include <hook_core.h>
-#include <pgwin_msg.h>
 
 #include <windows.h>
 
@@ -62,25 +62,42 @@ void rearm(void* self) {
     }
 }
 
-// how many quests the popup currently announces (its DISPLAYED list, +0x168 begin / +0x16C end, vector<WORD>)
-int displayed(void* self) {
-    unsigned short* b = *(unsigned short**)((char*)self + kOffDisplayedBegin);
-    unsigned short* e = *(unsigned short**)((char*)self + kOffDisplayedEnd);
-    return b && e > b ? (int)(e - b) : 0;
+// The popup is drawn LIVE from its DISPLAYED list (+0x168 begin / +0x16C end, vector<WORD>): QuestFinishWin's per-frame
+// update (2026 0x730160, vtable slot 83) hides the window when the list is empty and shows one dot per entry (10 dot
+// widgets +0x194..+0x1B8). UpdateQuest only removes an entry whose quest is still among the quests in progress
+// (0x8FFE60) and no longer completable - a quest handed in is no longer in progress, so its entry was never removed.
+// "<X>'s Blessing" quests are accepted AND handed in by one dialogue (operator 2026-10-03): completable for a moment
+// (entry added, popup shown), then done - the popup kept a dot for a hand-in that had already happened. So after every
+// update every entry whose quest is not completable any more is dropped from the DISPLAYED list - its dot goes, the
+// others stay, and the window hides by itself only when that empties the list (operator: "just remove the quest from
+// its display list. Only close when that makes the list hit 0").
+void prune_displayed(void* self) {
+    __try {
+        unsigned short** begin = (unsigned short**)((char*)self + kOffDisplayedBegin);
+        unsigned short** end = (unsigned short**)((char*)self + kOffDisplayedEnd);
+        if (!*begin || *end <= *begin) return;
+        void* mgr = ((GetQuestMgr)hook::rebase(kVaGetQuestMgr))();
+        if (!mgr) return;
+        GetStatus status = (GetStatus)hook::rebase(kVaGetStatus);
+        unsigned short* out = *begin;
+        for (unsigned short* p = *begin; p < *end; ++p) {
+            const int st = status(mgr, 0, *p);
+            if (st == kCompletable) {
+                *out++ = *p;
+            } else {
+                hook::log("quest_finish_rearm: quest %u no longer completable (status %d) - its dot leaves the popup", *p, st);
+            }
+        }
+        *end = out;
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        hook::log("quest_finish_rearm: exception while pruning the displayed list - left as it was");
+    }
 }
 
 void __fastcall update_impl(void* self, void* /*edx*/) {
     rearm(self);
-    const int before = displayed(self);
     ((UpdateQuest)g_update.trampoline)(self, 0);
-    // UpdateQuest drops a quest that is no longer completable from the DISPLAYED list but never hides the popup. A quest
-    // accepted AND handed in by one dialogue ("<X>'s Blessing": the accept is the hand-in, operator 2026-10-03) is
-    // completable for a moment - the popup opens - and is done right after: the popup stayed up announcing a hand-in
-    // that already happened. When this update empties the list, close the popup the way its close button does (msg 1).
-    if (before > 0 && displayed(self) == 0) {
-        hook::log("quest_finish_rearm: the quest(s) the popup announced are no longer completable - popup closed");
-        pgwin::process(self, pgwin::kClose, 0, 0);
-    }
+    prune_displayed(self);
 }
 
 }  // namespace
