@@ -52,6 +52,7 @@
 #include <zone_globals.h>
 
 #include <cstring>
+#include <vector>
 
 namespace {
 
@@ -69,9 +70,14 @@ const int kAttrSetLot = 0x20;
 const unsigned short kObjectTypeDrop = 1;
 const int kItemTypeQuest = 3;
 const int kPlyPickResult = 0x6C0;           // ShinePlayer::so_ply_itempickresult(err, handle)
-const unsigned short kPickRefused = 0x345;  // what sp_NC_ITEM_PICK_REQ sends when CanLooting fails               // ItemInfo.Type of quest items (Q_..., the 2026 event items)   // som_AllocObject type, as sp_QuestItemGet allocates
+const unsigned short kPickRefused = 0x345;
+const unsigned short kPickBagFull = 0x346;  // ii_PickAll's refusal: no free cell
+const int kPlayerBag = 0x8E2C;              // ShinePlayer: its bag (ItemBag), what so_ply_PickupItem iterates
+const int kPlayerCharged = 0x2A5A0;         //   its ChargedEffectContainer (bag expansions)
+const int kPlyLockList = 0x7D4;             //   slot: the inventory lock list for UnlockedInventoryIterator
+const int kInvenBag = 9;                    //   inventory type of the bag  // what sp_NC_ITEM_PICK_REQ sends when CanLooting fails               // ItemInfo.Type of quest items (Q_..., the 2026 event items)   // som_AllocObject type, as sp_QuestItemGet allocates
 
-zone::Detour g_drop_item, g_pickup, g_picked;
+zone::Detour g_drop_item, g_pickup, g_picked, g_result;
 unsigned g_refused = 0;
 
 template <typename F> F slot(void* obj, int off) { return (F)(*(void***)obj)[off / 4]; }
@@ -129,11 +135,72 @@ int still_needed(void* qz, unsigned short item) {
     return best < 0 ? -1 : best;
 }
 
-void* g_hold_drop = nullptr;                 // the drop whose so_itempicked is held back during a partial pick-up
+// ---- holding back two stock calls for one pick-up -------------------------------------------------------------------
+void* g_hold_drop = nullptr;                 // this drop's so_itempicked is a no-op while set
+bool g_capture_result = false;               // so_ply_itempickresult is captured instead of sent while set
+unsigned short g_result_err = 0, g_result_handle = 0;
+bool g_result_seen = false;
 
 void __fastcall item_picked(void* self, void*) {
     if (self == g_hold_drop) return;
     ((void (__fastcall*)(void*, void*))g_picked.trampoline)(self, nullptr);
+}
+
+void __fastcall pick_result(void* self, void*, unsigned short err, unsigned short handle) {
+    if (g_capture_result) {
+        g_result_err = err, g_result_handle = handle, g_result_seen = true;
+        return;
+    }
+    ((void (__fastcall*)(void*, void*, unsigned short, unsigned short))g_result.trampoline)(self, nullptr, err, handle);
+}
+
+void send_result(void* player, unsigned short err, unsigned short handle) {
+    ((void (__fastcall*)(void*, void*, unsigned short, unsigned short))g_result.trampoline)(player, nullptr, err, handle);
+}
+
+// the free room of every bag cell holding this item (MaxLot - lot), the way so_ply_PickupItem walks them (0x52FCE1..):
+// ItemBoxIterIdent(bag = player+0x8E2C, item, charged effects = player+0x2A5A0), UnlockedInventoryIterator {iter, player
+// slot 0x7D4 (the lock list), 9}, uii_Home / uii_Next; cell = bag->slot0(iter index), lot = cell+0x70 attr -> GetLot(cell+8)
+std::vector<unsigned long> cell_rooms(void* player, unsigned short item, unsigned long max_lot) {
+    std::vector<unsigned long> rooms;
+    alignas(8) unsigned char ident[0x20] = {};
+    zone::fn::ItemBoxIterIdent__ItemBoxIterIdent()(ident, nullptr, (zone::types::ItemBag*)((char*)player + kPlayerBag), item,
+                                                   (zone::types::ChargedEffectContainer*)((char*)player + kPlayerCharged));
+    void* locks = slot<void* (__thiscall*)(void*)>(player, kPlyLockList)(player);
+    struct {
+        void* iter;
+        void* locks;
+        int inven_type;
+    } it = {ident, locks, kInvenBag};
+    if (zone::fn::InventoryLocking__UnlockedInventoryIterator__uii_Home()(&it, nullptr)) {
+        do {
+            void* bag = *(void**)(ident + 4);
+            const int index = *(int*)(ident + 8);
+            void* cell = slot<void* (__thiscall*)(void*, int)>(bag, 0)(bag, index);
+            if (!cell) continue;
+            void* attr = *(void**)((char*)cell + 0x70);
+            if (!attr || !slot<unsigned char (__thiscall*)(void*)>(attr, kAttrIsLot)(attr)) continue;
+            const unsigned long lot = slot<unsigned long (__thiscall*)(void*, void*)>(attr, kAttrGetLot)(attr, (char*)cell + 8);
+            if (lot < max_lot) rooms.push_back(max_lot - lot);
+        } while (zone::fn::InventoryLocking__UnlockedInventoryIterator__uii_Next()(&it, nullptr));
+    }
+    return rooms;
+}
+
+// one stock pick of `n` from the ground stack, the drop's so_itempicked held back; the result reaches the client as stock
+unsigned char pick_part(void* self, void* drop, const ItemTotalInformation* info, void* attr, unsigned long n,
+                        unsigned short a3, bool capture) {
+    auto stock = (unsigned char (__fastcall*)(void*, void*, void*, ItemTotalInformation*, unsigned short))g_pickup.trampoline;
+    ItemTotalInformation part = *info;
+    slot<void (__thiscall*)(void*, void*, unsigned long)>(attr, kAttrSetLot)(attr, &part.iti_itemstruct, n);
+    const auto* wd = zone::fn::ZoneServer__zs_worlddata()(zone::global::zoneserver(), nullptr);
+    zone::fn::ItemTotalInformation__iti_mkregnum()(&part, nullptr, info->iti_itemstruct.itemid, 2, wd->nZoneNo, wd->nWorldNo);
+    g_hold_drop = drop;
+    g_capture_result = capture, g_result_seen = false;
+    const unsigned char r = stock(self, nullptr, drop, &part, a3);
+    g_capture_result = false;
+    g_hold_drop = nullptr;
+    return r;
 }
 
 unsigned char __fastcall pickup(void* self, void*, void* drop, ItemTotalInformation* info, unsigned short a3) {
@@ -141,32 +208,63 @@ unsigned char __fastcall pickup(void* self, void*, void* drop, ItemTotalInformat
     if (!info || !drop) return stock(self, nullptr, drop, info, a3);
     const unsigned short item = info->iti_itemstruct.itemid;
     void* attr = zone::fn::ItemAttributeClassContainer__operator__()(zone::global::itmattcontainer(), nullptr, item);
-    if (!attr || !slot<unsigned char (__thiscall*)(void*)>(attr, kAttrIsLot)(attr)) return stock(self, nullptr, drop, info, a3);
-    // quest items only (ItemInfo.Type 3): an ore / dust a quest also asks for may be picked up whole
     auto* idx = zone::fn::ItemDataBox__operator__()(zone::global::itemdatabox(), nullptr, item);
-    if (!idx || !idx->data || (int)idx->data->Type != kItemTypeQuest) return stock(self, nullptr, drop, info, a3);
-    const int k = still_needed((char*)self + kQuestZoneInPlayer, item);
-    if (k < 0) return stock(self, nullptr, drop, info, a3);                // no quest asks for it
-    if (k == 0) {                                                           // every quest asking for it has enough
-        slot<void (__thiscall*)(void*, unsigned short, unsigned short)>(self, kPlyPickResult)(self, kPickRefused, 0xFFFF);
-        if (g_refused++ < 200 || g_refused % 1000 == 0)
-            zone::log("refused pick-up of quest item %u (normal drop): the quests asking for it have enough (refusal #%u)",
-                      item, g_refused);
+    if (!attr || !idx || !idx->data || !slot<unsigned char (__thiscall*)(void*)>(attr, kAttrIsLot)(attr))
+        return stock(self, nullptr, drop, info, a3);                         // not a stack: stock
+    const unsigned long lot = slot<unsigned long (__thiscall*)(void*, void*)>(attr, kAttrGetLot)(attr, &info->iti_itemstruct);
+    unsigned long want = lot;
+    if ((int)idx->data->Type == kItemTypeQuest) {
+        const int k = still_needed((char*)self + kQuestZoneInPlayer, item);
+        if (k == 0) {                                                       // every quest asking for it has enough
+            send_result(self, kPickRefused, 0xFFFF);
+            if (g_refused++ < 200 || g_refused % 1000 == 0)
+                zone::log("refused pick-up of quest item %u: the quests asking for it have enough (refusal #%u)", item, g_refused);
+            return 0;
+        }
+        if (k > 0 && (unsigned long)k < want) want = (unsigned long)k;
+    }
+    // 1. the stock pick of what is wanted, its result held back: a success (whole stack, or the quest's share into one
+    //    cell / an empty cell) is the stock path; only "bag full" (0x346) goes on to the per-cell split
+    unsigned long remaining = want;
+    if (want == lot) {
+        g_capture_result = true, g_result_seen = false;
+        const unsigned char r = stock(self, nullptr, drop, info, a3);
+        g_capture_result = false;
+        if (g_result_seen && !(r != 1 && g_result_err == kPickBagFull)) send_result(self, g_result_err, g_result_handle);
+        if (r == 1 || !g_result_seen || g_result_err != kPickBagFull) return r;
+    } else {
+        const unsigned char r = pick_part(self, drop, info, attr, want, a3, true);
+        if (g_result_seen && !(r != 1 && g_result_err == kPickBagFull)) send_result(self, g_result_err, g_result_handle);
+        if (r == 1) {
+            slot<void (__thiscall*)(void*, void*, unsigned long)>(attr, kAttrSetLot)(attr, &info->iti_itemstruct, lot - want);
+            zone::log("partial pick-up of %u: took %lu of %lu (the quest's share), %lu stay on the ground", item, want, lot,
+                      lot - want);
+            return r;
+        }
+        if (!g_result_seen || g_result_err != kPickBagFull) return r;
+    }
+    // 2. the bag is full for the whole amount: fill every cell of this item that has room, one stock pick each
+    const unsigned short bag_full_handle = g_result_handle;
+    unsigned char last = 0;
+    int chunks = 0;
+    for (unsigned long room : cell_rooms(self, item, idx->data->MaxLot)) {
+        if (!remaining) break;
+        const unsigned long n = room < remaining ? room : remaining;
+        if (pick_part(self, drop, info, attr, n, a3, false) == 1) remaining -= n, last = 1, ++chunks;
+    }
+    const unsigned long taken = want - remaining;
+    if (!taken) {
+        send_result(self, kPickBagFull, bag_full_handle);                   // nothing fits: the stock refusal
         return 0;
     }
-    const unsigned long lot = slot<unsigned long (__thiscall*)(void*, void*)>(attr, kAttrGetLot)(attr, &info->iti_itemstruct);
-    if (lot <= (unsigned long)k) return stock(self, nullptr, drop, info, a3);
-    ItemTotalInformation part = *info;
-    slot<void (__thiscall*)(void*, void*, unsigned long)>(attr, kAttrSetLot)(attr, &part.iti_itemstruct, (unsigned long)k);
-    const auto* wd = zone::fn::ZoneServer__zs_worlddata()(zone::global::zoneserver(), nullptr);
-    zone::fn::ItemTotalInformation__iti_mkregnum()(&part, nullptr, item, 2, wd->nZoneNo, wd->nWorldNo);
-    g_hold_drop = drop;
-    const unsigned char r = stock(self, nullptr, drop, &part, a3);
-    g_hold_drop = nullptr;
-    if (r != 1) return r;                                                   // nothing taken: the stack stays as it was
-    slot<void (__thiscall*)(void*, void*, unsigned long)>(attr, kAttrSetLot)(attr, &info->iti_itemstruct, lot - k);
-    zone::log("partial pick-up of quest item %u: took %d of %lu, the original stack keeps %lu", item, k, lot, lot - k);
-    return r;
+    if (taken == lot) {
+        item_picked(drop, nullptr);                                         // used up: picked as stock does
+    } else {
+        slot<void (__thiscall*)(void*, void*, unsigned long)>(attr, kAttrSetLot)(attr, &info->iti_itemstruct, lot - taken);
+    }
+    zone::log("partial pick-up of %u: took %lu of %lu into %d cell(s) (bag full), %lu stay on the ground", item, taken, lot,
+              chunks, lot - taken);
+    return last;
 }
 
 }  // namespace
@@ -178,4 +276,6 @@ HOOK_PLUGIN("quest_item_enough") {
                         (void*)zone::fn::ShineObjectClass__ShinePlayer__so_ply_PickupItem(), (void*)pickup, &g_pickup);
     zone::hook_function("ShineDropItem::so_itempicked (held back during a partial pick-up)",
                         (void*)zone::fn::ShineObjectClass__ShineDropItem__so_itempicked(), (void*)item_picked, &g_picked);
+    zone::hook_function("ShinePlayer::so_ply_itempickresult (held back while a pick-up is tried whole)",
+                        (void*)zone::fn::ShineObjectClass__ShinePlayer__so_ply_itempickresult(), (void*)pick_result, &g_result);
 }
