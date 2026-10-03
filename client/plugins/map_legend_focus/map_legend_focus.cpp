@@ -30,10 +30,23 @@
 //   several quests tracked the count lands on another quest and the clicked mob's circles are hidden.
 //   So the plugin shows the marks itself: a mob line = every mark of that mob; a heading = every mark of the mob lines
 //   under it (up to the next heading). Area marks (+0x334: quest 0x663EA0, mob 0x663EB0) and quest-number labels
-//   (+0x5C8: quest 0x664190, mob 0x6641A0), each shown / hidden with vtable +0x100(bool), as UpdateArea does. A click
-//   whose mobs match no mark leaves every mark shown (and says so in the log) rather than an empty map.
+//   (+0x5C8: quest 0x664190, mob 0x6641A0), each shown / hidden with vtable +0x100(bool), as UpdateArea does.
+//
+// ---- BY QUEST AND MOB (2026-10-03, operator: "renders something when I click the empty row between quests and
+//      frequently renders multiple quests together") --------------------------------------------------------------------
+//   Read off the legend builder (10.6.6 0x611B40) and the client's own log of the clicks: the rows are, per quest, a
+//   heading, its mob lines, then a spacer whose value is 0. A heading's value is 0xFFFF + n, n counting the quests in the
+//   order the builder walks them (its counter [ebp-0xD4], the quest pointer [ebp-0xAC]) - so the FIRST heading is 0xFFFF
+//   itself, which the old test (> 0xFFFF) read as "mob 65535". A spacer read as "mob 0" matched no mark, so every mark
+//   was shown; and a mob several quests need (mob 9390: three quests) showed every one of those quests' circles.
+//   Now the builder's numbering step (MapLegendHeading, mov ecx,[ebp-0xD4], 6 bytes) is detoured to record n -> quest
+//   id. A heading shows the marks of its quest; a mob line the marks of that quest AND that mob (its quest = the heading
+//   above it); a spacer changes nothing. A row whose quest has no mark on this map hides every mark (logged). Without
+//   the n -> quest record (site check failed) it falls back to the mob test alone.
 #include <pgwin_msg.h>
 
+#include <cstring>
+#include <map>
 #include <set>
 
 namespace {
@@ -47,12 +60,43 @@ const unsigned kMapAreaMarks = 0x334, kMapLabelMarks = 0x5C8;   // FullMapWin ->
 const unsigned kListTop = 0x150;                // SlideListWin: the first item shown (scroll offset)
 const unsigned kListDirty = 0x154;              // SlideListWin byte UpdateArea clears at its end
 const int kSlotShow = 0x100 / 4;
-const unsigned kHeading = 0xFFFF;               // item data above this = a quest heading, else a mob id
+const unsigned kHeading = 0xFFFF;               // item data from this up = a quest heading (0xFFFF + n); 0 = a spacer
+const unsigned kVaHeading = caddr::va(caddr::kMapLegendHeading);
+// mov ecx,[ebp-0xD4]; lea eax,[ecx+0xFFFF]
+const unsigned char kHeadingSite[] = {0x8B, 0x8D, 0x2C, 0xFF, 0xFF, 0xFF, 0x8D, 0x81, 0xFF, 0xFF, 0x00, 0x00};
 const unsigned kMaxRows = 512;
 const unsigned kOwnerScan = 0x80;               // bytes of the list searched for the owning FullMapWin
 
 void* g_list = nullptr;
 void* g_map = nullptr;
+std::map<unsigned, unsigned> g_heading_quest;   // heading n -> quest id, as the builder last numbered them
+void* g_heading_cont = nullptr;
+
+void __cdecl heading(unsigned n, const unsigned short* quest) {
+    if (n == 0) g_heading_quest.clear();
+    unsigned q = 0;
+    __try {
+        if (quest) q = *quest;
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+    }
+    g_heading_quest[n] = q;
+}
+
+// in place of the builder's `mov ecx,[ebp-0xD4]`
+__declspec(naked) void heading_site() {
+    __asm {
+        pushad
+        pushfd
+        push dword ptr [ebp - 0xAC]
+        push dword ptr [ebp - 0xD4]
+        call heading
+        add esp, 8
+        popfd
+        popad
+        mov ecx, [ebp - 0xD4]
+        jmp g_heading_cont
+    }
+}
 
 // the FullMapWin whose quest list `list` is, or nullptr
 void* owner_map(void* list) {
@@ -91,38 +135,46 @@ struct Node {
     void* mark;
 };
 
-// show the marks of `mobs` in one mark list (all of them when `all`); returns how many matched
-int show_marks(void* map, unsigned list_off, unsigned va_quest, unsigned va_mob, const std::set<unsigned>& mobs, bool all,
-               bool log_each) {
-    int matched = 0;
+// what a click selects: a quest (0 = unknown) and its mobs (empty = every mob of the quest)
+struct Pick {
+    unsigned quest;
+    std::set<unsigned> mobs;
+};
+
+bool picked(const Pick& p, unsigned quest, unsigned mob) {
+    if (p.quest && quest != p.quest) return false;
+    return p.mobs.empty() || p.mobs.count(mob) != 0;
+}
+
+// show the picked marks of one mark list and hide the rest; returns how many are shown
+int show_marks(void* map, unsigned list_off, unsigned va_quest, unsigned va_mob, const Pick& p) {
+    int shown = 0;
     __try {
         for (Node* n = *(Node**)((char*)map + list_off); n; n = n->next) {
             if (!n->mark) continue;
-            unsigned mob = ((U16Fn)hook::rebase(va_mob))(n->mark, 0);
-            bool on = mobs.count(mob) != 0;
-            matched += on;
-            if (log_each)
-                hook::log("  mark %s: quest %u mob %u", list_off == kMapAreaMarks ? "area" : "label",
-                          (unsigned)((U16Fn)hook::rebase(va_quest))(n->mark, 0), mob);
-            if (!all) ((ShowFn)pgwin::vtable_entry(n->mark, kSlotShow))(n->mark, 0, on ? 1 : 0);
+            bool on = picked(p, ((U16Fn)hook::rebase(va_quest))(n->mark, 0), ((U16Fn)hook::rebase(va_mob))(n->mark, 0));
+            shown += on;
+            ((ShowFn)pgwin::vtable_entry(n->mark, kSlotShow))(n->mark, 0, on ? 1 : 0);
         }
-        if (all)
-            for (Node* n = *(Node**)((char*)map + list_off); n; n = n->next)
-                if (n->mark) ((ShowFn)pgwin::vtable_entry(n->mark, kSlotShow))(n->mark, 0, 1);
     } __except (EXCEPTION_EXECUTE_HANDLER) {
         hook::log("map_legend_focus: fault walking the marks at +0x%X", list_off);
     }
-    return matched;
+    return shown;
 }
 
-int count_marks(void* map, unsigned list_off, unsigned va_mob, const std::set<unsigned>& mobs) {
-    int matched = 0;
+void log_marks(void* map, unsigned list_off, unsigned va_quest, unsigned va_mob) {
     __try {
         for (Node* n = *(Node**)((char*)map + list_off); n; n = n->next)
-            if (n->mark && mobs.count(((U16Fn)hook::rebase(va_mob))(n->mark, 0))) matched++;
+            if (n->mark)
+                hook::log("  mark %s: quest %u mob %u", list_off == kMapAreaMarks ? "area" : "label",
+                          (unsigned)((U16Fn)hook::rebase(va_quest))(n->mark, 0), (unsigned)((U16Fn)hook::rebase(va_mob))(n->mark, 0));
     } __except (EXCEPTION_EXECUTE_HANDLER) {
     }
-    return matched;
+}
+
+unsigned quest_of(unsigned n) {
+    auto it = g_heading_quest.find(n);
+    return it == g_heading_quest.end() ? 0u : it->second;
 }
 
 unsigned read_u32(void* p, unsigned off) {
@@ -155,30 +207,46 @@ bool on_process(pgwin::Message& m) {
     unsigned top = read_u32(list, kListTop);
     unsigned row = (unsigned)m.lparam;
     hook::log("legend row %u clicked (list top %u, %u rows)", row, top, rows);
-    for (unsigned i = 0; i < rows; i++)
-        hook::log("  row %u: %s %u", i, data[i] > kHeading ? "quest heading" : "mob", data[i] > kHeading ? data[i] - kHeading - 1 : data[i]);
+    for (unsigned i = 0; i < rows; i++) {
+        if (data[i] >= kHeading)
+            hook::log("  row %u: quest heading %u = quest %u", i, data[i] - kHeading, quest_of(data[i] - kHeading));
+        else if (data[i])
+            hook::log("  row %u: mob %u", i, data[i]);
+        else
+            hook::log("  row %u: spacer", i);
+    }
     if (row >= rows) {
-        hook::log("  row %u is past the list - every mark left shown", row);
+        hook::log("  row %u is past the list - marks left as they are", row);
+        return false;
+    }
+    if (data[row] == 0) {
+        hook::log("  row %u is a spacer - marks left as they are", row);
         return false;
     }
 
-    std::set<unsigned> mobs;
-    if (data[row] <= kHeading) {
-        mobs.insert(data[row]);
-    } else {
-        for (unsigned i = row + 1; i < rows && data[i] <= kHeading; i++) mobs.insert(data[i]);
+    // the quest: the clicked heading, or the heading above the clicked mob line
+    unsigned h = row;
+    while (h > 0 && data[h] < kHeading) h--;
+    Pick p;
+    p.quest = data[h] >= kHeading ? quest_of(data[h] - kHeading) : 0;
+    if (data[row] < kHeading) {
+        p.mobs.insert(data[row]);
+    } else if (!p.quest) {
+        for (unsigned i = row + 1; i < rows && data[i] && data[i] < kHeading; i++) p.mobs.insert(data[i]);
     }
-    int areas = count_marks(map, kMapAreaMarks, kVaAreaMob, mobs);
-    bool all = areas == 0;
-    show_marks(map, kMapAreaMarks, kVaAreaQuest, kVaAreaMob, mobs, all, all);
-    int labels = show_marks(map, kMapLabelMarks, kVaLabelQuest, kVaLabelMob, mobs, all, all);
+    int areas = show_marks(map, kMapAreaMarks, kVaAreaQuest, kVaAreaMob, p);
+    int labels = show_marks(map, kMapLabelMarks, kVaLabelQuest, kVaLabelMob, p);
     clear_byte(list, kListDirty);
-    if (all)
-        hook::log("  row %u (%s): its %u mob(s) have no mark on this map - every mark left shown (marks listed above)", row,
-                  data[row] > kHeading ? "quest heading" : "mob line", (unsigned)mobs.size());
-    else
-        hook::log("  row %u (%s): %d circle(s) and %d label(s) of %u mob(s) shown, the rest hidden", row,
-                  data[row] > kHeading ? "quest heading" : "mob line", areas, labels, (unsigned)mobs.size());
+    const char* what = data[row] >= kHeading ? "quest heading" : "mob line";
+    if (!areas && !labels) {
+        hook::log("  row %u (%s): quest %u%s has no mark on this map - every mark hidden (marks below)", row, what, p.quest,
+                  p.quest ? "" : " (unknown: the heading record is not in)");
+        log_marks(map, kMapAreaMarks, kVaAreaQuest, kVaAreaMob);
+        log_marks(map, kMapLabelMarks, kVaLabelQuest, kVaLabelMob);
+    } else {
+        hook::log("  row %u (%s): quest %u, %s: %d circle(s) and %d label(s) shown, the rest hidden", row, what, p.quest,
+                  p.mobs.empty() ? "every mob" : "one mob", areas, labels);
+    }
     return false;
 }
 
@@ -188,6 +256,17 @@ HOOK_PLUGIN("map_legend_focus") {
     if (const char* m = caddr::missing({caddr::kFullMapAddQuestHelper, caddr::kMobAreaMarkMob, caddr::kMobAreaMarkQuest, caddr::kPgWinPostMsg, caddr::kPgWinProcessMsg, caddr::kQuestHelperMarkMob, caddr::kQuestHelperMarkQuest, caddr::kSlideListGetItemData, caddr::kWinMgrIsIn})) {
         hook::log("map_legend_focus: %s - not hooked", m);
         return;
+    }
+    const unsigned char* site = (const unsigned char*)hook::rebase(kVaHeading);
+    if (caddr::missing({caddr::kMapLegendHeading}) || std::memcmp(site, kHeadingSite, sizeof kHeadingSite)) {
+        hook::log("map_legend_focus: the legend builder's heading numbering is not the expected code - clicks pick by mob only");
+    } else {
+        g_heading_cont = (void*)(site + 6);
+        unsigned char jmp[6] = {0xE9, 0, 0, 0, 0, 0x90};
+        int rel = (int)((unsigned char*)&heading_site - (site + 5));
+        std::memcpy(jmp + 1, &rel, 4);
+        bool ok = hook::write_code((void*)site, jmp, sizeof jmp);
+        hook::log("map_legend_focus: legend headings -> quests recorded at %p%s", site, ok ? "" : " - WRITE FAILED");
     }
     pgwin::on_process(on_process);
     pgwin::install();

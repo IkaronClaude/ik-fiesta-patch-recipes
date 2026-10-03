@@ -93,6 +93,12 @@
    "fwd": "668B812A010000C3CCCCCCCCCCCCCCCC558BEC8B",
    "back": "00CCCCCCCCCCCCCC668B8128010000C3CCCCCCCCCCCCCCCC"
   },
+  "MapLegendHeading": {
+   "va": "0x0061180C",
+   "kind": "code",
+   "fwd": "8B8D2CFFFFFF8D81FFFF00004150898D2CFFFFFF",
+   "back": "00006A0068FF00000068FF00000057E8????????"
+  },
   "MapMarkSite": {
    "va": "0x0061076E",
    "kind": "code",

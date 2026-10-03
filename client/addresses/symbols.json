@@ -104,6 +104,13 @@
       "note": "QuestHelperMarkWin, thiscall -> u16"
     },
     {
+      "name": "MapLegendHeading",
+      "va": "0x0061180C",
+      "kind": "code",
+      "use": "map_legend_focus",
+      "note": "the legend builder (FullMapWin quest list) numbering a quest heading: mov ecx,[ebp-0xD4] (6 bytes, replaced); the quest pointer is [ebp-0xAC], the heading's row value 0xFFFF + [ebp-0xD4]"
+    },
+    {
       "name": "MapMarkSite",
       "va": "0x0061076E",
       "kind": "code",

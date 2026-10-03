@@ -1,5 +1,5 @@
 {
- "exe": "Z:/ClientOfficialUS/Fiesta.exe",
+ "exe": "Z:/Client2026patched/Fiesta.exe",
  "version": "10.6.4",
  "stamp": "6AA04F02",
  "date": "2026-09-08",
@@ -18,6 +18,7 @@
   "MobAreaMarkMob": "0x00663EB0",
   "QuestHelperMarkQuest": "0x00664190",
   "QuestHelperMarkMob": "0x006641A0",
+  "MapLegendHeading": "0x0061180C",
   "MapMarkSite": "0x0061076E",
   "MapMarkLabelPath": "0x00610782",
   "MapMarkLabelCont": "0x00610788",
