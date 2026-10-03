@@ -263,6 +263,9 @@ void rules(const std::string& table, Row& r) {
         auto inx = r.find("InxName"), us = r.find("ItemUseSkill");
         if (inx != r.end() && us != r.end() && inx->second.s.find("QExpBoost") != std::string::npos && us->second.s == "-")
             us->second.s = "UseSkill";                            // the Quest EXP Booster needs a use-skill on 2016
+        if (get(r, "Class") >= 39) set(r, "Class", 0);            // 2026 class 39 (tickets / keys) has no 2016 class
+                                                                  // (MAX_ITEMCLASSENUM 39): its creation failed in the DB
+                                                                  // (p_Item_Create out of range) - 2016 tickets are class 0
     } else if (table == "mobinfo") {
         auto nm = r.find("Name");                                 // the 2026 client names mobs by a MobLoca id
         if (nm != r.end() && !nm->second.str) {
