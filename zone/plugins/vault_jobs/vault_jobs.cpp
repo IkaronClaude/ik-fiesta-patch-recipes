@@ -18,19 +18,28 @@
 //
 //   * a row whose ChrClass is kJobBase + class id (101..127, the ClassName ids) passes only when the player's
 //     CURRENT class (ShinePlayer::so_GetClass 0x5598C0) is that class;
-//   * a vault that has such rows but none for the player's current class is REFUSED as a whole (the operator's
-//     rule: a vault with job items opens only once the character has the job) - the free-slot check reports 0 for
-//     this one call, so the zone takes its own "fail" path and nothing is made or consumed, and the error becomes
+//   * a vault that has such rows is REFUSED as a whole to a character who has none of the HIGH JOBS (the operator's
+//     rule: a vault with job items opens only once the character has a job; 2026-10-03: "if there are ANY high-class
+//     requirements for any class, we allow opening if we are ANY high class, even if our class does not have an item
+//     for it in it"). The high jobs are listed in ../9Data/Shine/VaultJobs.txt (written by Fiesta2026on2016
+//     migrations-rebalance/0009: every job that has job rows in some vault); without that file only a character
+//     whose own job has rows in THIS vault may open it (the rule before). A refusal: the free-slot check reports 0
+//     for this one call, so the zone takes its own "fail" path and nothing is made or consumed, and the error becomes
 //     0x709, which the 2026 client shows as "Cannot use due to the Class Requirement." (its GetErrMsg 0x4BDBB0).
 // Every other row goes through the stock gate unchanged.
 #include <zonehook.h>
 #include <zone_functions.h>
+
+#include <cstdio>
 
 namespace {
 
 const int kJobBase = 100;                         // ChrClass kJobBase + class id = that one job
 const int kJobLast = kJobBase + 127;
 const unsigned short kErrClass = 0x709;            // "Cannot use due to the Class Requirement." (2026 client)
+const char* kHighJobs = "../9Data/Shine/VaultJobs.txt";
+bool g_high[256] = {};                             // class id -> a high job
+bool g_have_high = false;                          // the list was read
 
 struct Open {                                      // the vault being opened on this thread
     void* player = nullptr;
@@ -63,7 +72,8 @@ bool __cdecl check_impl(int row, unsigned char base) {
 
 int __fastcall empty_impl(void* player, void*) {
     typedef int(__fastcall * Orig)(void*, void*);
-    if (t_open.player == player && t_open.job_rows && !t_open.job_match) {
+    if (t_open.player == player && t_open.job_rows && !t_open.job_match &&
+        !(g_have_high && g_high[player_class(player)])) {
         t_open.refused = true;
         return 0;                                  // the zone's own "not enough room" fail: nothing is made
     }
@@ -78,9 +88,10 @@ unsigned char __fastcall make_impl(void* player, void*, void* vault, unsigned sh
     unsigned char ok = ((Orig)g_make.trampoline)(player, 0, vault, err);
     if (t_open.refused) {
         if (err) *err = kErrClass;
-        zone::log("vault refused: class %u has no job among the vault's job rows", player_class(player));
+        zone::log("vault refused: class %u is not a high job", player_class(player));
     } else if (t_open.job_rows) {
-        zone::log("vault opened by class %u (job rows: matched)", player_class(player));
+        zone::log("vault opened by class %u (job rows: %s)", player_class(player),
+                  t_open.job_match ? "its own" : "none for it - a high job, common rows only");
     }
     t_open = saved;
     return ok;
@@ -91,7 +102,28 @@ void __declspec(naked) empty_thunk() { __asm { jmp empty_impl } }
 
 }  // namespace
 
+void load_high_jobs() {
+    FILE* f = std::fopen(kHighJobs, "r");
+    if (!f) {
+        zone::log("no %s - only a job with rows in the vault may open it", kHighJobs);
+        return;
+    }
+    char line[128];
+    int n = 0;
+    while (std::fgets(line, sizeof line, f)) {
+        unsigned id = 0;
+        if (line[0] != '#' && std::sscanf(line, "%u", &id) == 1 && id < 256) {
+            g_high[id] = true;
+            n++;
+        }
+    }
+    std::fclose(f);
+    g_have_high = n > 0;
+    zone::log("high jobs: %d (any of them opens a vault with job rows)", n);
+}
+
 ZONEHOOK_PLUGIN("vault_jobs") {
+    load_high_jobs();
     zone::hook_function("ShinePlayer::sp_MysteryVaultMakeItem",
                         (void*)zone::fn::ShineObjectClass__ShinePlayer__sp_MysteryVaultMakeItem(),
                         (void*)make_thunk, &g_make);
