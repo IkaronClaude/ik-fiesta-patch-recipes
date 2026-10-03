@@ -17,6 +17,7 @@
 //   are untouched (every mob keeps its circles), and a mob whose area is different still gets its label there. The
 //   set of (quest, x, y) is cleared at every AddQuestHelper call. All sites are byte-checked first; a mismatch = stock.
 #include <hook_core.h>
+#include <client_addrs.h>
 
 #include <cstring>
 #include <set>
@@ -24,13 +25,15 @@
 
 namespace {
 
-const unsigned kVaAddQuestHelper = 0x00610610u;
-const unsigned kVaLabelPath = 0x00610782u;      // mov eax,[ebp-0x2C]; mov [ebp-0x30],esi   (6 bytes, replaced)
-const unsigned kVaLabelCont = 0x00610788u;      // push [eax+0x310] ... QuestHelperMarkWin::CreateWin
-const unsigned kVaAreasOnly = 0x00610959u;      // the stock skip target: the area circle only
-// 0x61076E..0x610788: the quest / mob test and the label path's first two instructions
+const unsigned kVaAddQuestHelper = caddr::va(caddr::kFullMapAddQuestHelper);
+const unsigned kVaLabelPath = caddr::va(caddr::kMapMarkLabelPath);      // mov eax,[ebp-0x2C]; mov [ebp-0x30],esi   (6 bytes, replaced)
+const unsigned kVaLabelCont = caddr::va(caddr::kMapMarkLabelCont);      // push [eax+0x310] ... QuestHelperMarkWin::CreateWin
+const unsigned kVaAreasOnly = caddr::va(caddr::kMapMarkAreasOnly);      // the stock skip target: the area circle only
+// MapMarkSite..MapMarkLabelCont: the quest / mob test and the label path's first two instructions; the je rel32
+// (bytes 16..19) goes to MapMarkAreasOnly
 const unsigned char kSite[] = {0x66, 0x3B, 0x08, 0x75, 0x0F, 0x8B, 0x45, 0xC8, 0x89, 0x75, 0xD0, 0x66, 0x3B,
-                               0x06, 0x0F, 0x84, 0xD7, 0x01, 0x00, 0x00, 0x8B, 0x45, 0xD4, 0x89, 0x75, 0xD0};
+                               0x06, 0x0F, 0x84, 0x00, 0x00, 0x00, 0x00, 0x8B, 0x45, 0xD4, 0x89, 0x75, 0xD0};
+const int kSiteJeRel = 16;
 
 hook::Detour g_aqh;
 std::set<std::tuple<unsigned, unsigned, unsigned>> g_seen;   // (quest, x bits, y bits) labelled in this build
@@ -85,8 +88,15 @@ void __fastcall add_quest_helper(void* map, void* edx) {
 }  // namespace
 
 HOOK_PLUGIN("map_mark_dedupe") {
-    const unsigned char* site = (const unsigned char*)hook::rebase(0x0061076Eu);
-    if (std::memcmp(site, kSite, sizeof kSite)) {
+    if (const char* m = caddr::missing({caddr::kMapMarkSite, caddr::kFullMapAddQuestHelper, caddr::kMapMarkLabelPath,
+                                        caddr::kMapMarkLabelCont, caddr::kMapMarkAreasOnly})) {
+        hook::log("map_mark_dedupe: %s - not hooked", m);
+        return;
+    }
+    const unsigned char* site = (const unsigned char*)hook::rebase(caddr::va(caddr::kMapMarkSite));
+    const int je_end = kSiteJeRel + 4;
+    if (std::memcmp(site, kSite, kSiteJeRel) || std::memcmp(site + je_end, kSite + je_end, sizeof kSite - je_end) ||
+        site + je_end + *(const int*)(site + kSiteJeRel) != (const unsigned char*)hook::rebase(kVaAreasOnly)) {
         hook::log("map_mark_dedupe: AddQuestHelper's label test is not the expected code - stock labels");
         return;
     }

@@ -16,16 +16,18 @@
 //   The post at 0x58667C is made only when [[esi+0x304]+0x699] is still 0, i.e. a pickup pet has just appeared (the stock
 //   convenience: equipping your first pickup pet turns pickup on). With one already worn, the player's own setting stays.
 #include <hook_core.h>
+#include <client_addrs.h>
 
 #include <cstring>
 
 namespace {
 
-const unsigned kVaSite = 0x00586678u;           // test bl,bl; je; push 0; push 1; push 0xFD; mov ecx,esi; call; jmp
-const unsigned kVaPost = 0x00874AE0u;           // the window's post-message call (thiscall, 3 args)
-const unsigned kVaAfter = 0x005866A7u;          // mov eax,[esi+0x304] - where the stock post path continues
+const unsigned kVaSite = caddr::va(caddr::kMinimonPickupSite);           // test bl,bl; je; push 0; push 1; push 0xFD; mov ecx,esi; call; jmp
+const unsigned kVaPost = caddr::va(caddr::kWindowPostMessage);           // the window's post-message call (thiscall, 3 args)
+const unsigned kVaAfter = caddr::va(caddr::kMinimonPickupAfter);          // mov eax,[esi+0x304] - where the stock post path continues
 const unsigned char kSite[] = {0x84, 0xDB, 0x74, 0x12, 0x6A, 0x00, 0x6A, 0x01, 0x68, 0xFD, 0x00, 0x00, 0x00,
-                               0x8B, 0xCE, 0xE8, 0x54, 0xE4, 0x2E, 0x00, 0xEB, 0x19};
+                               0x8B, 0xCE, 0xE8, 0x00, 0x00, 0x00, 0x00, 0xEB, 0x19};   // call rel32 (16..19): to WindowPostMessage
+const int kSiteCallRel = 16;
 const unsigned kOffWin = 0x304;
 const unsigned kOffHasPickup = 0x699;
 
@@ -56,9 +58,15 @@ __declspec(naked) void post_if_new() {
 }  // namespace
 
 HOOK_PLUGIN("minimon_pickup_keep") {
+    if (const char* m = caddr::missing({caddr::kMinimonPickupSite, caddr::kWindowPostMessage, caddr::kMinimonPickupAfter})) {
+        hook::log("minimon_pickup_keep: %s - not hooked", m);
+        return;
+    }
     unsigned char* site = (unsigned char*)hook::rebase(kVaSite);
-    if (std::memcmp(site, kSite, sizeof kSite)) {
-        hook::log("minimon_pickup_keep: the pet refresh at 0x586678 is not the expected code - stock behaviour");
+    const int call_end = kSiteCallRel + 4;
+    if (std::memcmp(site, kSite, kSiteCallRel) || std::memcmp(site + call_end, kSite + call_end, sizeof kSite - call_end) ||
+        site + call_end + *(const int*)(site + kSiteCallRel) != (unsigned char*)hook::rebase(kVaPost)) {
+        hook::log("minimon_pickup_keep: the pet refresh is not the expected code - stock behaviour");
         return;
     }
     g_post = hook::rebase(kVaPost);

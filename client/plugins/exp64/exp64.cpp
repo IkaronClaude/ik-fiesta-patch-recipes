@@ -18,16 +18,17 @@
 //     of the 0 the stock code pushes - so the chat line shows the full amount.
 // A packet with high == 0 (every kill, every stock-sized reward) passes through untouched.
 #include <hook_core.h>
+#include <client_addrs.h>
 
 #include <mutex>
 #include <unordered_map>
 
 namespace {
 
-const unsigned kVaCtor = 0x0073F050u;       // EXPGAIN object ctor, thiscall(this, a1, payload), ret 8
-const unsigned kVaHandler = 0x0073F0E0u;    // its handler, thiscall(this), ret
-const unsigned kVaFormat = 0x00796200u;     // cdecl (std::string* out, u32 low, u32 high)
-const unsigned kVaExpTotal = 0x00C1BB08u;   // the object 0x7949E0 adds into: u64 total at +0x192
+const unsigned kVaCtor = caddr::va(caddr::kExpGainCtor);       // EXPGAIN object ctor, thiscall(this, a1, payload), ret 8
+const unsigned kVaHandler = caddr::va(caddr::kExpGainHandler);    // its handler, thiscall(this), ret
+const unsigned kVaFormat = caddr::va(caddr::kFormatExp64);     // cdecl (std::string* out, u32 low, u32 high)
+const unsigned kVaExpTotal = caddr::va(caddr::kExpTotalObject);   // the object 0x7949E0 adds into: u64 total at +0x192
 const unsigned kTotalHigh = 0x196;
 const unsigned kPayloadHigh = 6;            // {u32 low, u16 handle, u32 high}
 
@@ -78,6 +79,10 @@ void __declspec(naked) handler_thunk() { __asm { jmp handler_impl } }
 }  // namespace
 
 HOOK_PLUGIN("exp64") {
+    if (const char* m = caddr::missing({caddr::kExpGainCtor, caddr::kExpGainHandler, caddr::kExpTotalObject, caddr::kFormatExp64})) {
+        hook::log("exp64: %s - not hooked", m);
+        return;
+    }
     hook::hook_function("EXPGAIN ctor 0x73F050 (keep the high dword)", hook::rebase(kVaCtor), (void*)ctor_thunk, &g_ctor);
     hook::hook_function("EXPGAIN handler 0x73F0E0 (add the high dword)", hook::rebase(kVaHandler), (void*)handler_thunk, &g_handler);
     hook::hook_function("number formatter 0x796200 (64-bit EXP line)", hook::rebase(kVaFormat), (void*)format_impl, &g_format);

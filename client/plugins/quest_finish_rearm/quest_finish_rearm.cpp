@@ -18,6 +18,7 @@
 // 2026 US Fiesta.exe: 0x7EB840 returns the quest manager (UpdateQuest's own `call 0x7eb840` at 0x7302C2),
 // 0x8FF590 = its GetNewQuestStatus(WORD id), thiscall (UpdateQuest's call at 0x73033F, then `cmp eax, 8`).
 #include <hook_core.h>
+#include <client_addrs.h>
 
 #include <windows.h>
 
@@ -25,9 +26,9 @@
 
 namespace {
 
-const unsigned kVaUpdateQuest = 0x00730250u;
-const unsigned kVaGetQuestMgr = 0x007EB840u;
-const unsigned kVaGetStatus = 0x008FF590u;
+const unsigned kVaUpdateQuest = caddr::va(caddr::kQuestFinishUpdate);
+const unsigned kVaGetQuestMgr = caddr::va(caddr::kGetQuestMgr);
+const unsigned kVaGetStatus = caddr::va(caddr::kQuestGetStatus);
 const unsigned kOffShownBegin = 0x174, kOffShownEnd = 0x178;
 const unsigned kOffDisplayedBegin = 0x168, kOffDisplayedEnd = 0x16C;
 const int kCompletable = 8;
@@ -103,9 +104,13 @@ void __fastcall update_impl(void* self, void* /*edx*/) {
 }  // namespace
 
 HOOK_PLUGIN("quest_finish_rearm") {
+    if (const char* m = caddr::missing({caddr::kGetQuestMgr, caddr::kQuestFinishUpdate, caddr::kQuestGetStatus})) {
+        hook::log("quest_finish_rearm: %s - not hooked", m);
+        return;
+    }
     unsigned char* p = (unsigned char*)hook::rebase(kVaUpdateQuest);
     if (std::memcmp(p, kStock, sizeof kStock) != 0) {
-        hook::log("quest_finish_rearm: unexpected bytes at QuestFinishWin::UpdateQuest 0x730250 - NOT hooked");
+        hook::log("quest_finish_rearm: unexpected bytes at QuestFinishWin::UpdateQuest 0x%X - NOT hooked", kVaUpdateQuest);
         return;
     }
     hook::hook_function("QuestFinishWin::UpdateQuest 0x730250 (re-arm repeatables)", p, (void*)update_impl, &g_update);

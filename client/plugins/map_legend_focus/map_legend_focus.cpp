@@ -38,10 +38,10 @@
 
 namespace {
 
-const unsigned kVaAddQuestHelper = 0x00610610u;  // FullMapWin::AddQuestHelper(), thiscall
-const unsigned kVaGetItemData = 0x005255C0u;     // SlideListWin item data (index, unsigned* out) -> bool, thiscall
-const unsigned kVaAreaQuest = 0x00663EA0u, kVaAreaMob = 0x00663EB0u;     // MobAreaMarkWin, thiscall -> u16
-const unsigned kVaLabelQuest = 0x00664190u, kVaLabelMob = 0x006641A0u;   // QuestHelperMarkWin, thiscall -> u16
+const unsigned kVaAddQuestHelper = caddr::va(caddr::kFullMapAddQuestHelper);  // FullMapWin::AddQuestHelper(), thiscall
+const unsigned kVaGetItemData = caddr::va(caddr::kSlideListGetItemData);     // SlideListWin item data (index, unsigned* out) -> bool, thiscall
+const unsigned kVaAreaQuest = caddr::va(caddr::kMobAreaMarkQuest), kVaAreaMob = caddr::va(caddr::kMobAreaMarkMob);     // MobAreaMarkWin, thiscall -> u16
+const unsigned kVaLabelQuest = caddr::va(caddr::kQuestHelperMarkQuest), kVaLabelMob = caddr::va(caddr::kQuestHelperMarkMob);   // QuestHelperMarkWin, thiscall -> u16
 const unsigned kMapQuestList = 0x54C;           // FullMapWin -> its quest legend SlideListWin
 const unsigned kMapAreaMarks = 0x334, kMapLabelMarks = 0x5C8;   // FullMapWin -> list nodes {next, prev, mark}
 const unsigned kListTop = 0x150;                // SlideListWin: the first item shown (scroll offset)
@@ -185,6 +185,10 @@ bool on_process(pgwin::Message& m) {
 }  // namespace
 
 HOOK_PLUGIN("map_legend_focus") {
+    if (const char* m = caddr::missing({caddr::kFullMapAddQuestHelper, caddr::kMobAreaMarkMob, caddr::kMobAreaMarkQuest, caddr::kPgWinPostMsg, caddr::kPgWinProcessMsg, caddr::kQuestHelperMarkMob, caddr::kQuestHelperMarkQuest, caddr::kSlideListGetItemData, caddr::kWinMgrIsIn})) {
+        hook::log("map_legend_focus: %s - not hooked", m);
+        return;
+    }
     pgwin::on_process(on_process);
     pgwin::install();
 }

@@ -20,16 +20,17 @@
 //   upgrades - the slots at the level being replaced. The handler redraws the bars (0x57E2D0) during that call, so
 //   the plugin redraws them once more after putting the slots back. Nothing else about the bar changes.
 #include <hook_core.h>
+#include <client_addrs.h>
 
 #include <cstdlib>
 #include <cstring>
 
 namespace {
 
-const unsigned kVaLearn = 0x005AD110u;     // LEARNSUC handler, thiscall(this, a1, payload), ret 8
-const unsigned kVaSkillTable = 0x00CE4F30u; // ActiveSkill table object*: vtable+0x10 = has(id), +0xC4 record*[], +0xC8 max id
-const unsigned kVaSlots = 0x00C1750Cu;     // void* slot[100]
-const unsigned kVaRedraw = 0x0057E2D0u;    // thiscall(same this as the handler): redraw the visible quick bars
+const unsigned kVaLearn = caddr::va(caddr::kSkillLearnHandler);     // LEARNSUC handler, thiscall(this, a1, payload), ret 8
+const unsigned kVaSkillTable = caddr::va(caddr::kActiveSkillTable); // ActiveSkill table object*: vtable+0x10 = has(id), +0xC4 record*[], +0xC8 max id
+const unsigned kVaSlots = caddr::va(caddr::kQuickSlots);     // void* slot[100]
+const unsigned kVaRedraw = caddr::va(caddr::kQuickBarRedraw);    // thiscall(same this as the handler): redraw the visible quick bars
 const int kSlots = 100, kSkillType = 1;
 const unsigned kSlotSkillId = 8, kRecordName = 2, kTableRecords = 0xC4, kTableMaxId = 0xC8;
 
@@ -102,6 +103,10 @@ void __declspec(naked) learn_thunk() { __asm { jmp learn_impl } }
 }  // namespace
 
 HOOK_PLUGIN("skillbar_keep") {
+    if (const char* m = caddr::missing({caddr::kActiveSkillTable, caddr::kQuickBarRedraw, caddr::kQuickSlots, caddr::kSkillLearnHandler})) {
+        hook::log("skillbar_keep: %s - not hooked", m);
+        return;
+    }
     hook::hook_function("skill learn 0x5AD110 (bar keeps deliberately lower levels)", hook::rebase(kVaLearn),
                         (void*)learn_thunk, &g_learn);
 }

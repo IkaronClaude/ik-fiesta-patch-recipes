@@ -34,14 +34,15 @@
 // build (Fiesta2026on2016 tools/build_variant.py): every quest whose START script runs a SCENARIO (job changes, the
 // promotion / Over Time and Space / Prelude War instance entries) - data-derived, no list in here. No .ini = none.
 #include <hook_core.h>
+#include <client_addrs.h>
 
 #include <cstring>
 
 namespace {
 
-const unsigned kVaHandler = 0x007275C0u;   // NpcDialogWin input handler, thiscall(this, arg), ret 4
-const unsigned kVaLookup = 0x005C5550u;    // cdecl quest record lookup (u16 quest id) -> record*
-const unsigned kVaAttr = 0x0097FAD0u;      // thiscall control->attribute(const char* name) -> attr*
+const unsigned kVaHandler = caddr::va(caddr::kNpcDialogHandler);   // NpcDialogWin input handler, thiscall(this, arg), ret 4
+const unsigned kVaLookup = caddr::va(caddr::kQuestRecordLookup);    // cdecl quest record lookup (u16 quest id) -> record*
+const unsigned kVaAttr = caddr::va(caddr::kControlAttribute);      // thiscall control->attribute(const char* name) -> attr*
 const unsigned kControls = 0x1BC, kCount = 0x1A0, kFirst = 0x1A4, kAttrValue = 0xC, kType = 2;
 const int kEpic = 2, kMaxAutoChoices = 2;
 const unsigned kQuestId = 0x1E0;                          // NpcDialogWin -> u16 quest id (the handler's lookup argument)
@@ -139,6 +140,10 @@ void load_guarded() {
 }
 
 HOOK_PLUGIN("dialog_advance") {
+    if (const char* m = caddr::missing({caddr::kControlAttribute, caddr::kNpcDialogHandler, caddr::kQuestRecordLookup})) {
+        hook::log("dialog_advance: %s - not hooked", m);
+        return;
+    }
     load_guarded();
     hook::hook_function("NpcDialogWin input handler 0x7275C0", hook::rebase(kVaHandler), (void*)handler_thunk, &g_handler);
     hook::hook_function("quest record lookup 0x5C5550", hook::rebase(kVaLookup), (void*)lookup_impl, &g_lookup);

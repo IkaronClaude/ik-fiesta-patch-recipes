@@ -30,6 +30,7 @@
 // Our three are added to those passes (stored after RegistereWinPostion and before TerminateWindow, restored after
 // SetWindowsPosOption); they are found in the GameFrameWork object by RTTI.
 #include <hook_core.h>
+#include <client_addrs.h>
 #include <pgwin_msg.h>
 
 #include <windows.h>
@@ -43,12 +44,12 @@ namespace {
 const char* const kWindows[] = {"QuestFinishWin", "QuestNewsWin", "MysteryVaultWin"};
 const int kNumWindows = sizeof kWindows / sizeof kWindows[0];
 
-const unsigned kVaRegisterPos = 0x007D8A60u;
-const unsigned kVaSetPos = 0x007D8C30u;
-const unsigned kVaFwRegister = 0x00569F70u;
-const unsigned kVaFwRestore = 0x0056A2D0u;
-const unsigned kVaFwTerminate = 0x0056F4F0u;
-const unsigned kVaScreenW = 0x00C321C0u, kVaScreenH = 0x00C321C4u;
+const unsigned kVaRegisterPos = caddr::va(caddr::kWinRegisterPos);
+const unsigned kVaSetPos = caddr::va(caddr::kWinSetPos);
+const unsigned kVaFwRegister = caddr::va(caddr::kFwRegister);
+const unsigned kVaFwRestore = caddr::va(caddr::kFwRestore);
+const unsigned kVaFwTerminate = caddr::va(caddr::kFwTerminate);
+const unsigned kVaScreenW = caddr::va(caddr::kScreenW), kVaScreenH = caddr::va(caddr::kScreenH);
 const unsigned kScanFrom = 0x100, kScanTo = 0x1400;     // GameFrameWork's window-pointer fields
 const int kSlotWidth = 0x90 / 4, kSlotHeight = 0x94 / 4, kSlotX = 0xA4 / 4, kSlotY = 0xA8 / 4, kSlotMove = 0x134 / 4;
 const int kDragPixels = 4;                              // UI units the cursor moves before it is a drag, not a click
@@ -63,9 +64,9 @@ const DWORD kSwallowMs = 400;                           // after a drop: the cli
 // 0x8FF5C0). At most every kQuestCheckMs, on a UI message, each quest's COMPUTED status (GetNewQuestStatus(id) 0x8FF590 -
 // a delivery quest turns 8 when its item is in the bag, the stored byte does not) is folded into a fingerprint; when it
 // changes - an accept, an item arriving, a hand-in - UpdateQuest runs once. Its already-shown list stops repeats.
-const unsigned kVaUpdateQuest = 0x00730250u;
-const unsigned kVaGetQuestMgr = 0x007EB840u;
-const unsigned kVaGetStatus = 0x008FF590u;
+const unsigned kVaUpdateQuest = caddr::va(caddr::kQuestFinishUpdate);
+const unsigned kVaGetQuestMgr = caddr::va(caddr::kGetQuestMgr);
+const unsigned kVaGetStatus = caddr::va(caddr::kQuestGetStatus);
 const unsigned kOffQuestCount = 0x4, kOffQuestList = 0x8, kOffQuestEntries = 0xC, kQuestEntry = 0x25;
 const DWORD kQuestCheckMs = 250;
 
@@ -201,10 +202,10 @@ void check_quests() {
 // kExtraOff: "PPW1" + per popup {u8 present, float x, float y} (fractions of the screen, like the client's own entries).
 // Written by the save (SendNetMsg while 0x571B70 runs), read by either load, applied after SetWindowsPosOption. A future
 // client that grew its blob past 298 bytes would break the marker, and the plugin would then ignore the tail.
-const unsigned kVaSaveWinPos = 0x00571B70u;
-const unsigned kVaSendNetMsg = 0x00890B00u;
-const unsigned kVaLoadA = 0x0055E330u;           // (a, ack), ret 8
-const unsigned kVaLoadB = 0x0055FCC0u;           // (ack), ret 4
+const unsigned kVaSaveWinPos = caddr::va(caddr::kSaveWinPos);
+const unsigned kVaSendNetMsg = caddr::va(caddr::kSendNetMsg);
+const unsigned kVaLoadA = caddr::va(caddr::kWinPosLoadA);           // (a, ack), ret 8
+const unsigned kVaLoadB = caddr::va(caddr::kWinPosLoadB);           // (ack), ret 4
 const unsigned kBlobLen = 0x188, kBlobUsed = 298, kExtraOff = 320;
 const char kMagic[4] = {'P', 'P', 'W', '1'};
 
@@ -413,6 +414,10 @@ void __fastcall fw_terminate_impl(void* self, void* /*edx*/) {
 }  // namespace
 
 HOOK_PLUGIN("popup_windows") {
+    if (const char* m = caddr::missing({caddr::kFwRegister, caddr::kFwRestore, caddr::kFwTerminate, caddr::kGetQuestMgr, caddr::kPgWinPostMsg, caddr::kPgWinProcessMsg, caddr::kQuestFinishUpdate, caddr::kQuestGetStatus, caddr::kSaveWinPos, caddr::kScreenH, caddr::kScreenW, caddr::kSendNetMsg, caddr::kWinMgrIsIn, caddr::kWinPosLoadA, caddr::kWinPosLoadB, caddr::kWinRegisterPos, caddr::kWinSetPos})) {
+        hook::log("popup_windows: %s - not hooked", m);
+        return;
+    }
     hook::hook_function("GameFrameWork::RegistereWinPostion 0x569F70 (+popups)", hook::rebase(kVaFwRegister),
                         (void*)fw_register_impl, &g_fw_register);
     hook::hook_function("GameFrameWork::SetWindowsPosOption 0x56A2D0 (+popups, mouse hook)", hook::rebase(kVaFwRestore),

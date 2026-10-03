@@ -1,0 +1,351 @@
+{
+ "reference": {
+  "version": "10.6.4",
+  "exe": "Z:/ClientOfficialUS/Fiesta.exe"
+ },
+ "stamp": 1788890882,
+ "symbols": {
+  "NpcDialogHandler": {
+   "va": "0x007275C0",
+   "kind": "code",
+   "fwd": "558BEC51568BF183BEBC010000000F84????????",
+   "back": "4DF089B3F0010000B30185C97412F00FC179044F750A85C974068B116A01FF128AC38B4DF464890D00000000595F5E5B8BE55DC20400CCCCCCCCCCCC"
+  },
+  "QuestRecordLookup": {
+   "va": "0x005C5550",
+   "kind": "code",
+   "fwd": null,
+   "back": "350068????????E89FB6350083C40CE97BFFFFFFCCCCCCCCCCCCCCCCCCCCCCCC",
+   "call": "E8????????83C40485C00F84????????FF700CE8????????8BD0C785D8FEFFFF00000000",
+   "anchor": "0x005B42E2"
+  },
+  "ControlAttribute": {
+   "va": "0x0097FAD0",
+   "kind": "code",
+   "fwd": "558BEC51538BC133DB56578945FC8B78144F395D08745A85FF78560F1F4400008B48108D341FD1FE8B0CB1E8????????8B4D088A113A10751A84D274128A51013A5001750E83C10283C00284D275E433C9EB051BC983C90185C974208D46FF0F4EF88D46010F4EC38BD88B45FC3BDF7EAF5F5E33C05B8BE55DC20400",
+   "back": "75DE5F33C05E5DC204005F8BC65E5DC20400CCCCCCCCCCCCCCCCCCCCCCCCCCCC"
+  },
+  "EnhanceWarnJump": {
+   "va": "0x00646A41",
+   "kind": "code",
+   "fwd": "750E8BCFE8????????5B5F5E8BE55DC38B87E402",
+   "back": "87DB0200008A45FC8887DC02000089B7E0020000"
+  },
+  "ExpGainCtor": {
+   "va": "0x0073F050",
+   "kind": "code",
+   "fwd": "558BEC8B4508568BF1B9????????894604C706????????A1????????FF5004897008C700000000008B0D????????8948048B0D????????85C974048901EB05A3????????FF05????????8B4D0CA3????????C7460C00000000C706????????8B018946100FB74104",
+   "back": "09005EC3558BEC668B4110663B45080F94C05DC20400CCCCCCCCCCCCCCCCCCCCCCCCCCCC"
+  },
+  "ExpGainHandler": {
+   "va": "0x0073F0E0",
+   "kind": "code",
+   "fwd": "558BEC6AFF68????????64A1000000005083EC30A1????????33C58945F0535657508D45F464A3000000008BD9895DD4FF7310B9????????",
+   "back": "8946088BC6C7460C030000005E5DC20800CCCCCCCCCCCCCCCCCCCCCCCCCCCCCC"
+  },
+  "FormatExp64": {
+   "va": "0x00796200",
+   "kind": "code",
+   "fwd": "558BEC6AFF68????????64A1000000005083EC48A1????????33C58945F0535657508D45F464A3000000008B7D088B45108B750C897DACC7",
+   "back": "000000000000C681D401000000C3CCCCCCCCCCCCCCCCCCCCCCCCCCCC"
+  },
+  "ExpTotalObject": {
+   "va": "0x00C1BB08",
+   "kind": "data",
+   "anchor": "0x00465BA2",
+   "operand": 1,
+   "fwd": "B9????????E8????????8B4E58894674E8????????8BF089",
+   "refs": 745
+  },
+  "FullMapAddQuestHelper": {
+   "va": "0x00610610",
+   "kind": "code",
+   "fwd": "558BEC6AFF68????????64A1000000005083EC64A1????????33C58945F0535657508D45F464A3000000008BF9897DD4E8????????E8????",
+   "back": "3305003BC7740C85F675E75F32C05E5DC204005FB0015E5DC20400CCCCCCCCCC"
+  },
+  "SlideListGetItemData": {
+   "va": "0x005255C0",
+   "kind": "code",
+   "fwd": "558BEC8B81380100008B91340100002BC28B4D08C1F8033BC8720632C05DC208008B04CA8B088B450C8908B0",
+   "back": "C05DC208008B0CCA8B450C8901B0015DC20800CC"
+  },
+  "MobAreaMarkQuest": {
+   "va": "0x00663EA0",
+   "kind": "code",
+   "fwd": "668B812C010000C3CCCCCCCCCCCCCCCC668B812E",
+   "back": "0C8981340100008991380100005DC20800CCCCCCCCCCCCCC"
+  },
+  "MobAreaMarkMob": {
+   "va": "0x00663EB0",
+   "kind": "code",
+   "fwd": "668B812E010000C3CCCCCCCCCCCCCCCC668B8130",
+   "back": "00CCCCCCCCCCCCCC668B812C010000C3CCCCCCCCCCCCCCCC"
+  },
+  "QuestHelperMarkQuest": {
+   "va": "0x00664190",
+   "kind": "code",
+   "fwd": "668B8128010000C3CCCCCCCCCCCCCCCC668B812A",
+   "back": "0C89812C0100008991300100005DC20800CCCCCCCCCCCCCC"
+  },
+  "QuestHelperMarkMob": {
+   "va": "0x006641A0",
+   "kind": "code",
+   "fwd": "668B812A010000C3CCCCCCCCCCCCCCCC558BEC8B",
+   "back": "00CCCCCCCCCCCCCC668B8128010000C3CCCCCCCCCCCCCCCC"
+  },
+  "MapMarkSite": {
+   "va": "0x0061076E",
+   "kind": "code",
+   "fwd": "663B08750F8B45C88975D0663B060F84????????",
+   "back": "F20F5804C5????????8B07660F5AC0F30F11459C"
+  },
+  "MapMarkLabelPath": {
+   "va": "0x00610782",
+   "kind": "code",
+   "fwd": "8B45D48975D0FFB010030000FFB040020000FFB0",
+   "back": "663B08750F8B45C88975D0663B060F84????????"
+  },
+  "MapMarkLabelCont": {
+   "va": "0x00610788",
+   "kind": "code",
+   "fwd": "FFB010030000FFB040020000FFB0500300006A00",
+   "back": "45C88975D0663B060F84????????8B45D48975D0"
+  },
+  "MapMarkAreasOnly": {
+   "va": "0x00610959",
+   "kind": "code",
+   "fwd": "817DB4C80000008B45D48B884002000073078B45",
+   "back": "1F0F87????????5251E8????????83C4088975D0"
+  },
+  "MasteryRead": {
+   "va": "0x00690D16",
+   "kind": "code",
+   "fwd": "8B84B8860000008945F8FF75E88BB3F801000068",
+   "back": "EB1C56E8????????83C40485C075058945F8EB0A"
+  },
+  "MasteryReadBack": {
+   "va": "0x00690D20",
+   "kind": "code",
+   "fwd": "FF75E88BB3F801000068????????E8????????83",
+   "back": "0485C075058945F8EB0A8B84B8860000008945F8"
+  },
+  "MasteryFormat": {
+   "va": "0x00690D5A",
+   "kind": "code",
+   "fwd": "68????????8BB0E8010000E8????????83C40C8BCF50FFD68B45F48BB304020000660F6E",
+   "back": "50E8????????8BBB00020000FF75F8FF75F48B07"
+  },
+  "MasteryFormatBack": {
+   "va": "0x00690D5F",
+   "kind": "code",
+   "fwd": "8BB0E8010000E8????????83C40C8BCF50FFD68B45F48BB304020000660F6EC0",
+   "back": "FF8BBB00020000FF75F8FF75F48B0768????????"
+  },
+  "MasteryFormatString": {
+   "va": "0x00B31E68",
+   "kind": "data",
+   "anchor": "0x00690D5A",
+   "operand": 1,
+   "fwd": "68????????8BB0E8010000E8????????83C40C8BCF50FFD68B45F48BB304020000660F6E",
+   "refs": 1
+  },
+  "MinimonPickupSite": {
+   "va": "0x00586678",
+   "kind": "code",
+   "fwd": "84DB74126A006A0168FD0000008BCEE8????????",
+   "back": "01750BB00188450BEB07B301EB0A8A450B8A5DFF"
+  },
+  "WindowPostMessage": {
+   "va": "0x00874AE0",
+   "kind": "code",
+   "fwd": "558BEC83EC20A1????????33C58945FC894DE48B45088945F08B4D0C894DF48B",
+   "back": "F400752E8B55F083C22C8955F88B45F88B108B4DF88B4204FFD08945EC8B4DEC8B55088951088B45EC508B4DF8E8????????8BE55DC20400"
+  },
+  "MinimonPickupAfter": {
+   "va": "0x005866A7",
+   "kind": "code",
+   "fwd": "8B86040300008898990600008B8E04030000E8??",
+   "back": "00EB1984C07515680660E9????????EDFF83C4048BCE50E8????????"
+  },
+  "WinRegisterPos": {
+   "va": "0x007D8A60",
+   "kind": "code",
+   "fwd": "558BEC6AFF68????????64A1000000005083EC08535657A1????????33C5508D45F464A3000000008B75088BCE8B06FF90880000",
+   "back": "E55DC3CCCCCCCCCCB001C3CCCCCCCCCCCCCCCCCCCCCCCCCCB001C3CCCCCCCCCCCCCCCCCCCCCCCCCCE9????????CCCCCCCCCCCCCCCCCCCCCC"
+  },
+  "WinSetPos": {
+   "va": "0x007D8C30",
+   "kind": "code",
+   "fwd": "558BEC568B750856E8????????8BC883C40485C9750532C0",
+   "back": "F30F1045F0F30F114008B0018B4DF464890D00000000595F5E5B8BE55DC3CCCCCCCCCCCCCCCCCCCCCCCCCCCC"
+  },
+  "FwRegister": {
+   "va": "0x00569F70",
+   "kind": "code",
+   "fwd": "568BF18B865C02000085C0740950E8????????83",
+   "back": "9A99993E5756FF90EC0000005F5E5B8BE55DC20800CCCCCC"
+  },
+  "FwRestore": {
+   "va": "0x0056A2D0",
+   "kind": "code",
+   "fwd": "558BEC83EC24538BD95657895DEC8B8B7402000085C9741A",
+   "back": "8B86240300005E85C0740750E8????????59C3CCCCCCCCCC"
+  },
+  "FwTerminate": {
+   "va": "0x0056F4F0",
+   "kind": "code",
+   "fwd": "568BF18D8EB0020000E8????????B9????????E8",
+   "back": "8B4DFC33CDE8????????8BE55DC38B4DFC32C05F5E33CD5BE8????????8BE55DC3CCCCCCCCCCCCCC"
+  },
+  "ScreenW": {
+   "va": "0x00C321C0",
+   "kind": "data",
+   "anchor": "0x0045809B",
+   "operand": 2,
+   "fwd": "FF35????????FF90EC0000008B7D88C645CB0185FF0F84??",
+   "refs": 471
+  },
+  "ScreenH": {
+   "va": "0x00C321C4",
+   "kind": "data",
+   "anchor": "0x00458095",
+   "operand": 2,
+   "fwd": "FF35????????FF35????????FF90EC0000008B7D88C645CB0185FF0F84??????",
+   "refs": 443
+  },
+  "QuestFinishUpdate": {
+   "va": "0x00730250",
+   "kind": "code",
+   "fwd": "558BEC6AFF68????????64A1000000005083EC44A1????????33C58945F0535657508D45F464A3000000008BF9A1????????85C0753268A0",
+   "back": "21781C83C10483EA0175ED5F5E5DC20400CCCCCCCCCCCCCCCCCCCCCCCCCCCCCC"
+  },
+  "GetQuestMgr": {
+   "va": "0x007EB840",
+   "kind": "code",
+   "fwd": "558BEC6AFF68????????64A1000000005051A1????????33C5508D45F464A30000000064A12C0000008B0D????????8B0C88A1????????3B81200000007F14B8????????8B4DF464890D00000000598BE55DC368????????E8????????83C404833D????????FF75D6B9????????C745FC000000",
+   "back": "057D0C668B450C6689044D????????5DC20800CCCCCCCCCC"
+  },
+  "QuestGetStatus": {
+   "va": "0x008FF590",
+   "kind": "code",
+   "fwd": "558BEC56FF75088BF1E8????????83C40485C075055E5DC20400508B",
+   "back": "E8????????83C4048946105EC3CCCCCCCCCCCCCC"
+  },
+  "SaveWinPos": {
+   "va": "0x00571B70",
+   "kind": "code",
+   "fwd": "558BEC81EC94010000A1????????33C58945FCA1????????538BD9B9",
+   "back": "8E88090000E84EEE31008B4DFC33CD5EE8????????8BE55DC3CCCCCCCCCCCCCCCCCCCCCCCCCCCCCC"
+  },
+  "SendNetMsg": {
+   "va": "0x00890B00",
+   "kind": "code",
+   "fwd": "558BEC83EC0C894DF88B45F80FB6480885C97505E9??????",
+   "back": "8B4DFCC64108008B55FC8B420C8BE55DC3CCCCCCCCCCCCCCCCCCCCCCCCCCCCCC"
+  },
+  "WinPosLoadA": {
+   "va": "0x0055E330",
+   "kind": "code",
+   "fwd": "558BEC8B450C83EC08C605????????0180380056",
+   "back": "5DC208008B4508C605????????008BE55DC20800CCCCCCCC"
+  },
+  "WinPosLoadB": {
+   "va": "0x0055FCC0",
+   "kind": "code",
+   "fwd": "558BEC8B450883EC08C605????????0180380056",
+   "back": "018BE55DC20400C605????????0032C08BE55DC20400CCCCCCCCCCCC"
+  },
+  "SkillLearnHandler": {
+   "va": "0x005AD110",
+   "kind": "code",
+   "fwd": "538BDC83EC0883E4F883C404558B6B04896C24048BEC6AFF68????????64A100000000505381EC40040000A1????????",
+   "back": "043C01750C0FB646098BCF50E8????????8B45085F5E5DC20800CCCCCCCCCCCCCCCCCCCC"
+  },
+  "ActiveSkillTable": {
+   "va": "0x00CE4F30",
+   "kind": "data",
+   "anchor": "0x005736B3",
+   "operand": 2,
+   "fwd": "8B3D????????85FF742D8B078BCF0FB71B538B40",
+   "refs": 190
+  },
+  "QuickSlots": {
+   "va": "0x00C1750C",
+   "kind": "data",
+   "anchor": "0x00447C53",
+   "operand": 1,
+   "fwd": "68????????E8????????33C0C745FC00000000B9????????",
+   "refs": 52
+  },
+  "QuickBarRedraw": {
+   "va": "0x0057E2D0",
+   "kind": "code",
+   "fwd": "568BF1578B8EC402000080B94E040000007405E8",
+   "back": "4D12008BCEE8????????5B5E5F8BE55DC20800CCCCCCCCCC"
+  },
+  "QuestListSkipA": {
+   "va": "0x007363AD",
+   "kind": "code",
+   "fwd": "7574F6C102746F578D45D881C6DC020000508BCE",
+   "back": "B64D088945F4894DF083F805750D8A4F14F6C120"
+  },
+  "QuestListSkipB": {
+   "va": "0x0073927C",
+   "kind": "code",
+   "fwd": "7525A802742183FA01742583FA0275268BC72B85",
+   "back": "FFFFFF888514FFFFFF8B9520FFFFFF8A4614A820"
+  },
+  "NiShutdown": {
+   "va": "0x009D71B0",
+   "kind": "code",
+   "fwd": "5633F63935????????76170F1F4400008B04B5????????FFD0463B35????????72EEA1????????5E85C07402",
+   "back": "4508A3????????8B450CA3????????5DC3CCCCCCCCCCCCCCCCCCCCCC"
+  },
+  "MapSingleton": {
+   "va": "0x00C54E00",
+   "kind": "data",
+   "anchor": "0x0047068F",
+   "operand": 0,
+   "fwd": "????????8B4DF464890D00000000598BE55DC368????????E8????????83C404833D????????FF75D6B9????????C745FC00000000E8????????68????????E8????????",
+   "refs": 81
+  },
+  "MapSingletonGuard": {
+   "va": "0x00CE1E40",
+   "kind": "data",
+   "anchor": "0x00470681",
+   "operand": 1,
+   "fwd": "A1????????3B81200000007F14B8????????8B4DF464890D00000000598BE55DC368????????E8????????83C404833D????????FF75D6B9????????C745FC00000000E8????????68????????E8????????68??",
+   "refs": 255
+  },
+  "MapSingletonDtor": {
+   "va": "0x007A51F0",
+   "kind": "code",
+   "fwd": "558BEC6AFF68????????64A10000000050535657A1????????33C5508D45F464A3000000008BF98D8F24D00800E8????",
+   "back": "008B87E40300008987E80300008BC78B4DF464890D00000000595F5E8BE55DC3"
+  },
+  "MapSingletonAtexit": {
+   "va": "0x00AEAF90",
+   "kind": "code",
+   "fwd": "B9????????E9????????CCCCCCCCCCCCA1????????85C0744D8B0D????????2BC883E1FC81F90010000072128B50FC83C1232BC283C0FC83F81F772B8BC25150E8????????83C408C705????????00000000C705????????00000000C705????????00000000C3E9????????CCCCCCCC8B0D????????85C9741483C8",
+   "back": "1868????????E8????????C3CCCCCCCCCCCCCCCCCCCCCCCC"
+  },
+  "PgWinPostMsg": {
+   "va": "0x00877A40",
+   "kind": "code",
+   "fwd": "558BEC83EC1C894DF48B450850B9????????E8????????0FB6C885C97506C645FF00EB478B55088955E48B45",
+   "back": "E8????????45FF018A45FF8BE55DC20C00CCCCCCCCCCCCCCCCCCCCCC"
+  },
+  "PgWinProcessMsg": {
+   "va": "0x008784C0",
+   "kind": "code",
+   "fwd": "558BEC83EC28894DFC8B45088945F88B4DF883E9",
+   "back": "??????0075098B4DFC890D????????8BE55DC20400CCCCCCCCCCCCCCCCCCCCCC"
+  },
+  "WinMgrIsIn": {
+   "va": "0x00881DA0",
+   "kind": "code",
+   "fwd": "558BEC6AFF68????????64A1000000005083EC2CA1????????33C5508D45F464A300000000894DE48B45E48378300075",
+   "back": "C085C07404B001EB04EBBD32C08BE55DC3CCCCCCCCCCCCCCCCCCCCCCCCCCCCCC"
+  }
+ }
+}

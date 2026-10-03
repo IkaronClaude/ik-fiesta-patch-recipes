@@ -33,6 +33,7 @@
 #pragma once
 
 #include <hook_core.h>
+#include <client_addrs.h>
 
 #include <windows.h>
 
@@ -41,10 +42,10 @@
 namespace pgwin {
 
 // ---- 2026 US Fiesta.exe (rebased at runtime; the client is ASLR'd) ----
-const unsigned kVaPostMsg = 0x00877A40u;
-const unsigned kVaProcessMsg = 0x008784C0u;
+const unsigned kVaPostMsg = caddr::va(caddr::kPgWinPostMsg);
+const unsigned kVaProcessMsg = caddr::va(caddr::kPgWinProcessMsg);
 const unsigned kVaWinMgr = 0x00D1B810u;
-const unsigned kVaWinMgrIsIn = 0x00881DA0u;
+const unsigned kVaWinMgrIsIn = caddr::va(caddr::kWinMgrIsIn);
 
 enum Msg : unsigned { kClose = 1, kEditNotify = 4, kCommand = 5, kButtonState = 7 };
 enum ButtonPhase : unsigned { kHover = 0, kPress = 1, kRelease = 2 };

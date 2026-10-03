@@ -16,25 +16,30 @@
 //   there, server EnchantAlwaysSucceeds.flag): active only when hooks\enhance_no_warning.ini says [plugin] enabled=1 - the Rebalanced
 //   layer ships it (migrations-rebalance/0023-enhance-no-warning.py).
 #include <hook_core.h>
+#include <client_addrs.h>
 
 #include <cstring>
 
 namespace {
 
-const unsigned kVaWarnJump = 0x00646A41u;
+const unsigned kVaWarnJump = caddr::va(caddr::kEnhanceWarnJump);
 const unsigned char kStock[2] = {0x75, 0x0E};      // jne 0x646a51
 const unsigned char kGoOn[2] = {0x90, 0x90};
 
 }  // namespace
 
 HOOK_PLUGIN("enhance_no_warning") {
+    if (const char* m = caddr::missing({caddr::kEnhanceWarnJump})) {
+        hook::log("enhance_no_warning: %s - not hooked", m);
+        return;
+    }
     if (!hook::ini_opted_in()) {
         hook::log("enhance_no_warning.ini does not say enabled=1 - the protection-stone warning stays (stock)");
         return;
     }
     unsigned char* p = (unsigned char*)hook::rebase(kVaWarnJump);
     if (std::memcmp(p, kStock, sizeof kStock) != 0) {
-        hook::log("unexpected bytes at 0x646A41 (%02X %02X) - NOT patched", p[0], p[1]);
+        hook::log("unexpected bytes at EnhanceWarnJump 0x%X (%02X %02X) - NOT patched", kVaWarnJump, p[0], p[1]);
         return;
     }
     if (hook::write_code(p, kGoOn, sizeof kGoOn))

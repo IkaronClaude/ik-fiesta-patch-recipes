@@ -17,6 +17,7 @@
 //   own start-item test keeps an unheld item's quest out - so a start-item quest shows exactly while its item is held.
 
 #include <hook_core.h>
+#include <client_addrs.h>
 
 #include <cstring>
 
@@ -28,14 +29,18 @@ struct Site {
     const char* where;
 };
 const Site kSites[] = {
-    {0x007363ADu, {0x75, 0x74}, "quest list builder 0x736320"},
-    {0x0073927Cu, {0x75, 0x25}, "quest list builder 0x738FA0"},
+    {caddr::va(caddr::kQuestListSkipA), {0x75, 0x74}, "quest list builder 0x736320"},
+    {caddr::va(caddr::kQuestListSkipB), {0x75, 0x25}, "quest list builder 0x738FA0"},
 };
 const unsigned char kNop2[2] = {0x90, 0x90};
 
 }  // namespace
 
 HOOK_PLUGIN("start_item_quests") {
+    if (const char* m = caddr::missing({caddr::kQuestListSkipA, caddr::kQuestListSkipB})) {
+        hook::log("start_item_quests: %s - not hooked", m);
+        return;
+    }
     for (const Site& s : kSites) {
         unsigned char* p = (unsigned char*)hook::rebase(s.va);
         if (std::memcmp(p, s.stock, 2) != 0) {

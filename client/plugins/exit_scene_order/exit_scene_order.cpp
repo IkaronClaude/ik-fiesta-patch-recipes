@@ -18,15 +18,15 @@
 //   not destroy it a second time. Then NiShutdown runs as stock.
 
 #include <hook_core.h>
+#include <client_addrs.h>
 
 namespace {
 
-const unsigned kVaNiShutdown = 0x009D71B0u;     // push esi / xor esi,esi / cmp [0xD1E568],esi
-const unsigned kVaMapSingleton = 0x00C54E00u;
-const unsigned kVaMapGuard = 0x00CE1E40u;       // MSVC thread-safe static: -1 = constructed
-const unsigned kVaMapDtor = 0x007A51F0u;        // thiscall
-const unsigned kVaMapAtexitThunk = 0x00AEAF90u; // mov ecx,0xC54E00 / jmp 0x7A51F0
-const unsigned char kThunkStock[5] = {0xB9, 0x00, 0x4E, 0xC5, 0x00};
+const unsigned kVaNiShutdown = caddr::va(caddr::kNiShutdown);     // push esi / xor esi,esi / cmp [0xD1E568],esi
+const unsigned kVaMapSingleton = caddr::va(caddr::kMapSingleton);
+const unsigned kVaMapGuard = caddr::va(caddr::kMapSingletonGuard);       // MSVC thread-safe static: -1 = constructed
+const unsigned kVaMapDtor = caddr::va(caddr::kMapSingletonDtor);        // thiscall
+const unsigned kVaMapAtexitThunk = caddr::va(caddr::kMapSingletonAtexit); // mov ecx,MapSingleton / jmp MapSingletonDtor
 const unsigned char kNiShutdownStock[3] = {0x56, 0x33, 0xF6};
 
 hook::Detour g_shutdown;
@@ -60,10 +60,18 @@ void __cdecl ni_shutdown() {
 }  // namespace
 
 HOOK_PLUGIN("exit_scene_order") {
+    if (const char* m = caddr::missing({caddr::kNiShutdown, caddr::kMapSingleton, caddr::kMapSingletonGuard,
+                                        caddr::kMapSingletonDtor, caddr::kMapSingletonAtexit})) {
+        hook::log("exit_scene_order: %s - not hooked", m);
+        return;
+    }
     const unsigned char* thunk = (const unsigned char*)hook::rebase(kVaMapAtexitThunk);
     const unsigned char* shut = (const unsigned char*)hook::rebase(kVaNiShutdown);
-    for (int i = 0; i < 5; i++)
-        if (thunk[i] != kThunkStock[i]) { hook::log("exit_scene_order: atexit thunk is not the expected code - not hooked"); return; }
+    // the thunk is `mov ecx, <the singleton>` (B9 imm32, relocated with the exe) then the jmp to the destructor
+    if (thunk[0] != 0xB9 || *(const unsigned*)(thunk + 1) != (unsigned)(uintptr_t)hook::rebase(kVaMapSingleton)) {
+        hook::log("exit_scene_order: atexit thunk is not the expected code - not hooked");
+        return;
+    }
     for (int i = 0; i < 3; i++)
         if (shut[i] != kNiShutdownStock[i]) { hook::log("exit_scene_order: NiShutdown is not the expected code - not hooked"); return; }
     hook::hook_function("NiShutdown (release the map scene first)", (void*)shut, (void*)ni_shutdown, &g_shutdown);
