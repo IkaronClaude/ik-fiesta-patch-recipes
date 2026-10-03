@@ -99,6 +99,12 @@
    "fwd": "8B8D2CFFFFFF8D81FFFF00004150898D2CFFFFFF",
    "back": "00006A0068FF00000068FF00000057E8????????"
   },
+  "MapMarkLabelNumber": {
+   "va": "0x0061089A",
+   "kind": "code",
+   "fwd": "FFB488540300006A006A00E8????????8BF083C4",
+   "back": "3B108D4EFF8B45D40F45CE894DC8FFB040020000"
+  },
   "MapMarkSite": {
    "va": "0x0061076E",
    "kind": "code",

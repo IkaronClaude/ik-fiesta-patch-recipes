@@ -43,8 +43,17 @@
 //   id. A heading shows the marks of its quest; a mob line the marks of that quest AND that mob (its quest = the heading
 //   above it); a spacer changes nothing. A row whose quest has no mark on this map hides every mark (logged). Without
 //   the n -> quest record (site check failed) it falls back to the mob test alone.
+//
+// ---- CIRCLE NUMBERS = LEGEND NUMBERS (2026-10-03, operator: "When I click '5', then it highlights CIRCLE 3") -------------
+//   The number on a quest's map label is NOT taken from the legend: AddQuestHelper picks the label's number sprite
+//   (FullMapWin +0x354, 40 of them) by its OWN quest counter ([ebp-0x5C]: +1 at every new quest along its MobCoordinate
+//   walk), while the legend numbers headings in the builder's order (+0x3F4 / +0x494 by heading n). Two orders, so legend
+//   "5" could be drawn as circle "3" - the right circle with another quest's number. The sprite push (MapMarkLabelNumber,
+//   push [eax+ecx*4+0x354], 7 bytes) is detoured to use the quest's legend number when the legend has numbered it; the
+//   counter itself is left alone. The click log prints the label order next to the legend order.
 #include <pgwin_msg.h>
 
+#include <cstdio>
 #include <cstring>
 #include <map>
 #include <set>
@@ -64,6 +73,9 @@ const unsigned kHeading = 0xFFFF;               // item data from this up = a qu
 const unsigned kVaHeading = caddr::va(caddr::kMapLegendHeading);
 // mov ecx,[ebp-0xD4]; lea eax,[ecx+0xFFFF]
 const unsigned char kHeadingSite[] = {0x8B, 0x8D, 0x2C, 0xFF, 0xFF, 0xFF, 0x8D, 0x81, 0xFF, 0xFF, 0x00, 0x00};
+const unsigned kVaLabelNumber = caddr::va(caddr::kMapMarkLabelNumber);
+const unsigned char kLabelNumberSite[] = {0xFF, 0xB4, 0x88, 0x54, 0x03, 0x00, 0x00};   // push [eax+ecx*4+0x354]
+const unsigned kNumberSprites = 40;             // FullMapWin +0x354 .. +0x3F4
 const unsigned kMaxRows = 512;
 const unsigned kOwnerScan = 0x80;               // bytes of the list searched for the owning FullMapWin
 
@@ -95,6 +107,45 @@ __declspec(naked) void heading_site() {
         popad
         mov ecx, [ebp - 0xD4]
         jmp g_heading_cont
+    }
+}
+
+void* g_number_cont = nullptr;
+unsigned g_renumbered = 0;
+
+// the label number sprite index for `quest`: its legend heading n, else AddQuestHelper's own `counter`
+unsigned __cdecl label_number(unsigned counter, const unsigned short* quest) {
+    unsigned q = 0;
+    __try {
+        if (quest) q = *quest;
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+    }
+    for (auto& kv : g_heading_quest)
+        if (kv.second == q && q && kv.first < kNumberSprites) {
+            g_renumbered += kv.first != counter;
+            return kv.first;
+        }
+    return counter;
+}
+
+// in place of AddQuestHelper's `push [eax+ecx*4+0x354]`: eax = the map, ecx = its counter, edi -> the quest pointer
+__declspec(naked) void label_number_site() {
+    __asm {
+        sub esp, 4                  // the slot the stock push fills
+        push eax
+        push ecx
+        push edx
+        push dword ptr [edi]
+        push ecx
+        call label_number           // eax = the sprite index
+        add esp, 8
+        mov ecx, [esp + 8]          // the map (saved eax)
+        mov eax, [ecx + eax*4 + 0x354]
+        mov [esp + 12], eax
+        pop edx
+        pop ecx
+        pop eax
+        jmp g_number_cont
     }
 }
 
@@ -172,6 +223,23 @@ void log_marks(void* map, unsigned list_off, unsigned va_quest, unsigned va_mob)
     }
 }
 
+// the order AddQuestHelper met the quests in (its own numbering), next to how many labels were renumbered
+void log_label_order(void* map) {
+    char order[512] = {0};
+    unsigned last = 0, len = 0;
+    __try {
+        for (Node* n = *(Node**)((char*)map + kMapLabelMarks); n && len < sizeof order - 16; n = n->next) {
+            if (!n->mark) continue;
+            unsigned q = ((U16Fn)hook::rebase(kVaLabelQuest))(n->mark, 0);
+            if (q != last) len += sprintf_s(order + len, sizeof order - len, " %u", q);
+            last = q;
+        }
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+    }
+    hook::log("  map label quest order:%s (%u label(s) renumbered to the legend this build)", order, g_renumbered);
+    g_renumbered = 0;
+}
+
 unsigned quest_of(unsigned n) {
     auto it = g_heading_quest.find(n);
     return it == g_heading_quest.end() ? 0u : it->second;
@@ -215,6 +283,7 @@ bool on_process(pgwin::Message& m) {
         else
             hook::log("  row %u: spacer", i);
     }
+    log_label_order(map);
     if (row >= rows) {
         hook::log("  row %u is past the list - marks left as they are", row);
         return false;
@@ -267,6 +336,17 @@ HOOK_PLUGIN("map_legend_focus") {
         std::memcpy(jmp + 1, &rel, 4);
         bool ok = hook::write_code((void*)site, jmp, sizeof jmp);
         hook::log("map_legend_focus: legend headings -> quests recorded at %p%s", site, ok ? "" : " - WRITE FAILED");
+        const unsigned char* num = (const unsigned char*)hook::rebase(kVaLabelNumber);
+        if (!ok || caddr::missing({caddr::kMapMarkLabelNumber}) || std::memcmp(num, kLabelNumberSite, sizeof kLabelNumberSite)) {
+            hook::log("map_legend_focus: AddQuestHelper's label number is not the expected code - circles keep their own numbers");
+        } else {
+            g_number_cont = (void*)(num + 7);
+            unsigned char j7[7] = {0xE9, 0, 0, 0, 0, 0x90, 0x90};
+            int r = (int)((unsigned char*)&label_number_site - (num + 5));
+            std::memcpy(j7 + 1, &r, 4);
+            hook::log("map_legend_focus: circle numbers follow the legend (%p)%s", num,
+                      hook::write_code((void*)num, j7, sizeof j7) ? "" : " - WRITE FAILED");
+        }
     }
     pgwin::on_process(on_process);
     pgwin::install();

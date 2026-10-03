@@ -19,6 +19,7 @@
   "QuestHelperMarkQuest": "0x00664190",
   "QuestHelperMarkMob": "0x006641A0",
   "MapLegendHeading": "0x0061180C",
+  "MapMarkLabelNumber": "0x0061089A",
   "MapMarkSite": "0x0061076E",
   "MapMarkLabelPath": "0x00610782",
   "MapMarkLabelCont": "0x00610788",

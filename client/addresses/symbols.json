@@ -111,6 +111,13 @@
       "note": "the legend builder (FullMapWin quest list) numbering a quest heading: mov ecx,[ebp-0xD4] (6 bytes, replaced); the quest pointer is [ebp-0xAC], the heading's row value 0xFFFF + [ebp-0xD4]"
     },
     {
+      "name": "MapMarkLabelNumber",
+      "va": "0x0061089A",
+      "kind": "code",
+      "use": "map_legend_focus",
+      "note": "AddQuestHelper: push [eax+ecx*4+0x354] (7 bytes, replaced) - the quest label's number sprite, ecx = its own quest counter; edi -> the quest pointer"
+    },
+    {
       "name": "MapMarkSite",
       "va": "0x0061076E",
       "kind": "code",
