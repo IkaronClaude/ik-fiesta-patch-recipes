@@ -27,8 +27,6 @@
 //   verify=1           also build the 2026 shape while sending 2016, and log (2016, 2026) pairs to bridge26-verify.log
 //                      (tools/bridge26_verify replays them through the proxy's C# translators: they must match)
 //   verify_max=200     pairs logged per opcode
-//   quest_reward_index=../9Data/Shine/Bridge2026/quest-reward-index.txt   (tools/bridge_data.py: "quest index slot")
-//   quest_counter_rows=../9Data/Shine/Bridge2026/quest-counter-rows.txt   ("quest r0..r4 [r5 r6]")
 //   close_dialog=1     the 0x442E dance for an unmodified 2026 client (0 for a client carrying the self-close recipe)
 //   [plugin] after=quest_track   - its 0x441F / 0x4421 handlers must be registered before ours wrap them
 //
@@ -46,6 +44,8 @@
 // is the identity). Read 2026-10-04 (Zone.exe, the RE notes in the commit).
 #include <zonehook.h>
 #include <zone_types.h>
+#include <zone_functions.h>
+#include <zone_globals.h>
 
 #include <algorithm>
 #include <cstddef>
@@ -149,26 +149,180 @@ volatile LONG g_zone_announces_end = 0;     // learned: this zone's exe sends QS
 const unsigned char kCloseDialog[2] = { 0xFF, 0xFF };
 const DWORD kCloseEchoMs = 1500;
 
-std::map<unsigned, std::vector<int> > g_counter_rows;   // quest -> the 2026 client row of each zone counter slot
+// ---- the 2026 quest tables, read with the zone's own CDataReader (quest_ext's pattern) ---------------------------------
+// No side files (operator 2026-10-04: "NO AUXILIARY FILES ... if you need an shn, load it via the server native funcs"):
+// the 2026 client's QuestEndNpc / QuestReward come from 9Data/Shine (shipped by the build), the 2016 side is the zone's
+// own QUEST_DATA (gQuestData), and the two mappings tools/bridge_data.py used to precompute are derived here, per quest,
+// on first use.
+struct Col { int off = -1; int size = 0; };
+unsigned long field(const unsigned char* rec, const Col& c) {
+    if (c.size == 1) return rec[c.off];
+    if (c.size == 2) return *(const unsigned short*)(rec + c.off);
+    return *(const unsigned long*)(rec + c.off);                  // 4, and the low half of an 8-byte column
+}
 
-void load_counter_rows() {
-    char path[MAX_PATH];
-    hook::config_str("quest_counter_rows", "../9Data/Shine/Bridge2026/quest-counter-rows.txt", path, sizeof path);
-    FILE* f = 0;
-    if (fopen_s(&f, path, "r") != 0 || !f) {
-        zone::log("[bridge26] no counter rows %s: quests with more than 5 end rows show their counts one row off", path);
-        return;
+template <class F>
+bool read_table(const char* path, const char* const* names, int n, F per_row) {
+    using zone::types::CDataReader;
+    using zone::types::CDataReader__FIELD;
+    using zone::types::CDataReader__HEAD;
+    void* reader = ::operator new(sizeof(CDataReader));
+    zone::fn::CDataReader__CDataReader()(reader, nullptr);
+    bool ok = zone::fn::CDataReader__Read()(reader, nullptr, (char*)path) != 0;
+    std::vector<Col> c(n);
+    if (!ok) {
+        zone::log("[bridge26] cannot read %s", path);
+    } else {
+        CDataReader* r = (CDataReader*)reader;
+        const CDataReader__FIELD* f = (const CDataReader__FIELD*)((const unsigned char*)r->m_pHead + sizeof(CDataReader__HEAD));
+        int off = 0;
+        for (unsigned i = 0; i < r->m_pHead->nNumOfField; ++i) {
+            for (int k = 0; k < n; ++k)
+                if (!std::strcmp(f[i].Name, names[k])) { c[k].off = off; c[k].size = (int)f[i].Size; }
+            off += (int)f[i].Size;
+        }
+        for (int k = 0; k < n && ok; ++k)
+            if (c[k].off < 0) { zone::log("[bridge26] %s has no %s column", path, names[k]); ok = false; }
     }
-    char line[256];
-    while (fgets(line, sizeof line, f)) {
-        if (line[0] == '#') continue;
-        int v[9], k = 0;
-        char* ctx = 0;
-        for (char* t = strtok_s(line, " \t\r\n", &ctx); t && k < 9; t = strtok_s(0, " \t\r\n", &ctx)) v[k++] = atoi(t);
-        if (k == 6 || k == 8) g_counter_rows[(unsigned)v[0]] = std::vector<int>(v + 1, v + k);
+    if (ok) {
+        unsigned long rows = zone::fn::CDataReader__GetNumOfRecord()(reader, nullptr);
+        for (unsigned long i = 0; i < rows; ++i) {
+            const unsigned char* rec = (const unsigned char*)zone::fn::CDataReader__GetRecord()(reader, nullptr, i);
+            if (rec) per_row(rec, c.data());
+        }
     }
-    fclose(f);
-    zone::log("[bridge26] %u quests with moved counter rows from %s", (unsigned)g_counter_rows.size(), path);
+    zone::fn::CDataReader___CDataReader()(reader, nullptr);
+    ::operator delete(reader);
+    return ok;
+}
+
+struct EndRow { unsigned short mob; unsigned char action; bool kill; };
+struct RewRow { unsigned char type; unsigned long low; };
+std::map<unsigned, std::vector<EndRow> > g_end26;   // quest -> its 2026 QuestEndNpc rows, file order (= the client's rows)
+std::map<unsigned, std::vector<RewRow> > g_rew26;   // quest -> its 2026 QuestReward rows (file order = the client's index),
+                                                   // only quests with a choice (a Selectable 2 row)
+CRITICAL_SECTION g_qlock;
+std::map<unsigned, std::vector<int> > g_counter_rows;   // quest -> the 2026 client row of each zone counter slot (cached)
+std::map<unsigned, bool> g_counter_done;
+std::map<unsigned, std::vector<int> > g_reward_slots;   // quest -> zone reward slot per client index (-1 = none), cached
+
+void load_quest_tables() {
+    const char* end_cols[] = { "ID", "MobID", "NpcMobActionType", "IsEnabled", "Count" };
+    read_table("../9Data/Shine/QuestEndNpc.shn", end_cols, 5, [&](const unsigned char* r, const Col* c) {
+        EndRow e = { (unsigned short)field(r, c[1]), (unsigned char)field(r, c[2]),
+                     field(r, c[3]) && field(r, c[2]) == 1 && field(r, c[4]) };
+        g_end26[(unsigned)field(r, c[0])].push_back(e);
+    });
+    std::map<unsigned, bool> choice;
+    const char* rew_cols[] = { "ID", "RewardType", "Flag", "Selectable" };
+    read_table("../9Data/Shine/QuestReward.shn", rew_cols, 4, [&](const unsigned char* r, const Col* c) {
+        unsigned q = (unsigned)field(r, c[0]);
+        RewRow x = { (unsigned char)field(r, c[1]), field(r, c[2]) };
+        g_rew26[q].push_back(x);
+        if (field(r, c[3]) == 2) choice[q] = true;
+    });
+    for (std::map<unsigned, std::vector<RewRow> >::iterator it = g_rew26.begin(); it != g_rew26.end();) {
+        if (choice.count(it->first)) ++it;
+        else it = g_rew26.erase(it);
+    }
+    zone::log("[bridge26] 2026 quest tables: QuestEndNpc rows for %u quests, reward choices for %u quests",
+              (unsigned)g_end26.size(), (unsigned)g_rew26.size());
+}
+
+const zone::types::QUEST_DATA* quest_data(unsigned quest) {
+    return zone::fn::CQuestData__GetQuestData()(zone::global::gQuestData(), nullptr, (unsigned short)quest);
+}
+
+// tools/bridge_data.py counter_rows, here: each zone counter slot k is the client's row of the same (mob, action) as the
+// zone's End.NPCMobList[k]; an untimed quest's kill rows past the 5 that quest_ext counts (at most 2) follow
+const std::vector<int>* counter_rows(unsigned quest) {
+    EnterCriticalSection(&g_qlock);
+    if (!g_counter_done[quest]) {
+        g_counter_done[quest] = true;
+        const zone::types::QUEST_DATA* q = quest_data(quest);
+        const std::vector<EndRow>& client = g_end26[quest];
+        std::vector<int> want, used;
+        for (int k = 0; q && k < 5; k++) {
+            const zone::types::QUEST_DATA__QUEST_END_CONDITION___NPCMobList& m = q->End.NPCMobList[k];
+            if (!m.bNPCMob) { want.push_back(k); continue; }
+            int hit = k;
+            for (int i = 0; i < (int)client.size(); i++)
+                if (std::find(used.begin(), used.end(), i) == used.end() && client[i].mob == m.NPCMobID
+                    && client[i].action == m.NPCMobAction) { hit = i; break; }
+            used.push_back(hit);
+            want.push_back(hit);
+        }
+        if (q && !q->End.bTimeLimit) {
+            std::vector<int> kills;
+            for (int i = 0; i < (int)client.size(); i++) if (client[i].kill) kills.push_back(i);
+            if (kills.size() > 5)
+                for (int i = 0, added = 0; i < (int)kills.size() && added < 2; i++)
+                    if (std::find(used.begin(), used.end(), kills[i]) == used.end()) { want.push_back(kills[i]); added++; }
+        }
+        bool same = want.size() == 5;
+        for (int k = 0; same && k < 5; k++) same = want[k] == k;
+        if (q && !same) g_counter_rows[quest] = want;
+    }
+    std::map<unsigned, std::vector<int> >::const_iterator it = g_counter_rows.find(quest);
+    const std::vector<int>* r = it == g_counter_rows.end() ? 0 : &it->second;
+    LeaveCriticalSection(&g_qlock);
+    return r;
+}
+
+// verify mode: derive every quest's mappings once and log them, so they can be compared with what the old precomputed
+// files held (an offline check; the plugin itself reads no such file)
+void log_all_mappings();
+volatile LONG g_mappings_logged = 0;
+
+// tools/bridge_data.py reward_index, here: the client's reward rows (items first) matched in order to the zone's used
+// QUEST_DATA.Reward slots of the same type and value; -1 = not offered by the zone
+int reward_slot(unsigned quest, unsigned index) {
+    EnterCriticalSection(&g_qlock);
+    std::map<unsigned, std::vector<int> >::iterator it = g_reward_slots.find(quest);
+    if (it == g_reward_slots.end()) {
+        std::vector<int> slots;
+        std::map<unsigned, std::vector<RewRow> >::const_iterator rows = g_rew26.find(quest);
+        const zone::types::QUEST_DATA* q = rows == g_rew26.end() ? 0 : quest_data(quest);
+        if (q) {
+            bool used[12] = {};
+            for (const RewRow& r : rows->second) {
+                int hit = -1;
+                for (int k = 0; k < 12 && hit < 0; k++) {
+                    const zone::types::QUEST_DATA__QUEST_REWARD& x = q->Reward[k];
+                    if (!x.Use || used[k] || x.Type != r.type) continue;
+                    const unsigned char* v = (const unsigned char*)&x.Value;
+                    unsigned long val = r.type == 2 ? (unsigned long)(v[0] | (v[1] << 8))
+                                                    : (unsigned long)(v[0] | (v[1] << 8) | (v[2] << 16) | ((unsigned long)v[3] << 24));
+                    if (val == r.low) hit = k;
+                }
+                if (hit >= 0) used[hit] = true;
+                slots.push_back(hit);
+            }
+        }
+        it = g_reward_slots.insert(std::make_pair(quest, slots)).first;
+    }
+    int slot = index < it->second.size() ? it->second[index] : -1;
+    LeaveCriticalSection(&g_qlock);
+    return slot;
+}
+
+void log_all_mappings() {
+    if (!g_verify || InterlockedExchange(&g_mappings_logged, 1)) return;
+    int moved = 0, choices = 0;
+    for (std::map<unsigned, std::vector<EndRow> >::const_iterator it = g_end26.begin(); it != g_end26.end(); ++it) {
+        const std::vector<int>* r = counter_rows(it->first);
+        if (!r) continue;
+        char line[128]; int k = 0;
+        for (int v : *r) k += sprintf_s(line + k, sizeof line - k, " %d", v);
+        zone::log("[bridge26] derived counter rows %u%s", it->first, line);
+        moved++;
+    }
+    for (std::map<unsigned, std::vector<RewRow> >::const_iterator it = g_rew26.begin(); it != g_rew26.end(); ++it)
+        for (unsigned i = 0; i < it->second.size(); i++) {
+            int slot = reward_slot(it->first, i);
+            if (slot >= 0) { zone::log("[bridge26] derived reward %u %u %d", it->first, i, slot); choices++; }
+        }
+    zone::log("[bridge26] derived: %d quests with moved counter rows, %d reward choices", moved, choices);
 }
 
 // PLAYER_QUEST_INFO 32 B -> 37 B (T.QuestEntry2016To2026): the same 32 bytes, 5 zero; a quest whose 2016 record could not
@@ -176,10 +330,11 @@ void load_counter_rows() {
 void quest_entry(const unsigned char* src, unsigned char* dst) {
     memcpy(dst, src, 32);
     memset(dst + 32, 0, 5);
-    std::map<unsigned, std::vector<int> >::const_iterator it = g_counter_rows.find(src[0] | (src[1] << 8));
-    if (it == g_counter_rows.end()) return;
+    log_all_mappings();
+    const std::vector<int>* moved = counter_rows(src[0] | (src[1] << 8));
+    if (!moved) return;
     memset(dst + 24, 0, 10);
-    const std::vector<int>& rows = it->second;
+    const std::vector<int>& rows = *moved;
     for (int k = 0; k < (int)rows.size() && k < 7; k++)
         if (rows[k] >= 0 && rows[k] < 10) dst[24 + rows[k]] = src[k < 5 ? 24 + k : 30 + k - 5];
 }
@@ -193,24 +348,8 @@ int quest_list(const unsigned char* p, int n, int count, unsigned char* o) {
 }
 
 // ---- client -> server --------------------------------------------------------------------------------------------------
-std::map<unsigned, unsigned> g_reward_slot;      // (quest << 8 | client index) -> zone reward slot
 int g_track_dropped = 0;
 
-void load_reward_index() {
-    char path[MAX_PATH];
-    hook::config_str("quest_reward_index", "../9Data/Shine/Bridge2026/quest-reward-index.txt", path, sizeof path);
-    FILE* f = 0;
-    if (fopen_s(&f, path, "r") != 0 || !f) {
-        zone::log("[bridge26] no reward index %s: a 2026 reward choice reaches the zone as the client's index", path);
-        return;
-    }
-    unsigned q, i, slot;
-    char line[128];
-    while (fgets(line, sizeof line, f))
-        if (line[0] != '#' && sscanf_s(line, "%u %u %u", &q, &i, &slot) == 3 && i < 256) g_reward_slot[(q << 8) | i] = slot;
-    fclose(f);
-    zone::log("[bridge26] %u quest reward choices from %s", (unsigned)g_reward_slot.size(), path);
-}
 
 // substituted requests live in a per-thread ring: the zone keeps the last command pointer for a while (sp_LastProtocol)
 thread_local unsigned char t_cmd[8][0x400];
@@ -239,17 +378,16 @@ void on_client_packet(hook::proto::Call& c) {
         if (n == 6 && g_send2026) {
             unsigned quest = p[0] | (p[1] << 8);
             unsigned index = p[2] | (p[3] << 8) | (p[4] << 16) | ((unsigned)p[5] << 24);
-            std::map<unsigned, unsigned>::const_iterator it =
-                index < 256 ? g_reward_slot.find((quest << 8) | index) : g_reward_slot.end();
-            bool known = it != g_reward_slot.end();
-            if (known && it->second != index) {
+            int slot = index < 256 ? reward_slot(quest, index) : -1;
+            bool known = slot >= 0;
+            if (known && (unsigned)slot != index) {
                 unsigned char* t = cmd_buffer();
                 memcpy(t, cmd, 8);
-                put_u32(t + 4, it->second);
+                put_u32(t + 4, (unsigned)slot);
                 c.args[0] = (hook::u32)t;
             }
-            zone::log("[bridge26] quest %u reward choice: client index %u -> slot %d%s", quest, index,
-                      known ? (int)it->second : -1, known ? "" : " (not in the map, as sent)");
+            zone::log("[bridge26] quest %u reward choice: client index %u -> slot %d%s", quest, index, slot,
+                      known ? "" : " (no zone slot for it, as sent)");
         }
         c.original();
         return;
@@ -494,8 +632,8 @@ HOOK_PLUGIN("bridge26") {
         if (fopen_s(&g_vlog, path, "a") != 0) g_vlog = 0;
         zone::log("[bridge26] verify log %s%s", path, g_vlog ? "" : " - COULD NOT OPEN");
     }
-    load_reward_index();
-    load_counter_rows();
+    InitializeCriticalSection(&g_qlock);
+    load_quest_tables();
     g_close_dialog = hook::config_int("close_dialog", 1) != 0;
     InitializeCriticalSection(&g_plock);
     zone::hook_function("PacketContainer::pcb_Append", zone::rebase(kVaPcbAppend), (void*)on_append, &g_append);
