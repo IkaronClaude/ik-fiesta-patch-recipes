@@ -52,6 +52,34 @@ inline int skillhit(const unsigned char* p, int n, unsigned char* o) {
     return len;
 }
 
+// the four NC_BAT_SKILLBASH *_START frames: the 2016 struct, then a u32 (1 - what a single hit carries; the 2026 client
+// reads its cast bookkeeping out of it: a 2016-width frame leaves the cast open and every later cast is refused)
+template <int Size>
+inline int hitstart(const unsigned char* p, int n, unsigned char* o) {
+    if (n != Size) return 0;
+    memcpy(o, p, Size);
+    put_u32(o + Size, 1);
+    return Size + 4;
+}
+
+// ---- client -> server (2026 -> 2016) ----------------------------------------------------------------------------------
+
+// NC_SKILL_EMPOWALLOC_REQ 0x4811: 2026 {skill u16, plus 6 B, minus 6 B} (12 nibbles each) -> 2016 {skill u16, plus u16,
+// minus u16} = nibbles 7..10 of each 48-bit block (T.SkillEmpowAlloc2026To2016). 0 = not the 14-byte 2026 shape.
+inline unsigned empow_block(const unsigned char* p) {
+    unsigned long long v = 0;
+    for (int i = 5; i >= 0; i--) v = (v << 8) | p[i];
+    return (unsigned)((v >> 28) & 0xFFFF);
+}
+inline int empower_2026_to_2016(const unsigned char* p, int n, unsigned char* o) {
+    if (n != 14) return 0;
+    o[0] = p[0]; o[1] = p[1];
+    unsigned a = empow_block(p + 2), b = empow_block(p + 8);
+    o[2] = (unsigned char)a; o[3] = (unsigned char)(a >> 8);
+    o[4] = (unsigned char)b; o[5] = (unsigned char)(b >> 8);
+    return 6;
+}
+
 struct Owned { unsigned short op; Translate fn; const char* name; };
 const Owned kOwned[] = {
     { 0x2448, swing, "SWING_DAMAGE" },
@@ -59,6 +87,10 @@ const Owned kOwned[] = {
     { 0x243C, tail7, "DOTDAMAGE" },
     { 0x2452, skillhit, "SKILLBASH_HIT_DAMAGE" },
     { 0x2402, targetinfo, "TARGETINFO" },
+    { 0x244E, hitstart<6>, "SKILLBASH_HIT_OBJ_START" },
+    { 0x2450, hitstart<12>, "SKILLBASH_HIT_FLD_START" },
+    { 0x244F, hitstart<8>, "SKILLBASH_SOMEONE_HIT_OBJ_START" },
+    { 0x2451, hitstart<14>, "SKILLBASH_SOMEONE_HIT_FLD_START" },
 };
 const int kOwnedCount = sizeof kOwned / sizeof kOwned[0];
 
