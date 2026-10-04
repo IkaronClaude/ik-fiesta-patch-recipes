@@ -1,5 +1,5 @@
 {
- "exe": "Z:/Client2026patched/Fiesta.exe",
+ "exe": "Z:/ClientOfficialUS/Fiesta.exe",
  "version": "10.6.4",
  "stamp": "6AA04F02",
  "date": "2026-09-08",
@@ -60,6 +60,7 @@
   "PgWinPostMsg": "0x00877A40",
   "PgWinProcessMsg": "0x008784C0",
   "WinMgrIsIn": "0x00881DA0",
+  "WinMgr": "0x00D1B810",
   "RewardWinExpHighStore": "0x00697E0D"
  }
 }

@@ -44,7 +44,7 @@ namespace pgwin {
 // ---- 2026 US Fiesta.exe (rebased at runtime; the client is ASLR'd) ----
 const unsigned kVaPostMsg = caddr::va(caddr::kPgWinPostMsg);
 const unsigned kVaProcessMsg = caddr::va(caddr::kPgWinProcessMsg);
-const unsigned kVaWinMgr = 0x00D1B810u;
+const unsigned kVaWinMgr = caddr::va(caddr::kWinMgr);   // the window manager global (was a fixed 10.6.4 address: on 10.6.6 alive() was always false)
 const unsigned kVaWinMgrIsIn = caddr::va(caddr::kWinMgrIsIn);
 
 enum Msg : unsigned { kClose = 1, kEditNotify = 4, kCommand = 5, kButtonState = 7 };

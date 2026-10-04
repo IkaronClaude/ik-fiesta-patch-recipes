@@ -380,6 +380,12 @@
       "use": "pgwin_msg.h"
     },
     {
+      "name": "WinMgr",
+      "va": "0x00D1B810",
+      "kind": "data",
+      "use": "pgwin_msg.h"
+    },
+    {
       "name": "RewardWinExpHighStore",
       "va": "0x00697E0D",
       "kind": "code",
