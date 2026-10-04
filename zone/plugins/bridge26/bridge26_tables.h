@@ -1,4 +1,6 @@
-// client_tables - the zone reads the 2026 CLIENT'S OWN table files and converts the few it cannot take as they are, in
+// bridge26_tables.h - the TABLE half of bridge26 (was the separate plugin client_tables until 2026-10-04: the two are one
+// job - the 2016 zone serving the 2026 client - and split they fought over load order and read ItemInfo twice).
+// The zone reads the 2026 CLIENT'S OWN table files and converts the few it cannot take as they are, in
 // memory, at load (Fiesta2026on2016, operator 2026-09-28: "one set of tables" - "hijack the stream and rewrite the
 // original 2026 shn on the fly to be 2016 compatible").
 //
@@ -9,7 +11,7 @@
 //   Login / WorldManager / Character / Account / AccountLog / GameLog open none), so 9Data/Shine can hold the client's
 //   files. 40 of the 49 the 2016 zone reads exactly as the 2026 client writes them.
 //
-// ---- THIS PLUGIN ---------------------------------------------------------------------------------------------------------
+// ---- THIS PART -----------------------------------------------------------------------------------------------------------
 //   Injects (zone::shn::inject) every table listed in the layout file and detours CDataReader::Read. For a table listed in 9Data/Shine/ClientTableLayouts.txt (ActiveSkill, ChargedEffect,
 //   ItemDismantle, ItemInfo, MobInfo, SubAbstate, UpgradeInfo) it reads the client's file, re-lays every row into the
 //   2016 table's columns (names, types, widths - from the layout file: 2026-only columns dropped, strings re-sized, wider
@@ -35,9 +37,10 @@
 #include <string>
 #include <vector>
 
+#pragma once
 #pragma comment(lib, "advapi32.lib")
 
-namespace {
+namespace tables {
 
 const char* kLayouts = "../9Data/Shine/ClientTableLayouts.txt";
 const char* kMobLoca = "../9Data/Shine/Loca/MobLoca.shn";
@@ -330,6 +333,10 @@ bool upgrade_value_column(const std::string& name) {
     return name == "Updata" || (name.rfind("Undefined", 0) == 0 && name.size() <= 11);
 }
 
+// item id -> {2026 Class, 2026 Equip}, recorded from the raw rows when ItemInfo is converted (before class 39 -> 0 and the
+// equip fold); the zone's own ItemDataBox then holds the converted (2016) values
+std::map<int, std::pair<int, int> > item26;
+
 // ---- the conversion ----------------------------------------------------------------------------------------------------
 bool convert(const std::string& table, const Layout& L, const unsigned char* data, unsigned len,
              std::vector<unsigned char>& out, char md5[33]) {
@@ -338,6 +345,11 @@ bool convert(const std::string& table, const Layout& L, const unsigned char* dat
     if (!parse(f, t, md5)) {
         zone::log("client_tables: %s - cannot parse the client's file", table.c_str());
         return false;
+    }
+    if (table == "iteminfo") {                                    // the 2026 facts bridge26's wire half needs, pre-fold
+        for (auto& r : t.rows) item26[(int)r["ID"].i] = std::make_pair((int)r["Class"].i, (int)r["Equip"].i);
+        zone::log("client_tables: ItemInfo - recorded the 2026 Class / Equip of %u item(s) for the wire half",
+                  (unsigned)item26.size());
     }
     for (auto& r : t.rows) rules(table, r);
     Layout wide;
@@ -462,9 +474,8 @@ bool load_layouts() {
     return !g_layouts.empty();
 }
 
-}  // namespace
-
-ZONEHOOK_PLUGIN("client_tables") {
+// called first thing in bridge26's init (the injection + Read detour must be in place before the zone loads tables)
+inline void init() {
     if (!load_layouts()) {
         zone::log("client_tables: no %s (or no usable layout) - the zone reads its tables as they are (stock)", kLayouts);
         return;
@@ -488,3 +499,5 @@ ZONEHOOK_PLUGIN("client_tables") {
     zone::log("client_tables: %s - %u table(s) converted at load, %u unchecked, %u equip folds",
               kLayouts, (unsigned)g_layouts.size(), (unsigned)g_unchecked.size(), (unsigned)g_fold.size());
 }
+
+}  // namespace tables

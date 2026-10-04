@@ -44,6 +44,7 @@
 // is the identity). Read 2026-10-04 (Zone.exe, the RE notes in the commit).
 #include <zonehook.h>
 #include <zone_types.h>
+#include <zone_shn.h>
 #include <zone_functions.h>
 #include <zone_globals.h>
 
@@ -56,6 +57,8 @@
 #include <cstring>
 
 #include "bridge26_translate.h"
+#include "bridge26_items.h"
+#include "bridge26_tables.h"
 
 namespace {
 
@@ -139,6 +142,7 @@ void send_to_client(void* player, unsigned short op, const unsigned char* payloa
 // ---- per-player state (keyed by the ShinePlayer the packet is for; several map threads send, so under a lock) ----------
 struct PlayerState {
     std::vector<unsigned short> tracked;   // the quest tracker set built from this login's DOING list(s)
+    std::vector<int> folded_empty;         // 2026 equip slots this client already has empty (items, batch 6)
     DWORD close_sent_at = 0;               // when we last told the client to close its dialog (0x442E); 0 = not pending
     bool close_pending = false;
 };
@@ -267,6 +271,48 @@ const std::vector<int>* counter_rows(unsigned quest) {
     const std::vector<int>* r = it == g_counter_rows.end() ? 0 : &it->second;
     LeaveCriticalSection(&g_qlock);
     return r;
+}
+
+// ---- items (batch 6): the 2026 item classes + equip slots ------------------------------------------------------------
+// The 2026 client sizes an inventory record from the item's 2026 CLASS, and draws an equipped item at its 2026 EQUIP slot.
+// The table half converts ItemInfo for the zone (class 39 -> 0, slots 30-44 folded into 2016 ones) and records each
+// item's 2026 Class / Equip from the raw rows on the way (tables::item26); the 2016 slot of each item is the zone's own
+// loaded row (build_folds) - the fold is the pair. One read of the file, the zone's.
+std::map<int, std::vector<int> > g_folded_into;   // 2016 equip slot -> the 2026 slots folded into it
+std::map<int, int> g_equip26;                      // item id -> its 2026 slot, only where that slot is folded
+bool g_folds_built = false;
+
+int item_class(int item) {                         // -1 until the zone has loaded (and tables:: converted) ItemInfo
+    std::map<int, std::pair<int, int> >::const_iterator it = tables::item26.find(item);
+    return it == tables::item26.end() ? -1 : it->second.first;
+}
+
+// the raw 2026 ItemInfo: {ID, Class, Equip} per row, through the zone's decrypt
+
+// the fold, against the zone's OWN item table (ItemDataBox, loaded by the zone through client_tables): every item whose
+// 2016 Equip differs from its 2026 one. Built on the first equip change, once the zone has loaded its tables.
+// Never a second CDataReader read of ItemInfo: CShnDataFileCheckSum::InitDataFileCheckSum (0x6311A0) counts every
+// registration of a checksummed table, duplicates included, and refuses past 49 - a second ItemInfo read spent one and
+// the zone's last checksummed table (BRAccUpgradeInfo) then failed to load ("Fail to read SHN Data File", 2026-10-04).
+void build_folds() {
+    EnterCriticalSection(&g_qlock);
+    if (!g_folds_built) {
+        g_folds_built = true;
+        int folds = 0;
+        for (std::map<int, std::pair<int, int> >::const_iterator it = tables::item26.begin(); it != tables::item26.end(); ++it) {
+            zone::types::ItemDataBox__ItemDataBoxIndex* idx =
+                zone::fn::ItemDataBox__operator__()(zone::global::itemdatabox(), nullptr, (unsigned short)it->first);
+            if (!idx || !idx->data) continue;
+            int slot16 = (int)idx->data->Equip, slot26 = it->second.second;
+            if (slot16 == slot26) continue;
+            g_equip26[it->first] = slot26;
+            std::vector<int>& v = g_folded_into[slot16];
+            if (std::find(v.begin(), v.end(), slot26) == v.end()) { v.push_back(slot26); folds++; }
+        }
+        zone::log("[bridge26] equip fold (zone ItemDataBox vs 2026 ItemInfo): %d folded slot(s), %u items drawn at one",
+                  folds, (unsigned)g_equip26.size());
+    }
+    LeaveCriticalSection(&g_qlock);
 }
 
 // verify mode: derive every quest's mappings once and log them, so they can be compared with what the old precomputed
@@ -581,11 +627,81 @@ void post_translate(unsigned op, unsigned char* out, int m) {
         for (int i = 0; i < out[0] && 1 + (i + 1) * row <= m; i++) extra_fill(out + 1 + i * row);
 }
 
+// the item packets of batch 6 (send=2026 and the 2026 item classes loaded); true = handled
+bool on_item_packet(void* self, void* edx, void* object, ProtocolPacket* pkt) {
+    if (!bridge26::g_class_of) return false;
+    AppendFn original = (AppendFn)g_append.trampoline;
+    unsigned op = get_u16(pkt->buffer);
+    const unsigned char* p = pkt->buffer + 2;
+    int n = pkt->length - 2, m = 0;
+    bool us = g_us_extra == 1;
+    switch (op) {
+    case 0x3001: m = bridge26::trailing_item(p, n, 4, t_out + 2); if (m == n) m = 0; break;      // ITEM_CELLCHANGE
+    case 0x3002: m = bridge26::trailing_item(p, n, 3, t_out + 2); if (m == n) m = 0; break;      // ITEM_EQUIPCHANGE
+    case 0x1047:                                                                                  // CHAR_CLIENT_ITEM
+        m = bridge26::client_item(p, n, t_out + 2);
+        if (!m) {
+            zone::log("[bridge26] inventory box %d not translated record by record: header only", n > 1 ? p[1] : -1);
+            m = bridge26::client_item_head(p, n, t_out + 2);
+        }
+        break;
+    case 0x305B: if (us) m = bridge26::record_list(p, n, 0, 3, t_out + 2); break;     // sell (buy-back) list
+    case 0x7492: if (us) m = bridge26::record_list(p, n, 18, 3, t_out + 2); break;    // guild storage
+    case 0x6814: if (us) m = bridge26::record_list(p, n, 2, 15, t_out + 2); break;    // booth search
+    case 0x986E: if (us) m = bridge26::record_list(p, n, 10, 3, t_out + 2); break;    // academy reward storage
+    case 0x302D: if (us) m = bridge26::record_list(p, n, 0, 3, t_out + 2); break;     // reward inventory
+    case 0x3C08: if (us) m = bridge26::record_list(p, n, 11, 3, t_out + 2); break;    // storage
+    case 0x305C: m = bridge26::leading_item(p, n, 2, t_out + 2); if (m == n && !memcmp(t_out + 2, p, n)) m = 0; break;
+    case 0x4C10: m = bridge26::leading_item(p, n, 1, t_out + 2); if (m == n && !memcmp(t_out + 2, p, n)) m = 0; break;
+    case 0xC407: m = bridge26::leading_item(p, n, 3, t_out + 2); if (m == n && !memcmp(t_out + 2, p, n)) m = 0; break;
+    default: return false;
+    }
+    if (g_verify) verify_log_op(op, p, n, t_out + 2, m);
+    if (m) {
+        t_out[0] = pkt->buffer[0]; t_out[1] = pkt->buffer[1];
+        ProtocolPacket t = { t_out, (int)sizeof t_out, m + 2 };
+        original(self, edx, object, &t);
+    } else {
+        original(self, edx, object, pkt);
+    }
+    if (op == 0x3002 && n >= 5) {
+        // STOPGAP for the equip fold (tickets.md "REAL 2026 EQUIP SLOTS 30-44 - then DELETE THE EQUIP FOLD"): remove this
+        // block, g_folded_into / g_equip26 and PlayerState.folded_empty once the zone holds slots 30-44 itself.
+        // the server names its 2016 slot; the 2026 client draws an item at its own 2026 slot - clear every 2026 slot
+        // folded into the changed one (except where the new item is drawn), once until something is drawn there again
+        build_folds();
+        std::map<int, std::vector<int> >::const_iterator f = g_folded_into.find(p[2]);
+        if (f != g_folded_into.end()) {
+            int item = p[3] | (p[4] << 8);
+            std::map<int, int>::const_iterator e = item == 0xFFFF ? g_equip26.end() : g_equip26.find(item);
+            int drawn = e == g_equip26.end() ? -1 : e->second;
+            std::vector<int> clear;
+            EnterCriticalSection(&g_plock);
+            std::vector<int>& empty = g_players[object].folded_empty;
+            if (drawn >= 0) empty.erase(std::remove(empty.begin(), empty.end(), drawn), empty.end());
+            for (int slot : f->second) {
+                if (slot == drawn || std::find(empty.begin(), empty.end(), slot) != empty.end()) continue;
+                empty.push_back(slot);
+                clear.push_back(slot);
+            }
+            LeaveCriticalSection(&g_plock);
+            for (int slot : clear) {
+                unsigned char b[7] = { 0x02, 0x30, p[0], p[1], (unsigned char)slot, 0xFF, 0xFF };
+                ProtocolPacket c = { b, 7, 7 };
+                original(self, edx, object, &c);
+                zone::log("[bridge26] 0x3002 slot %d: also cleared the folded 2026 slot %d", p[2], slot);
+            }
+        }
+    }
+    return true;
+}
+
 void __fastcall on_append(void* self, void* edx, void* object, ProtocolPacket* pkt) {
     AppendFn original = (AppendFn)g_append.trampoline;
     if (g_send2026 && pkt && pkt->buffer && pkt->length >= 2)
         extra_observe(get_u16(pkt->buffer), pkt->buffer + 2, pkt->length - 2);
     if (g_send2026 && pkt && pkt->buffer && pkt->length >= 2 && on_quest_packet(self, edx, object, pkt)) return;
+    if (g_send2026 && pkt && pkt->buffer && pkt->length >= 2 && on_item_packet(self, edx, object, pkt)) return;
     if ((g_send2026 || g_verify) && pkt && pkt->buffer && pkt->length >= 2) {
         unsigned op = get_u16(pkt->buffer);
         if (const Owned* o = owned(op)) {
@@ -614,6 +730,9 @@ void __fastcall on_append(void* self, void* edx, void* object, ProtocolPacket* p
 }  // namespace
 
 HOOK_PLUGIN("bridge26") {
+    // the TABLE half first, whatever `send` says: the zone runs on the 2026 client's own table files and must have them
+    // converted (and its checksums stated) before it loads them (bridge26_tables.h, ex-client_tables)
+    tables::init();
     char send[16];
     hook::config_str("send", "2016", send, sizeof send);
     g_send2026 = strcmp(send, "2026") == 0;
@@ -634,6 +753,7 @@ HOOK_PLUGIN("bridge26") {
     }
     InitializeCriticalSection(&g_qlock);
     load_quest_tables();
+    bridge26::g_class_of = item_class;
     g_close_dialog = hook::config_int("close_dialog", 1) != 0;
     InitializeCriticalSection(&g_plock);
     zone::hook_function("PacketContainer::pcb_Append", zone::rebase(kVaPcbAppend), (void*)on_append, &g_append);

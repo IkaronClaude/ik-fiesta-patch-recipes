@@ -54,7 +54,7 @@ An inventory sort (0x304A) swaps cells asynchronously; mid-swap each auto-use it
 `so_ply_UseItemMinimon_SlotItemCheck` (0x564C90) cleared its slot, then switched auto-buff off. The check is skipped
 while `so_ply_IsArrangeInven` (sort counter at player+0x2AB18) is non-zero. Always on (parity-neutral).
 
-### `client_tables` - the zone reads the 2026 client's OWN tables, converting 7 on the fly (layout-file-gated)
+### `client_tables` (now part of `bridge26`, bridge26_tables.h) - the zone reads the 2026 client's OWN tables, converting 7 on the fly (layout-file-gated)
 
 `CDataReader::Read` (0x62A780), the one SHN reader, also registers each file's checksum. Detoured: for the tables in
 `9Data/Shine/ClientTableLayouts.txt` (ActiveSkill, ChargedEffect, ItemDismantle, ItemInfo, MobInfo, SubAbstate,
