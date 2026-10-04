@@ -77,7 +77,10 @@ struct ProtocolPacket {
     int length;
 };
 
-bool g_send2026 = false;
+// send=auto (default): each player gets the shapes of ITS client, told apart at map login (the 2026 MAP_LOGIN_REQ carries
+// 53 checksums, 1718 B; the 2016 one 49, 1590 B) - 2016 and 2026 clients share the zone. send=2026 / 2016 force one.
+enum SendMode { kSendAuto, kSend2016, kSend2026 };
+SendMode g_send = kSendAuto;
 bool g_verify = false;
 int g_verify_max = 200;
 
@@ -141,6 +144,7 @@ void send_to_client(void* player, unsigned short op, const unsigned char* payloa
 
 // ---- per-player state (keyed by the ShinePlayer the packet is for; several map threads send, so under a lock) ----------
 struct PlayerState {
+    int client = 0;                        // 2016 / 2026 as its map login said; 0 = not seen (send=auto: 2016 shapes)
     std::vector<unsigned short> tracked;   // the quest tracker set built from this login's DOING list(s)
     std::vector<int> folded_empty;         // 2026 equip slots this client already has empty (items, batch 6)
     DWORD close_sent_at = 0;               // when we last told the client to close its dialog (0x442E); 0 = not pending
@@ -148,6 +152,16 @@ struct PlayerState {
 };
 CRITICAL_SECTION g_plock;
 std::map<void*, PlayerState> g_players;
+
+// does this player get the 2026 shapes?
+bool to2026(void* player) {
+    if (g_send != kSendAuto) return g_send == kSend2026;
+    EnterCriticalSection(&g_plock);
+    std::map<void*, PlayerState>::const_iterator it = g_players.find(player);
+    bool r = it != g_players.end() && it->second.client == 2026;
+    LeaveCriticalSection(&g_plock);
+    return r;
+}
 bool g_close_dialog = true;
 volatile LONG g_zone_announces_end = 0;     // learned: this zone's exe sends QSC_END itself (quest-script-end-notify)
 const unsigned char kCloseDialog[2] = { 0xFF, 0xFF };
@@ -435,11 +449,16 @@ void logout_as_2016(hook::proto::Call& c, unsigned char type) {
     ((F3)h)(c.self, 0, (hook::u32)t, 3, c.args[2]);
 }
 
-// send=2026: an opcode the zone has no handler for is dropped (logged, a few per opcode) instead of dropping the CLIENT
-// - the 2026 client sends some the 2016 build never had (seen: 0x3085 and 0xC010 on every map login). send=2016 = stock.
+// a 2026 client: an opcode the zone has no handler for is dropped (logged, a few per opcode) instead of dropping the CLIENT
+// - it sends some the 2016 build never had (seen: 0x3085 and 0xC010 on every map login). A 2016 client: stock.
 std::map<unsigned, int> g_unknown_seen;
 CRITICAL_SECTION g_ulock;
-hook::u32 __fastcall drop_unregistered(void*, void*, hook::u32 cmd, hook::u32 len, hook::u32) {
+void* g_unknown_handler = 0;                      // the zone's own: what a 2016 client still gets
+hook::u32 __fastcall drop_unregistered(void* player, void*, hook::u32 cmd, hook::u32 len, hook::u32 a3) {
+    if (!to2026(player) && g_unknown_handler) {
+        typedef hook::u32(__fastcall * H)(void*, void*, hook::u32, hook::u32, hook::u32);
+        return ((H)g_unknown_handler)(player, 0, cmd, len, a3);
+    }
     const unsigned char* c = (const unsigned char*)cmd;
     unsigned op = c ? (unsigned)(c[0] | (c[1] << 8)) : 0xFFFF;
     EnterCriticalSection(&g_ulock);
@@ -468,7 +487,7 @@ void on_client_packet(hook::proto::Call& c) {
         return;
     }
     case 0x4411: {                                   // QUEST_REWARD_SELECT {quest u16, index u32}
-        if (n == 6 && g_send2026) {
+        if (n == 6 && to2026(c.self)) {
             unsigned quest = p[0] | (p[1] << 8);
             unsigned index = p[2] | (p[3] << 8) | (p[4] << 16) | ((unsigned)p[5] << 24);
             int slot = index < 256 ? reward_slot(quest, index) : -1;
@@ -494,7 +513,7 @@ void on_client_packet(hook::proto::Call& c) {
         c.original();
         return;
     case 0x4402:                                     // QUEST_SCRIPT_CMD_ACK: a 2026 client waits to be told to close
-        if (g_send2026 && g_close_dialog && !g_zone_announces_end) {
+        if (g_close_dialog && !g_zone_announces_end && to2026(c.self)) {
             send_to_client(c.self, 0x442E, kCloseDialog, 2);
             EnterCriticalSection(&g_plock);
             PlayerState& st = g_players[c.self];
@@ -517,6 +536,16 @@ void on_client_packet(hook::proto::Call& c) {
         return;
     }
     case 0x1801: {                                   // MAP_LOGIN_REQ: the 2026 form -> the 2016 one (any send mode)
+        {
+            int client = n == kMapLoginHead + kSums2026 * kSum ? 2026 : n == kMapLoginHead + kSums2016 * kSum ? 2016 : 0;
+            EnterCriticalSection(&g_plock);
+            PlayerState& st = g_players[c.self];
+            st = PlayerState();                      // a new login on this player object: nothing carries over
+            st.client = client;
+            LeaveCriticalSection(&g_plock);
+            zone::log("[bridge26] map login: %s client (%d B)%s", client == 2026 ? "2026" : client == 2016 ? "2016" : "unknown",
+                      n, g_send == kSendAuto ? "" : g_send == kSend2026 ? " - send=2026 forces 2026 shapes" : " - send=2016 forces 2016 shapes");
+        }
         unsigned char* t = t_maplogin[t_maplogin_next++ & 1];
         int m = maplogin_2026_to_2016(p, n, t + 2);
         if (m) {
@@ -563,9 +592,11 @@ void __cdecl on_protocolstore(void* table) {
               (int)(sizeof kClientOps / sizeof kClientOps[0]),
               hook::proto::is_registered(table, kLogout2016) ? "registered" : "MISSING",
               wrapped_registered ? "registered" : "not registered");
-    if (g_send2026) {                                // LAST: is_registered() reports everything as registered after this
+    if (g_send != kSend2016) {                       // LAST: is_registered() reports everything as registered after this
+        g_unknown_handler = hook::proto::unknown_handler(table);
         int n = hook::proto::cover_unregistered(table, (void*)&drop_unregistered);
-        zone::log("[bridge26] send=2026: %d unregistered opcode slot(s) drop the packet instead of the client", n);
+        zone::log("[bridge26] %d unregistered opcode slot(s): a 2026 client's packet is dropped there, a 2016 client gets the "
+                  "zone's own handling", n);
     }
 }
 
@@ -775,11 +806,13 @@ bool on_item_packet(void* self, void* edx, void* object, ProtocolPacket* pkt) {
 
 void __fastcall on_append(void* self, void* edx, void* object, ProtocolPacket* pkt) {
     AppendFn original = (AppendFn)g_append.trampoline;
-    if (g_send2026 && pkt && pkt->buffer && pkt->length >= 2)
+    bool valid = pkt && pkt->buffer && pkt->length >= 2;
+    if (valid && g_send != kSend2016)               // broadcast state a 2026 recipient's records need, whoever it went to
         extra_observe(get_u16(pkt->buffer), pkt->buffer + 2, pkt->length - 2);
-    if (g_send2026 && pkt && pkt->buffer && pkt->length >= 2 && on_quest_packet(self, edx, object, pkt)) return;
-    if (g_send2026 && pkt && pkt->buffer && pkt->length >= 2 && on_item_packet(self, edx, object, pkt)) return;
-    if ((g_send2026 || g_verify) && pkt && pkt->buffer && pkt->length >= 2) {
+    bool to26 = valid && to2026(object);
+    if (to26 && on_quest_packet(self, edx, object, pkt)) return;
+    if (to26 && on_item_packet(self, edx, object, pkt)) return;
+    if ((to26 || g_verify) && valid) {
         unsigned op = get_u16(pkt->buffer);
         if (const Owned* o = owned(op)) {
             const unsigned char* payload = pkt->buffer + 2;
@@ -791,7 +824,7 @@ void __fastcall on_append(void* self, void* edx, void* object, ProtocolPacket* p
                     zone::log("[bridge26] %s %d B is not the 2016 shape: sent as it is", o->name, n);
             }
             if (g_verify) verify_log(o, payload, n, t_out + 2, m);
-            if (g_send2026 && m) {
+            if (to26 && m) {
                 post_translate(op, t_out + 2, m);
                 t_out[0] = pkt->buffer[0];
                 t_out[1] = pkt->buffer[1];
@@ -811,8 +844,8 @@ HOOK_PLUGIN("bridge26") {
     // converted (and its checksums stated) before it loads them (bridge26_tables.h, ex-client_tables)
     tables::init();
     char send[16];
-    hook::config_str("send", "2016", send, sizeof send);
-    g_send2026 = strcmp(send, "2026") == 0;
+    hook::config_str("send", "auto", send, sizeof send);
+    g_send = strcmp(send, "2026") == 0 ? kSend2026 : strcmp(send, "2016") == 0 ? kSend2016 : kSendAuto;
     g_verify = hook::config_int("verify", 0) != 0;
     g_verify_max = hook::config_int("verify_max", 200);
     InitializeCriticalSection(&g_vlock);
@@ -836,6 +869,7 @@ HOOK_PLUGIN("bridge26") {
     InitializeCriticalSection(&g_ulock);
     zone::hook_function("PacketContainer::pcb_Append", zone::rebase(kVaPcbAppend), (void*)on_append, &g_append);
     zone::hook_function("protocolstore", zone::rebase(kVaProtocolStore), (void*)on_protocolstore, &g_store);
-    zone::log("[bridge26] sending %s shapes for %d packet(s)%s", g_send2026 ? "2026" : "2016", kOwnedCount,
-              g_verify ? ", verify on" : "");
+    zone::log("[bridge26] %s for %d packet(s)%s", g_send == kSendAuto ? "per client (send=auto: told apart at map login)"
+              : g_send == kSend2026 ? "2026 shapes to every client (send=2026)" : "2016 shapes to every client (send=2016)",
+              kOwnedCount, g_verify ? ", verify on" : "");
 }
