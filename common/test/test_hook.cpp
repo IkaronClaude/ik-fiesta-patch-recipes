@@ -62,11 +62,13 @@ static void proto_on_dept(hook::proto::Call& c) {
 }
 static void proto_on_new(hook::proto::Call&) { g_proto_new++; }   // a NEW opcode: never call the unknown handler
 // what ClientSession::zbs_Parsing does: handler = rows[op & 0x3FF][op >> 10]; handler(ecx=player, cmd, len, a3)
-static void proto_dispatch(void* table, unsigned char* cmd, int len) {
+static hook::u32 proto_dispatch(void* table, unsigned char* cmd, int len) {
     unsigned op = cmd[0] | (cmd[1] << 8);
     typedef hook::u32(__fastcall * H)(void*, void*, hook::u32, hook::u32, hook::u32);
-    ((H)hook::proto::get(table, op))((void*)0x1234, NULL, (hook::u32)cmd, (hook::u32)len, 0);
+    return ((H)hook::proto::get(table, op))((void*)0x1234, NULL, (hook::u32)cmd, (hook::u32)len, 0);
 }
+static unsigned g_proto_covered;
+static hook::u32 __fastcall proto_cover(void*, void*, hook::u32, hook::u32, hook::u32) { g_proto_covered++; return 1; }
 
 int main() {
     printf("zonehook self-test\n");
@@ -149,7 +151,7 @@ int main() {
         unsigned char pkt[4] = { 0x48, 0x24, 7, 0 };
         g_proto_seen = 0;
         CHECK(hook::proto::hook_department<0>(&t, 9, proto_on_dept, hook::proto::kPacketArg1) == 1, "hook_department hooks it");
-        proto_dispatch(&t, pkt, 4);
+        CHECK(proto_dispatch(&t, pkt, 4) == 0, "the slot returns what the original returned (the WM closes on 0)");
         CHECK(g_proto_seen == 0x2448 && g_proto_original == 1, "department callback saw 0x2448 and ran the original");
         CHECK(g_proto_len == 3, "the callback rewrote the length the original got");
 
@@ -159,12 +161,21 @@ int main() {
         CHECK(t.rows[0x50] != t.def && t.def[9] == t.unknown, "it got its own row; the shared default row is untouched");
         CHECK(t.rows[0x51] == t.def, "a neighbouring command still shares the default row");
         g_proto_new = 0;
-        proto_dispatch(&t, newpkt, 2);
+        CHECK(proto_dispatch(&t, newpkt, 2) == 1, "a callback that swallows the packet returns 1 (handled)");
         CHECK(g_proto_new == 1 && g_proto_unknown == 0, "the new opcode reached its callback, not the unknown handler");
 
         hook::uninstall_all();
         CHECK(hook::proto::get(&t, 0x2448) == (void*)proto_swing && hook::proto::get(&t, 0x2450) == t.unknown,
               "uninstall_all restored both slots");
+
+        // cover_unregistered: every unknown entry -> the cover handler, registered ones untouched
+        int covered = hook::proto::cover_unregistered(&t, (void*)proto_cover);
+        CHECK(covered == 64 + 63 + 64, "covers the default row (64), cmd 0x48's unregistered depts (63) and cmd 0x50's own row (64, left by hook_opcode)");
+        CHECK(hook::proto::get(&t, 0x2448) == (void*)proto_swing, "a registered handler is left alone");
+        g_proto_covered = 0; g_proto_unknown = 0;
+        unsigned char stray[2] = { 0x77, 0x31 };     // 0x3177: nothing registered anywhere
+        CHECK(proto_dispatch(&t, stray, 2) == 1 && g_proto_covered == 1 && g_proto_unknown == 0,
+              "an unregistered opcode reaches the cover handler, never the unknown one");
     }
 
     printf("\n%s (%d failure%s)\n", failures ? "FAILED" : "PASSED", failures, failures == 1 ? "" : "s");

@@ -625,10 +625,15 @@ struct Call {
     unsigned op;         // the packet's opcode
     void* orig;          // the handler that was in the slot
     int arity;           // stack arguments of this table's handlers (2 or 3)
-    u32 original() const {
+    // what the slot returns to the server's dispatcher: the original's result once original() ran, else this default.
+    // It MATTERS in some servers - the WorldManager's CParserClient::Parser closes the session on a 0 - so a callback
+    // that swallows a packet leaves it at 1 ("handled"), and one that wants the stock refusal sets 0.
+    u32 result = 1;
+    u32 original() {
         typedef u32(__fastcall * F3)(void*, void*, u32, u32, u32);
         typedef u32(__fastcall * F2)(void*, void*, u32, u32);
-        return arity == 2 ? ((F2)orig)(self, NULL, args[0], args[1]) : ((F3)orig)(self, NULL, args[0], args[1], args[2]);
+        result = arity == 2 ? ((F2)orig)(self, NULL, args[0], args[1]) : ((F3)orig)(self, NULL, args[0], args[1], args[2]);
+        return result;
     }
 };
 typedef void (*CallFn)(Call& c);
@@ -655,7 +660,7 @@ u32 __fastcall dispatch3(void* self, void* /*edx*/, u32 a1, u32 a2, u32 a3) {
     c.orig = dep ? dep[cmd_of(c.op)] : NULL;
     if (!c.orig) c.orig = get(h.table, c.op);   // not one of ours (cannot happen through our slot): pass through
     h.fn(c);
-    return 0;
+    return c.result;
 }
 
 // the same for a two-argument handler: __fastcall pops exactly what the caller pushed, so the arity must match
@@ -670,7 +675,7 @@ u32 __fastcall dispatch2(void* self, void* /*edx*/, u32 a1, u32 a2) {
     c.orig = dep ? dep[cmd_of(c.op)] : NULL;
     if (!c.orig) c.orig = get(h.table, c.op);
     h.fn(c);
-    return 0;
+    return c.result;
 }
 }  // namespace detail
 
