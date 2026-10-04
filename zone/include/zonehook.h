@@ -60,6 +60,11 @@ inline bool hook_packet(const char* name, void* replacement, Detour* out) {
     return true;
 }
 
+// The protocol table every CLIENT packet is dispatched through (shineprotofunc, 0x850E28): pass it to the
+// hook::proto helpers - proto::hook_department<K>(zone::client_protocol_table(), dept, fn, proto::kPacketArg1) sees
+// every handler of a department (args: cmd, len, a3), proto::hook_opcode<K> one opcode, also a NEW one.
+inline void* client_protocol_table() { return rebase(0x00850E28u); }
+
 }  // namespace zone
 
 // ---- hooking a packet handler ----------------------------------------------------------------------

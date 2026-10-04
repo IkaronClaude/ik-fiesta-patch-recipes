@@ -506,7 +506,209 @@ inline bool hook_function(const char* what, void* target, void* replacement, Det
     return true;
 }
 
+// ---- the protocol tables: department / opcode handlers ----------------------------------------------
+//
+// Every server dispatches a received packet through a PROTOCOLFUNCTIONTEMPLETE<handler> - one per session type
+// (Zone: shineprotofunc for clients, wldmanprotofunc / gdsprotofunc / ... for its server links; Login and WorldManager:
+// their CParserClient and the S2S parsers). Read out of Zone.exe 2026-10-04 (dispatch ClientSession::zbs_Parsing
+// 0x4FBB22, registration 0x4D36C0, called by protocolstore(dept, cmd, fn)); Login / WM use the same template:
+//
+//     +0x0000  vtable
+//     +0x0004  void** rows[1024]        indexed by CMD (opcode & 0x3FF)
+//     +0x1004  void*  default_row[64]   every row starts as this shared one
+//     +0x1104  void*  unknown           the handler of an unregistered opcode (it drops the client)
+//     row[DEPT] (opcode >> 10)          = the handler, a __thiscall member function
+//
+// so handler(op) = rows[op & 0x3FF][op >> 10]. Registering into a command whose row is still the shared default row
+// first gives it its OWN 64-slot row filled with `unknown` - exactly what the server's registration does; writing
+// into the shared row would register the handler for that department under EVERY unused command.
+//
+// Hooking through the table needs no code patch: a slot is swapped, the original kept, and uninstall_all() puts it
+// back. A replacement is a __fastcall function (self, edx, args...): __fastcall with a dummy EDX has the same ABI as
+// the __thiscall handler (ECX = this, stack args, callee pops), so no thunk is needed. The ARGUMENTS differ per
+// table (Zone ShinePlayer: TNETCOMMAND* cmd, int len, u16 a3; Login / WM CParserClient: Session*, NETPACKET*, int len)
+// - so the hooks below take three dword arguments and say which one is the packet (to read its opcode).
+namespace proto {
+
+enum { kCmds = 1024, kDepts = 64, kRowsAt = 0x4, kDefaultRowAt = 0x1004, kUnknownAt = 0x1104 };
+
+inline unsigned dept_of(unsigned op) { return op >> 10; }
+inline unsigned cmd_of(unsigned op) { return op & 0x3FF; }
+inline unsigned opcode(unsigned dept, unsigned cmd) { return (dept << 10) | cmd; }
+
+inline void*** rows(void* table) { return (void***)((u8*)table + kRowsAt); }
+inline void** default_row(void* table) { return (void**)((u8*)table + kDefaultRowAt); }
+inline void* unknown_handler(void* table) { return *(void**)((u8*)table + kUnknownAt); }
+
+// the handler the server would call for `op` (the unknown-opcode handler when nothing is registered)
+inline void* get(void* table, unsigned op) {
+    if (!table || op > 0xFFFF) return NULL;
+    return rows(table)[cmd_of(op)][dept_of(op)];
+}
+
+inline bool is_registered(void* table, unsigned op) {
+    return table && get(table, op) != unknown_handler(table);
+}
+
+// the slot of `op`, giving its command its own row first when it still shares the default one (see above). The row
+// is allocated from the process heap and never freed - the server's own rows live as long as the process, too.
+inline void** slot(void* table, unsigned op) {
+    if (!table || op > 0xFFFF) return NULL;
+    void*** r = rows(table);
+    unsigned c = cmd_of(op);
+    if (r[c] == default_row(table)) {
+        void** own = (void**)HeapAlloc(GetProcessHeap(), 0, kDepts * sizeof(void*));
+        if (!own) return NULL;
+        for (int i = 0; i < kDepts; i++) own[i] = unknown_handler(table);
+        r[c] = own;
+    }
+    return &r[c][dept_of(op)];
+}
+
+namespace detail {
+struct Swap { void** at; void* was; };
+enum { kMaxSwaps = 4096 };
+inline Swap g_swaps[kMaxSwaps];
+inline int g_swap_count = 0;
+}  // namespace detail
+
+// Put `fn` into op's slot (registering it if the server had no handler) and return what was there - call that from
+// `fn` to run the original. Remembered, so uninstall_all() restores it.
+inline void* set(void* table, unsigned op, void* fn) {
+    void** s = slot(table, op);
+    if (!s) { log("[proto] no slot for %04x (table %x)", op, table); return NULL; }
+    void* was = *s;
+    if (detail::g_swap_count < detail::kMaxSwaps) {
+        detail::g_swaps[detail::g_swap_count].at = s;
+        detail::g_swaps[detail::g_swap_count].was = was;
+        detail::g_swap_count++;
+    }
+    *s = fn;
+    return was;
+}
+
+inline void restore_all() {
+    for (int i = detail::g_swap_count - 1; i >= 0; i--) *detail::g_swaps[i].at = detail::g_swaps[i].was;
+    detail::g_swap_count = 0;
+}
+
+// Call every registered handler of a department: cb(op, handler, user).
+template <typename F>
+inline int for_each_in_department(void* table, unsigned dept, F cb) {
+    int n = 0;
+    for (unsigned c = 0; c < kCmds; c++) {
+        unsigned op = opcode(dept, c);
+        if (is_registered(table, op)) { cb(op, get(table, op)); n++; }
+    }
+    return n;
+}
+
+// ---- generic department hooks ---------------------------------------------------------------------
+//
+// One callback for every handler of a department (or of chosen opcodes), with the original at hand:
+//
+//     static void on_bat(proto::Call& c) {
+//         if (c.op == 0x2448) { ... }
+//         c.original();                          // or don't: the packet is swallowed
+//     }
+//     proto::hook_department<0>(zone::shineprotofunc(), 9, on_bat, proto::kPacketArg1);
+//
+// The slot index K (0..kMaxHookTables-1) gives each hooked table its own thunk and its own originals - two tables
+// can share opcodes (the zone's client and WorldManager tables both have dept 2). The handler's three dword args
+// are passed through untouched; `packet` names which one points at the packet (its first two bytes are the opcode),
+// and `c.args[i]` may be rewritten before c.original() (a new buffer, a new length).
+enum PacketArg { kPacketArg1 = 0, kPacketArg2 = 1, kPacketArg3 = 2 };
+
+struct Call {
+    void* self;          // ECX: the ShinePlayer / the parser
+    u32 args[3];         // the handler's stack arguments, as passed
+    unsigned op;         // the packet's opcode
+    void* orig;          // the handler that was in the slot
+    int arity;           // stack arguments of this table's handlers (2 or 3)
+    u32 original() const {
+        typedef u32(__fastcall * F3)(void*, void*, u32, u32, u32);
+        typedef u32(__fastcall * F2)(void*, void*, u32, u32);
+        return arity == 2 ? ((F2)orig)(self, NULL, args[0], args[1]) : ((F3)orig)(self, NULL, args[0], args[1], args[2]);
+    }
+};
+typedef void (*CallFn)(Call& c);
+
+enum { kMaxHookTables = 8 };
+namespace detail {
+struct HookTable {
+    void* table;
+    CallFn fn;
+    int packet;
+    int arity;                  // 2 or 3 stack arguments (the S2S tables pass TNETCOMMAND*, int; the client ones 3)
+    void** originals[kDepts];   // per department: kCmds originals, allocated when the department is first hooked
+};
+inline HookTable g_htables[kMaxHookTables];
+
+template <int K>
+u32 __fastcall dispatch3(void* self, void* /*edx*/, u32 a1, u32 a2, u32 a3) {
+    HookTable& h = g_htables[K];
+    Call c;
+    c.self = self; c.args[0] = a1; c.args[1] = a2; c.args[2] = a3; c.arity = 3;
+    const u8* pkt = (const u8*)c.args[h.packet];
+    c.op = pkt ? (unsigned)(pkt[0] | (pkt[1] << 8)) : 0xFFFFFFFF;
+    void** dep = c.op <= 0xFFFF ? h.originals[dept_of(c.op)] : NULL;
+    c.orig = dep ? dep[cmd_of(c.op)] : NULL;
+    if (!c.orig) c.orig = get(h.table, c.op);   // not one of ours (cannot happen through our slot): pass through
+    h.fn(c);
+    return 0;
+}
+
+// the same for a two-argument handler: __fastcall pops exactly what the caller pushed, so the arity must match
+template <int K>
+u32 __fastcall dispatch2(void* self, void* /*edx*/, u32 a1, u32 a2) {
+    HookTable& h = g_htables[K];
+    Call c;
+    c.self = self; c.args[0] = a1; c.args[1] = a2; c.args[2] = 0; c.arity = 2;
+    const u8* pkt = (const u8*)c.args[h.packet];
+    c.op = pkt ? (unsigned)(pkt[0] | (pkt[1] << 8)) : 0xFFFFFFFF;
+    void** dep = c.op <= 0xFFFF ? h.originals[dept_of(c.op)] : NULL;
+    c.orig = dep ? dep[cmd_of(c.op)] : NULL;
+    if (!c.orig) c.orig = get(h.table, c.op);
+    h.fn(c);
+    return 0;
+}
+}  // namespace detail
+
+// Hook one opcode of table slot K (registering it if the server has no handler: then c.orig is the unknown-opcode
+// handler, which drops the client - so a callback for a NEW opcode must not call c.original()).
+template <int K>
+inline bool hook_opcode(void* table, unsigned op, CallFn fn, PacketArg packet, int arity = 3) {
+    detail::HookTable& h = detail::g_htables[K];
+    if (h.table && h.table != table) { log("[proto] hook slot %d already used for table %x", K, h.table); return false; }
+    if (arity != 2 && arity != 3) { log("[proto] arity %d: handlers take 2 or 3 stack arguments", arity); return false; }
+    h.table = table; h.fn = fn; h.packet = packet; h.arity = arity;
+    unsigned d = dept_of(op);
+    if (!h.originals[d]) {
+        h.originals[d] = (void**)HeapAlloc(GetProcessHeap(), HEAP_ZERO_MEMORY, kCmds * sizeof(void*));
+        if (!h.originals[d]) return false;
+    }
+    void* was = set(table, op, arity == 2 ? (void*)&detail::dispatch2<K> : (void*)&detail::dispatch3<K>);
+    if (!was) return false;
+    h.originals[d][cmd_of(op)] = was;
+    return true;
+}
+
+// Hook every handler the department has registered (returns how many). New opcodes are hook_opcode's job.
+template <int K>
+inline int hook_department(void* table, unsigned dept, CallFn fn, PacketArg packet, int arity = 3) {
+    unsigned ops[kCmds];
+    int n = 0;
+    for_each_in_department(table, dept, [&](unsigned op, void*) { ops[n++] = op; });
+    int ok = 0;
+    for (int i = 0; i < n; i++) ok += hook_opcode<K>(table, ops[i], fn, packet, arity) ? 1 : 0;
+    log("[proto] department %u: %d of %d handler(s) hooked (table %x, slot %d)", dept, ok, n, table, K);
+    return ok;
+}
+
+}  // namespace proto
+
 inline void uninstall_all() {
+    proto::restore_all();
     for (int i = detail::g_hook_count - 1; i >= 0; i--) undetour(detail::g_hooks[i]);
     detail::g_hook_count = 0;
 }

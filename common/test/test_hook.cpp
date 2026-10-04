@@ -47,6 +47,27 @@ static int __cdecl triple_replacement(int x) {
     return ((TripleFn)g_detour2.trampoline)(x) + 1;
 }
 
+// protocol-table fixtures: handlers with the zone's __thiscall shape (cmd, len, a3), written as the equivalent __fastcall
+static unsigned g_proto_seen, g_proto_original, g_proto_len, g_proto_new, g_proto_unknown;
+static hook::u32 __fastcall proto_swing(void*, void*, hook::u32, hook::u32 len, hook::u32) {
+    g_proto_original++;
+    g_proto_len = len;
+    return 0;
+}
+static hook::u32 __fastcall proto_unknown(void*, void*, hook::u32, hook::u32, hook::u32) { g_proto_unknown++; return 0; }
+static void proto_on_dept(hook::proto::Call& c) {
+    g_proto_seen = c.op;
+    c.args[1] = 3;                 // a translator would point args[0] at a new buffer and set its length here
+    c.original();
+}
+static void proto_on_new(hook::proto::Call&) { g_proto_new++; }   // a NEW opcode: never call the unknown handler
+// what ClientSession::zbs_Parsing does: handler = rows[op & 0x3FF][op >> 10]; handler(ecx=player, cmd, len, a3)
+static void proto_dispatch(void* table, unsigned char* cmd, int len) {
+    unsigned op = cmd[0] | (cmd[1] << 8);
+    typedef hook::u32(__fastcall * H)(void*, void*, hook::u32, hook::u32, hook::u32);
+    ((H)hook::proto::get(table, op))((void*)0x1234, NULL, (hook::u32)cmd, (hook::u32)len, 0);
+}
+
 int main() {
     printf("zonehook self-test\n");
 
@@ -107,6 +128,44 @@ int main() {
     void* prev = hook::vtable_set(fake_vt, 1, (void*)triple_replacement);
     CHECK(prev == (void*)triple && fake_vt[1] == (void*)triple_replacement, "vtable_set swaps one slot and returns the old entry");
     CHECK(fake_vt[0] == (void*)0x1111 && fake_vt[2] == (void*)0x3333, "vtable_set leaves the neighbours alone");
+
+    // -- protocol tables: the layout Zone / Login / WM dispatch through (hook::proto)
+    {
+        struct FakeTable { void* vt; void** rows[1024]; void* def[64]; void* unknown; };
+        static FakeTable t;
+        t.unknown = (void*)proto_unknown;
+        for (int i = 0; i < 64; i++) t.def[i] = t.unknown;
+        for (int i = 0; i < 1024; i++) t.rows[i] = t.def;
+        // the server's registration: dept 9 cmd 0x48 (0x2448) gets its own row
+        static void* row48[64];
+        for (int i = 0; i < 64; i++) row48[i] = t.unknown;
+        row48[9] = (void*)proto_swing;
+        t.rows[0x48] = row48;
+
+        CHECK(hook::proto::get(&t, 0x2448) == (void*)proto_swing, "proto::get = rows[cmd][dept]");
+        CHECK(!hook::proto::is_registered(&t, 0x2449), "an unregistered opcode reads as the unknown handler");
+        CHECK(hook::proto::for_each_in_department(&t, 9, [](unsigned, void*) {}) == 1, "for_each_in_department finds the one handler");
+
+        unsigned char pkt[4] = { 0x48, 0x24, 7, 0 };
+        g_proto_seen = 0;
+        CHECK(hook::proto::hook_department<0>(&t, 9, proto_on_dept, hook::proto::kPacketArg1) == 1, "hook_department hooks it");
+        proto_dispatch(&t, pkt, 4);
+        CHECK(g_proto_seen == 0x2448 && g_proto_original == 1, "department callback saw 0x2448 and ran the original");
+        CHECK(g_proto_len == 3, "the callback rewrote the length the original got");
+
+        unsigned char newpkt[2] = { 0x50, 0x24 };    // 0x2450: nothing registered, cmd 0x50 still on the default row
+        CHECK(t.rows[0x50] == t.def, "cmd 0x50 starts on the shared default row");
+        CHECK(hook::proto::hook_opcode<1>(&t, 0x2450, proto_on_new, hook::proto::kPacketArg1), "hook_opcode registers a new opcode");
+        CHECK(t.rows[0x50] != t.def && t.def[9] == t.unknown, "it got its own row; the shared default row is untouched");
+        CHECK(t.rows[0x51] == t.def, "a neighbouring command still shares the default row");
+        g_proto_new = 0;
+        proto_dispatch(&t, newpkt, 2);
+        CHECK(g_proto_new == 1 && g_proto_unknown == 0, "the new opcode reached its callback, not the unknown handler");
+
+        hook::uninstall_all();
+        CHECK(hook::proto::get(&t, 0x2448) == (void*)proto_swing && hook::proto::get(&t, 0x2450) == t.unknown,
+              "uninstall_all restored both slots");
+    }
 
     printf("\n%s (%d failure%s)\n", failures ? "FAILED" : "PASSED", failures, failures == 1 ? "" : "s");
     return failures ? 1 : 0;
