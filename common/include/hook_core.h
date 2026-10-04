@@ -693,6 +693,26 @@ inline bool hook_opcode(void* table, unsigned op, CallFn fn, PacketArg packet, i
     return true;
 }
 
+// Point every UNREGISTERED slot of the table at `fn` instead of the unknown-opcode handler (which drops the client), and
+// return how many department entries changed. `fn` must have the table's handler convention (__thiscall, `arity` stack
+// arguments). Opcodes hooked or registered later are unaffected (they get their own slot); is_registered() then reports
+// every opcode as registered, so call this LAST, after the hooks that look for unregistered opcodes.
+inline int cover_unregistered(void* table, void* fn) {
+    if (!table || !fn) return 0;
+    void* unknown = unknown_handler(table);
+    void** def = default_row(table);
+    int n = 0;
+    for (int d = 0; d < kDepts; d++)
+        if (def[d] == unknown) { def[d] = fn; n++; }
+    void*** r = rows(table);
+    for (int c = 0; c < kCmds; c++) {
+        if (!r[c] || r[c] == def) continue;
+        for (int d = 0; d < kDepts; d++)
+            if (r[c][d] == unknown) { r[c][d] = fn; n++; }
+    }
+    return n;
+}
+
 // Hook every handler the department has registered (returns how many). New opcodes are hook_opcode's job.
 template <int K>
 inline int hook_department(void* table, unsigned dept, CallFn fn, PacketArg packet, int arity = 3) {

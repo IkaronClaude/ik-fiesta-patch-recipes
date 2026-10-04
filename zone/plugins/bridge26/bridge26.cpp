@@ -401,6 +401,53 @@ int g_track_dropped = 0;
 thread_local unsigned char t_cmd[8][0x400];
 thread_local int t_cmd_next = 0;
 unsigned char* cmd_buffer() { return t_cmd[t_cmd_next++ & 7]; }
+thread_local unsigned char t_maplogin[2][0x800];      // MAP_LOGIN_REQ is 1590 B in 2016 form - too big for the ring
+thread_local int t_maplogin_next = 0;
+
+void* g_client_table = 0;
+
+// MAP_LOGIN_REQ, 2026 form: 22 B head + the 2026 client's 53 checksums (its list at Fiesta.exe 0xB6F504) -> 22 + the
+// zone's 49: zone slots 0..23 = client 0..23; 24, 25 (MapLinkPoint, MapWayPoint - the 2026 client neither has nor checks
+// them) = 32 '0's, which is what the table half registers for those two; zone 26..48 = client 24..46; the client's last
+// six (DeprecatedFiles + 5 quest tables the 2016 zone has no slot for) are dropped. The 2016 form passes as it is.
+const int kMapLoginHead = 22, kSum = 32, kSums2026 = 53, kSums2016 = 49;
+int maplogin_2026_to_2016(const unsigned char* p, int n, unsigned char* o) {
+    if (n != kMapLoginHead + kSums2026 * kSum) return 0;
+    memcpy(o, p, kMapLoginHead + 24 * kSum);
+    memset(o + kMapLoginHead + 24 * kSum, '0', 2 * kSum);
+    memcpy(o + kMapLoginHead + 26 * kSum, p + kMapLoginHead + 24 * kSum, 23 * kSum);
+    return kMapLoginHead + kSums2016 * kSum;
+}
+
+// 2026 logout opcodes: 0x0C15 {LogoutType u8} is NC_USER_NORMALLOGOUT_CMD in 2026 but a SERVER->client opcode in 2016
+// ("Invalid protocol[3/21]" + hang-up on return to character select); 2016 numbers the request 0x0C18. The 2026
+// instant logout wraps it: 0x0C23 {inner opcode u16 = 0x0C15, LogoutType u8} (0x0C23 = REGISENUMBER_REQ in 2016).
+const unsigned short kLogout2026 = 0x0C15, kLogout2016 = 0x0C18, kWrapped2026 = 0x0C23;
+void logout_as_2016(hook::proto::Call& c, unsigned char type) {
+    void* h = g_client_table ? hook::proto::get(g_client_table, kLogout2016) : 0;
+    if (!h || !hook::proto::is_registered(g_client_table, kLogout2016)) {
+        zone::log("[bridge26] 2026 logout (type %u): the zone has no 0x0C18 handler - dropped", type);
+        return;
+    }
+    unsigned char* t = cmd_buffer();
+    t[0] = (unsigned char)(kLogout2016 & 0xFF); t[1] = (unsigned char)(kLogout2016 >> 8); t[2] = type;
+    typedef hook::u32(__fastcall * F3)(void*, void*, hook::u32, hook::u32, hook::u32);
+    ((F3)h)(c.self, 0, (hook::u32)t, 3, c.args[2]);
+}
+
+// send=2026: an opcode the zone has no handler for is dropped (logged, a few per opcode) instead of dropping the CLIENT
+// - the 2026 client sends some the 2016 build never had (seen: 0x3085 and 0xC010 on every map login). send=2016 = stock.
+std::map<unsigned, int> g_unknown_seen;
+CRITICAL_SECTION g_ulock;
+hook::u32 __fastcall drop_unregistered(void*, void*, hook::u32 cmd, hook::u32 len, hook::u32) {
+    const unsigned char* c = (const unsigned char*)cmd;
+    unsigned op = c ? (unsigned)(c[0] | (c[1] << 8)) : 0xFFFF;
+    EnterCriticalSection(&g_ulock);
+    int k = ++g_unknown_seen[op];
+    LeaveCriticalSection(&g_ulock);
+    if (k <= 3) zone::log("[bridge26] dropped 0x%04x (%u B): no handler in the 2016 zone%s", op, len, k == 3 ? " (last report)" : "");
+    return 0;
+}
 
 void on_client_packet(hook::proto::Call& c) {
     const unsigned char* cmd = (const unsigned char*)c.args[0];
@@ -469,6 +516,27 @@ void on_client_packet(hook::proto::Call& c) {
         if (!swallow) c.original();
         return;
     }
+    case 0x1801: {                                   // MAP_LOGIN_REQ: the 2026 form -> the 2016 one (any send mode)
+        unsigned char* t = t_maplogin[t_maplogin_next++ & 1];
+        int m = maplogin_2026_to_2016(p, n, t + 2);
+        if (m) {
+            t[0] = cmd[0]; t[1] = cmd[1];
+            c.args[0] = (hook::u32)t;
+            c.args[1] = (hook::u32)(m + 2);
+            zone::log("[bridge26] MAP_LOGIN_REQ 2026 form (%d B, 53 checksums) -> 2016 (%d B, 49)", n, m);
+        }
+        c.original();
+        return;
+    }
+    case kLogout2026:                                // never a request in 2016: always the 2026 client's logout
+        if (n == 1) logout_as_2016(c, p[0]);
+        else zone::log("[bridge26] 0x0C15 of %d B dropped: not the 1-byte 2026 logout", n);
+        return;
+    case kWrapped2026:
+        if (n == 3 && (p[0] | (p[1] << 8)) == kLogout2026) { logout_as_2016(c, p[2]); return; }
+        if (c.orig != hook::proto::unknown_handler(g_client_table)) c.original();   // the zone's own 0x0C23
+        else zone::log("[bridge26] 0x0C23 of %d B dropped: not a wrapped logout, and the zone has no handler", n);
+        return;
     case 0x182E: {                                   // 2026 map-status request after a map login: official answers 00
         unsigned char zero = 0;
         send_to_client(c.self, 0x182F, &zero, 1);
@@ -478,7 +546,7 @@ void on_client_packet(hook::proto::Call& c) {
     c.original();
 }
 
-const unsigned short kClientOps[] = { 0x4811, 0x4411, 0x441F, 0x4421, 0x182E, 0x4402, 0x200B };
+const unsigned short kClientOps[] = { 0x4811, 0x4411, 0x441F, 0x4421, 0x182E, 0x4402, 0x200B, 0x1801, kLogout2026, kWrapped2026 };
 
 zone::Detour g_store;
 typedef void(__cdecl* StoreFn)(void* table);
@@ -486,10 +554,19 @@ typedef void(__cdecl* StoreFn)(void* table);
 void __cdecl on_protocolstore(void* table) {
     ((StoreFn)g_store.trampoline)(table);
     if (table != zone::client_protocol_table()) return;
+    g_client_table = table;
+    bool wrapped_registered = hook::proto::is_registered(table, kWrapped2026);
     int ok = 0;
     for (unsigned short op : kClientOps)
         ok += hook::proto::hook_opcode<0>(table, op, on_client_packet, hook::proto::kPacketArg1) ? 1 : 0;
-    zone::log("[bridge26] client table: %d of %d request handler(s) hooked", ok, (int)(sizeof kClientOps / sizeof kClientOps[0]));
+    zone::log("[bridge26] client table: %d of %d request handler(s) hooked (0x0C18 logout %s, 0x0C23 %s)", ok,
+              (int)(sizeof kClientOps / sizeof kClientOps[0]),
+              hook::proto::is_registered(table, kLogout2016) ? "registered" : "MISSING",
+              wrapped_registered ? "registered" : "not registered");
+    if (g_send2026) {                                // LAST: is_registered() reports everything as registered after this
+        int n = hook::proto::cover_unregistered(table, (void*)&drop_unregistered);
+        zone::log("[bridge26] send=2026: %d unregistered opcode slot(s) drop the packet instead of the client", n);
+    }
 }
 
 // ---- the S->C hook ---------------------------------------------------------------------------------------------------
@@ -756,6 +833,7 @@ HOOK_PLUGIN("bridge26") {
     bridge26::g_class_of = item_class;
     g_close_dialog = hook::config_int("close_dialog", 1) != 0;
     InitializeCriticalSection(&g_plock);
+    InitializeCriticalSection(&g_ulock);
     zone::hook_function("PacketContainer::pcb_Append", zone::rebase(kVaPcbAppend), (void*)on_append, &g_append);
     zone::hook_function("protocolstore", zone::rebase(kVaProtocolStore), (void*)on_protocolstore, &g_store);
     zone::log("[bridge26] sending %s shapes for %d packet(s)%s", g_send2026 ? "2026" : "2016", kOwnedCount,
