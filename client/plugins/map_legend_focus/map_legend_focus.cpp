@@ -273,8 +273,11 @@ bool on_process(pgwin::Message& m) {
     unsigned rows = 0;
     while (rows < kMaxRows && item_data(list, rows, &data[rows])) rows++;
     unsigned top = read_u32(list, kListTop);
-    unsigned row = (unsigned)m.lparam;
-    hook::log("legend row %u clicked (list top %u, %u rows)", row, top, rows);
+    // the command carries the row as SHOWN (0 = the top visible line); the data is indexed from the list start, so add
+    // the scroll offset (operator 2026-10-04: heading 6 clicked scrolled by 2 came in as 14 and showed quest 5's mob line)
+    unsigned shown = (unsigned)m.lparam;
+    unsigned row = shown + top;
+    hook::log("legend row %u clicked (shown row %u + list top %u, %u rows)", row, shown, top, rows);
     for (unsigned i = 0; i < rows; i++) {
         if (data[i] >= kHeading)
             hook::log("  row %u: quest heading %u = quest %u", i, data[i] - kHeading, quest_of(data[i] - kHeading));
