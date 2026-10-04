@@ -81,6 +81,54 @@ inline int empower_2026_to_2016(const unsigned char* p, int n, unsigned char* o)
 }
 
 struct Owned { unsigned short op; Translate fn; const char* name; };
+// ---- batch 4 ---------------------------------------------------------------------------------------------------------
+// CHARGEDBUFF {count u16} + n x 14 -> {u32 0, count u16} + n x 22 (the 14 bytes, then 8 zero) - T.ChargedBuff2016To2026
+inline int chargedbuff(const unsigned char* p, int n, unsigned char* o) {
+    if (n < 2) return 0;
+    int k = get_u16(p);
+    if (n != 2 + 14 * k || 6 + 22 * k > 0x1FF0) return 0;
+    memset(o, 0, 6 + 22 * k);
+    o[4] = p[0]; o[5] = p[1];
+    for (int i = 0; i < k; i++) memcpy(o + 6 + 22 * i, p + 2 + 14 * i, 14);
+    return 6 + 22 * k;
+}
+// CHARGED_BUFFSTART 14 -> 22 (8 zero: the 2026 handler reads a u32 at +14 that picks its list) - T.ChargedBuffStart2016To2026
+inline int chargedbuff_start(const unsigned char* p, int n, unsigned char* o) {
+    if (n != 14) return 0;
+    memcpy(o, p, 14);
+    memset(o + 14, 0, 8);
+    return 22;
+}
+// CHARGED_BUFFTERMINATE {key u32} + one 0 byte (the normal list) - T.ChargedBuffTerminate2016To2026
+inline int chargedbuff_terminate(const unsigned char* p, int n, unsigned char* o) {
+    if (n != 4) return 0;
+    memcpy(o, p, 4);
+    o[4] = 0;
+    return 5;
+}
+// SHOPOPEN* and their TABLE forms: {itemnum u16, npc u16} + n x {slot u8, item u16} -> slot widened to u32 - T.ShopTable2016To2026
+inline int shoptable(const unsigned char* p, int n, unsigned char* o) {
+    if (n < 4) return 0;
+    int k = get_u16(p);
+    if (n != 4 + 3 * k || 4 + 6 * k > 0x1FF0) return 0;
+    memset(o, 0, 4 + 6 * k);
+    memcpy(o, p, 4);
+    for (int i = 0; i < k; i++) {
+        o[4 + 6 * i] = p[4 + 3 * i];
+        o[4 + 6 * i + 4] = p[5 + 3 * i];
+        o[4 + 6 * i + 5] = p[6 + 3 * i];
+    }
+    return 4 + 6 * k;
+}
+// NC_CHAR_CLIENT_BASE 105 -> the US 362: one byte inserted at 54, zero-padded - T.ClientBase2016To2026(p, ClientBaseUs)
+inline int clientbase(const unsigned char* p, int n, unsigned char* o) {
+    if (n != 105) return 0;
+    memset(o, 0, 362);
+    memcpy(o, p, 54);
+    memcpy(o + 55, p + 54, 105 - 54);
+    return 362;
+}
+
 const Owned kOwned[] = {
     { 0x2448, swing, "SWING_DAMAGE" },
     { 0x2449, tail7, "SOMEONESWING_DAMAGE" },
@@ -91,6 +139,17 @@ const Owned kOwned[] = {
     { 0x2450, hitstart<12>, "SKILLBASH_HIT_FLD_START" },
     { 0x244F, hitstart<8>, "SKILLBASH_SOMEONE_HIT_OBJ_START" },
     { 0x2451, hitstart<14>, "SKILLBASH_SOMEONE_HIT_FLD_START" },
+    // batch 4
+    { 0x104A, chargedbuff, "CHAR_CLIENT_CHARGEDBUFF" },
+    { 0x9003, chargedbuff_start, "CHARGED_BUFFSTART" },
+    { 0x9004, chargedbuff_terminate, "CHARGED_BUFFTERMINATE" },
+    { 0x3C03, shoptable, "MENU_SHOPOPEN 3C03" },
+    { 0x3C04, shoptable, "MENU_SHOPOPEN 3C04" },
+    { 0x3C06, shoptable, "MENU_SHOPOPEN 3C06" },
+    { 0x3C09, shoptable, "MENU_SHOPOPEN 3C09" },
+    { 0x3C0A, shoptable, "MENU_SHOPOPEN 3C0A" },
+    { 0x3C0B, shoptable, "MENU_SHOPOPEN 3C0B" },
+    { 0x1038, clientbase, "CHAR_CLIENT_BASE" },
 };
 const int kOwnedCount = sizeof kOwned / sizeof kOwned[0];
 

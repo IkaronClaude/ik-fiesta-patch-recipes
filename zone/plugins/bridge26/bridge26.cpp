@@ -15,6 +15,8 @@
 //                   the client's 0x200B ENDOFTRADE echo of that close (within 1.5 s) swallowed; 0x103A quest DOING and
 //                   0x10D7 REPEAT lists 32 -> 37 B per entry (+ counter rows moved per quest-counter-rows.txt), the
 //                   TRACKED bit (quest_track) stripped and sent as 0x110F after the DOING list
+//   batch 4 (S->C, stateless): 0x1038 CHAR_CLIENT_BASE 105 -> the US 362, 0x104A CHARGEDBUFF list, 0x9003 / 0x9004
+//                   BUFFSTART / BUFFTERMINATE, the six SHOPOPEN tables 0x3C03/04/06/09/0A/0B (slot u8 -> u32)
 //
 // hooks\bridge26.ini:
 //   [config]
