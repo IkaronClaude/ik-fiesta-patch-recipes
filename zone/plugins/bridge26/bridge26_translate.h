@@ -129,6 +129,73 @@ inline int clientbase(const unsigned char* p, int n, unsigned char* o) {
     return 362;
 }
 
+// ---- batch 5: briefinfo records. The US build's records are ONE byte longer than the German's (in the abstate padding);
+// the proxy targets the US build - g_us_extra = 1 (ini build=us), 0 for the German build (build=de).
+inline int g_us_extra = 1;
+
+// REGENMOB row 149 -> 187 + extra: 37 + extra zero bytes after the 99-byte abstate array at 114, one zero at the end
+inline int regenmob_row(const unsigned char* p, unsigned char* o) {
+    int e = g_us_extra;
+    memcpy(o, p, 114);
+    memset(o + 114, 0, 37 + e);
+    memcpy(o + 151 + e, p + 114, 35);
+    o[186 + e] = 0;
+    return 187 + e;
+}
+// NC_BRIEFINFO_REGENMOB_CMD: one row - T.RegenMobRow2016To2026
+inline int regenmob(const unsigned char* p, int n, unsigned char* o) {
+    if (n != 149) return 0;
+    return regenmob_row(p, o);
+}
+// NC_BRIEFINFO_MOB_CMD {count u8} + n rows - T.MobCmd2016To2026
+inline int mobcmd(const unsigned char* p, int n, unsigned char* o) {
+    if (n < 1) return 0;
+    int k = p[0];
+    if (k == 0 || n != 1 + 149 * k || 1 + (187 + g_us_extra) * k > 0x1FF0) return 0;
+    o[0] = (unsigned char)k;
+    int at = 1;
+    for (int i = 0; i < k; i++) at += regenmob_row(p + 1 + 149 * i, o + at);
+    return at;
+}
+// NC_BRIEFINFO_REGENMOVER_CMD 139 -> 176 + extra: the abstate array grows - T.RegenMover2016To2026
+inline int regenmover(const unsigned char* p, int n, unsigned char* o) {
+    if (n != 139) return 0;
+    int e = g_us_extra;
+    memcpy(o, p, 118);
+    memset(o + 118, 0, 37 + e);
+    memcpy(o + 155 + e, p + 118, 21);
+    return 176 + e;
+}
+// LOGINCHARACTER 235 -> 304 + extra (T.LoginCharacter2016To2026): head + shape to 82, 31 more equipment bytes, 9 bytes,
+// one byte, the 99 old bitset bytes, 36 + extra new ones (bits 792-1079 at 222, filled by the plugin), the tail, 2 bytes
+const int kLoginCharacterExtraBitsAt = 222;
+inline int logincharacter_row(const unsigned char* p, unsigned char* o) {
+    int e = g_us_extra, at = 0;
+    memcpy(o + at, p, 82); at += 82;
+    memset(o + at, 0, 31); at += 31;
+    memcpy(o + at, p + 82, 9); at += 9;
+    o[at++] = 0;
+    memcpy(o + at, p + 91, 99); at += 99;
+    memset(o + at, 0, 36 + e); at += 36 + e;
+    memcpy(o + at, p + 190, 44); at += 44;
+    o[at++] = 0; o[at++] = 0;
+    return at;
+}
+inline int logincharacter(const unsigned char* p, int n, unsigned char* o) {
+    if (n != 235) return 0;
+    return logincharacter_row(p, o);
+}
+// NC_BRIEFINFO_CHARACTER_CMD {count u8} + n x LOGINCHARACTER - T.CharacterList2016To2026
+inline int characterlist(const unsigned char* p, int n, unsigned char* o) {
+    if (n < 1) return 0;
+    int k = p[0];
+    if (n != 1 + 235 * k || 1 + (304 + g_us_extra) * k > 0x1FF0) return 0;
+    o[0] = (unsigned char)k;
+    int at = 1;
+    for (int i = 0; i < k; i++) at += logincharacter_row(p + 1 + 235 * i, o + at);
+    return at;
+}
+
 const Owned kOwned[] = {
     { 0x2448, swing, "SWING_DAMAGE" },
     { 0x2449, tail7, "SOMEONESWING_DAMAGE" },
@@ -150,6 +217,12 @@ const Owned kOwned[] = {
     { 0x3C0A, shoptable, "MENU_SHOPOPEN 3C0A" },
     { 0x3C0B, shoptable, "MENU_SHOPOPEN 3C0B" },
     { 0x1038, clientbase, "CHAR_CLIENT_BASE" },
+    // batch 5
+    { 0x1C08, regenmob, "BRIEFINFO_REGENMOB" },
+    { 0x1C09, mobcmd, "BRIEFINFO_MOB" },
+    { 0x1C1A, regenmover, "BRIEFINFO_REGENMOVER" },
+    { 0x1C06, logincharacter, "BRIEFINFO_LOGINCHARACTER" },
+    { 0x1C07, characterlist, "BRIEFINFO_CHARACTER" },
 };
 const int kOwnedCount = sizeof kOwned / sizeof kOwned[0];
 

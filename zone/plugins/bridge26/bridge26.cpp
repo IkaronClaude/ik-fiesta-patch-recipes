@@ -17,6 +17,9 @@
 //                   TRACKED bit (quest_track) stripped and sent as 0x110F after the DOING list
 //   batch 4 (S->C, stateless): 0x1038 CHAR_CLIENT_BASE 105 -> the US 362, 0x104A CHARGEDBUFF list, 0x9003 / 0x9004
 //                   BUFFSTART / BUFFTERMINATE, the six SHOPOPEN tables 0x3C03/04/06/09/0A/0B (slot u8 -> u32)
+//   batch 5 (S->C, briefinfo records, US width - ini build=us|de): 0x1C08 REGENMOB, 0x1C09 MOB, 0x1C1A REGENMOVER,
+//                   0x1C06 LOGINCHARACTER, 0x1C07 CHARACTER; abstates >= 792 learnt from 0x2427/0x2428/0x1C18/0x1C19
+//                   and set into the LOGINCHARACTER records' 36 extra bitset bytes
 //
 // hooks\bridge26.ini:
 //   [config]
@@ -44,6 +47,7 @@
 #include <zonehook.h>
 #include <zone_types.h>
 
+#include <algorithm>
 #include <cstddef>
 #include <map>
 #include <vector>
@@ -383,8 +387,66 @@ bool on_quest_packet(void* self, void* edx, void* object, ProtocolPacket* pkt) {
     return false;
 }
 
+// ---- abnormal states past the 2016 bitset (ExtraAbStates.cs): indexes 792..1079 per object handle ----------------------
+// The 2016 zone's 99-byte bitset stops at 792, so its LOGINCHARACTER records carry no bit for the newer states; the 2026
+// records have 36 more bytes. The zone announces these states BY INDEX (ABSTATESET / RESET, BRIEFINFO_ABSTATE_CHANGE and
+// its LIST), so they are learnt from what the zone sends - one map for the whole zone (every client sees the same
+// broadcasts) - and set into the translated records. A handle that goes out of view keeps its states.
+const int kExtraFirst = 792, kExtraBytes = 36, kExtraLast = kExtraFirst + kExtraBytes * 8 - 1;
+CRITICAL_SECTION g_slock;
+std::map<unsigned short, std::vector<int> > g_extra;
+
+void extra_set(unsigned short h, int index, bool on) {
+    if (index < kExtraFirst || index > kExtraLast) return;
+    std::vector<int>& v = g_extra[h];
+    std::vector<int>::iterator it = std::find(v.begin(), v.end(), index);
+    if (on && it == v.end()) v.push_back(index);
+    else if (!on && it != v.end()) v.erase(it);
+    if (v.empty()) g_extra.erase(h);
+}
+
+void extra_observe(unsigned op, const unsigned char* p, int n) {
+    if (op != 0x2427 && op != 0x2428 && op != 0x1C18 && op != 0x1C19) return;
+    EnterCriticalSection(&g_slock);
+    unsigned short h = n >= 2 ? (unsigned short)get_u16(p) : 0;
+    unsigned idx = n >= 6 ? (p[2] | (p[3] << 8) | (p[4] << 16) | ((unsigned)p[5] << 24)) : 0;
+    if ((op == 0x2427 && n >= 6) || (op == 0x1C18 && n >= 14)) extra_set(h, (int)idx, true);
+    else if (op == 0x2428 && n >= 6) extra_set(h, (int)idx, false);
+    else if (op == 0x1C19 && n >= 3) {           // the handle's whole state: replaces what was tracked
+        g_extra.erase(h);
+        int k = p[2];
+        for (int i = 0; i < k && 3 + 12 * i + 4 <= n; i++) {
+            const unsigned char* q = p + 3 + 12 * i;
+            extra_set(h, (int)(q[0] | (q[1] << 8) | (q[2] << 16) | ((unsigned)q[3] << 24)), true);
+        }
+    }
+    LeaveCriticalSection(&g_slock);
+}
+
+// set the tracked bits of the record's handle (u16 at 0) into its 36 extra bitset bytes (ExtraAbStates.Fill)
+void extra_fill(unsigned char* rec) {
+    EnterCriticalSection(&g_slock);
+    std::map<unsigned short, std::vector<int> >::const_iterator it = g_extra.find((unsigned short)get_u16(rec));
+    if (it != g_extra.end())
+        for (int index : it->second) {
+            int bit = index - kExtraFirst;
+            rec[kLoginCharacterExtraBitsAt + bit / 8] |= (unsigned char)(1 << (bit % 8));
+        }
+    LeaveCriticalSection(&g_slock);
+}
+
+// after the stateless translation (and after its verify log, which keeps the proxy's pure form): the record states
+void post_translate(unsigned op, unsigned char* out, int m) {
+    int row = 304 + g_us_extra;
+    if (op == 0x1C06 && m == row) extra_fill(out);
+    else if (op == 0x1C07 && m >= 1)
+        for (int i = 0; i < out[0] && 1 + (i + 1) * row <= m; i++) extra_fill(out + 1 + i * row);
+}
+
 void __fastcall on_append(void* self, void* edx, void* object, ProtocolPacket* pkt) {
     AppendFn original = (AppendFn)g_append.trampoline;
+    if (g_send2026 && pkt && pkt->buffer && pkt->length >= 2)
+        extra_observe(get_u16(pkt->buffer), pkt->buffer + 2, pkt->length - 2);
     if (g_send2026 && pkt && pkt->buffer && pkt->length >= 2 && on_quest_packet(self, edx, object, pkt)) return;
     if ((g_send2026 || g_verify) && pkt && pkt->buffer && pkt->length >= 2) {
         unsigned op = get_u16(pkt->buffer);
@@ -399,6 +461,7 @@ void __fastcall on_append(void* self, void* edx, void* object, ProtocolPacket* p
             }
             if (g_verify) verify_log(o, payload, n, t_out + 2, m);
             if (g_send2026 && m) {
+                post_translate(op, t_out + 2, m);
                 t_out[0] = pkt->buffer[0];
                 t_out[1] = pkt->buffer[1];
                 ProtocolPacket t = { t_out, (int)sizeof t_out, m + 2 };
@@ -419,6 +482,10 @@ HOOK_PLUGIN("bridge26") {
     g_verify = hook::config_int("verify", 0) != 0;
     g_verify_max = hook::config_int("verify_max", 200);
     InitializeCriticalSection(&g_vlock);
+    InitializeCriticalSection(&g_slock);
+    char build[8];
+    hook::config_str("build", "us", build, sizeof build);
+    g_us_extra = strcmp(build, "de") == 0 ? 0 : 1;   // the 2026 client build: US records are one byte longer
     if (g_verify) {
         char path[MAX_PATH];
         DWORD k = GetModuleFileNameA(NULL, path, MAX_PATH);   // beside the zone exe, like fiestahook.log
