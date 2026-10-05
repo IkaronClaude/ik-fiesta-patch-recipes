@@ -55,6 +55,10 @@ const unsigned short kLogin2026 = 0x0C01, kLogin2016 = 0x0C5A, kLoginOtp2016 = 0
 const unsigned short kWorldSelect2026 = 0x0C0A, kWorldSelect2016 = 0x0C0B;
 const unsigned short kVersionAck2016 = 0x0C67, kLoginFail2016 = 0x0C09, kLoginAck2016 = 0x0C0A;
 const unsigned short kWorldSelectAck2016 = 0x0C0C;
+// 2026-only notices that collide with 2016 opcodes: 0x0C18 "mid-login" is NC_USER_NORMALLOGOUT_CMD in 2016 (the Login
+// closed the session on it, right at the server list - 2026-10-05), and 0x0C35 "post-create" (+ the shift) is a
+// login-server opcode in 2016. The proxy dropped both on every link; so does this.
+const unsigned short kMidLogin2026 = 0x0C18, kPostCreate2026 = 0x0C35;
 const unsigned short kVersionAck2026 = 0x0C2D, kLoginFail2026 = 0x0C07, kAck1 = 0x0C40, kAck2 = 0x0C47;
 const unsigned short kWorldList2026 = 0x0C06, kChallenge2026 = 0x0C3E, kOtp2026 = 0x0C35, kWorldSelectAck2026 = 0x0C0B;
 const int kShiftFrom = 0x2C;                   // the US build shifts dept-3 commands from here up (Opcodes.ShiftFrom)
@@ -195,6 +199,11 @@ int __fastcall on_parser(void* parser, void*, void* session) {
         memcpy(l, p + 32, 328 - 32);
         memcpy(l + (328 - 32), p + 329, kLoginLen2026 - 329);
         return parse_as(parser, session, kLogin2016, l, kLoginLen2026 - 33, size);
+    }
+    if (op == kMidLogin2026 || op == U(kPostCreate2026, s.shift)) {
+        hook::log("login_bridge26: dropped 2026 notice 0x%04x (%d B) - a 2016 logout / login opcode under that number", op, n);
+        consume(session, start, size);
+        return 1;
     }
     if (n == kWillSelect2026) { consume(session, start, size); return 1; }   // nothing to relay
     if (n == kChallengeAnswer2026) {                                  // not verified: answered with the OTP frame
