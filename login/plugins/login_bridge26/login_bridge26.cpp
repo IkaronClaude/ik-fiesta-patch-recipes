@@ -14,6 +14,12 @@
 //   one mechanism for renames, length changes and gated opcodes alike.
 //   Every send ends in CSocket_IOCP::Send(framed, len) 0x411030 on the session's socket at +0x28
 //   (CLoginBaseSession::Send 0x408E20 is `add ecx, 0x28; jmp`), where the replies of a 2026 session are translated.
+//   THE PACKET IS STILL ENCRYPTED WHEN THE DETOUR SEES IT (2026-10-05, first live 2026 login: "Not registered protocol
+//   3/46" and a bare disconnect). Parser fetches data/len through the CPacket's vtable (+0x18/+0x14) and decrypts IN PLACE
+//   with 0x40B170: byte ^= table[pos], pos = u16 at session+0x10C, table at 0x430430, wrapping at 0x1F3 (the 499-byte
+//   XOR table). So the detour decrypts a COPY at pos to read the opcode; a substituted 2016 frame is ENCRYPTED at pos
+//   (Parser decrypts it); and afterwards pos is set to where the CLIENT's stream is - pos + the original packet's
+//   length - also for packets answered or dropped here, which the stock parser never sees.
 //   The version check compares the key with the server's own list (ClientVersionKeyInfo.txt, loaded into 64-byte
 //   entries at 0x44264C, count at 0x44278C): the 2026 request is answered with the FIRST of those - no constant.
 //   No XTrap: NC_USER_XTRAP_REQ 0x0C04 only acks (0x0C05 {1}) and sets nothing the login needs, so nothing fakes one
@@ -40,6 +46,9 @@ const unsigned kVaSocketSend = 0x00411030u;    // CSocket_IOCP::Send(void* frame
 const unsigned kVaVersionKeys = 0x0044264Cu;   // the loaded ClientVersionKeyInfo keys, 64 B each
 const unsigned kVaVersionKeyCount = 0x0044278Cu;
 const unsigned kSessionPacket = 0xDC, kPacketFramed = 0xC, kSessionSocket = 0x28;
+const unsigned kVaXorTable = 0x00430430u;      // the C->S XOR table 0x40B170 decrypts with
+const unsigned kSessionXorPos = 0x10C;         // u16 stream position, advanced per byte by 0x40B170
+const unsigned kXorLen = 0x1F3;
 
 const unsigned short kVersion2016 = 0x0C65, kVersion2026 = 0x0C2C;         // 2026: + the build's shift
 const unsigned short kLogin2026 = 0x0C01, kLogin2016 = 0x0C5A, kLoginOtp2016 = 0x0C37;
@@ -103,6 +112,17 @@ void to_client(void* session, unsigned short op, const unsigned char* payload, i
     ((SockSendFn)g_send.trampoline)((char*)session + kSessionSocket, nullptr, b, frame(b, op, payload, n));
 }
 
+unsigned short* xor_pos(void* session) { return (unsigned short*)((char*)session + kSessionXorPos); }
+// XOR n bytes with the stream from pos - decrypts and encrypts alike, leaves the session's position alone
+void xor_at(unsigned char* b, int n, unsigned pos) {
+    const unsigned char* t = (const unsigned char*)hook::rebase(kVaXorTable);
+    for (int i = 0; i < n; i++) { b[i] ^= t[pos]; if (++pos >= kXorLen) pos = 0; }
+}
+// the client encrypted `consumed` bytes for this packet: move the server's stream there
+void consume(void* session, unsigned start, int consumed) {
+    *xor_pos(session) = (unsigned short)((start + (unsigned)consumed) % kXorLen);
+}
+
 bool hex_otp(const unsigned char* p) {
     if (!p[0]) return false;
     for (int i = 0; i < kOtpLen; i++) {
@@ -114,14 +134,19 @@ bool hex_otp(const unsigned char* p) {
 
 // run the stock Parser on a 2016 frame instead of the received one
 thread_local unsigned char t_in[0x400];
-int parse_as(void* parser, void* session, unsigned short op, const unsigned char* payload, int n) {
+// `consumed` = op + payload bytes of the packet the client actually sent (its stream advanced by that much)
+int parse_as(void* parser, void* session, unsigned short op, const unsigned char* payload, int n, int consumed) {
     unsigned char** at = (unsigned char**)((char*)session + kSessionPacket + kPacketFramed);
     unsigned char* was = *at;
-    if (n + 5 > (int)sizeof t_in) return 1;
+    unsigned start = *xor_pos(session);
+    if (n + 5 > (int)sizeof t_in) { consume(session, start, consumed); return 1; }
     frame(t_in, op, payload, n);
+    int h = t_in[0] ? 1 : 3;
+    xor_at(t_in + h, n + 2, start);                                  // Parser decrypts it back at the same position
     *at = t_in;
     int r = ((ParserFn)g_parser.trampoline)(parser, nullptr, session);
     *at = was;
+    consume(session, start, consumed);
     return r;
 }
 
@@ -130,8 +155,14 @@ int __fastcall on_parser(void* parser, void*, void* session) {
     unsigned char* f = session ? *(unsigned char**)((char*)session + kSessionPacket + kPacketFramed) : 0;
     int size = 0, h = f ? frame_head(f, 3, &size) : 0;
     if (!h || size < 2) return real(parser, nullptr, session);
-    unsigned op = f[h] | (f[h + 1] << 8);
-    const unsigned char* p = f + h + 2;
+    // read a DECRYPTED copy; the received bytes stay encrypted for the stock parser
+    static thread_local unsigned char plain[0x400];
+    if (size > (int)sizeof plain) return real(parser, nullptr, session);
+    unsigned start = *xor_pos(session);
+    memcpy(plain, f + h, size);
+    xor_at(plain, size, start);
+    unsigned op = plain[0] | (plain[1] << 8);
+    const unsigned char* p = plain + 2;
     int n = size - 2;
 
     if (op == kVersion2016 && n == kVersionKey2016) {                // a 2016 client: stock from here on
@@ -144,9 +175,13 @@ int __fastcall on_parser(void* parser, void*, void* session) {
         int count = *(int*)hook::rebase(kVaVersionKeyCount);
         unsigned char key[kVersionKey2016] = {};
         if (count > 0) memcpy(key, hook::rebase(kVaVersionKeys), kVersionKey2016);
-        hook::log("login_bridge26: 2026 client (%s numbering, shift %+d) - version check answered with the server's key '%.20s'",
-                  s.shift ? "US" : "German", s.shift, (const char*)key);
-        return parse_as(parser, session, kVersion2016, key, kVersionKey2016);
+        // wsprintf (hook::log) has no '+' flag: "%+d" misparsed the arguments and handed %s an int - Login.exe died in
+        // WPRINTF_GetLen on the first 2026 version check (2026-10-05). Plain %d, and a terminated copy of the key.
+        char shown[21] = {};
+        memcpy(shown, key, sizeof shown - 1);
+        hook::log("login_bridge26: 2026 client (%s numbering, shift %d) - version check answered with the server's key '%s'",
+                  s.shift ? "US" : "German", s.shift, shown);
+        return parse_as(parser, session, kVersion2016, key, kVersionKey2016, size);
     }
     Sess s;
     if (!get(session, &s)) return real(parser, nullptr, session);
@@ -154,21 +189,22 @@ int __fastcall on_parser(void* parser, void*, void* session) {
     if (op == kLogin2026 && n == kLoginLen2026) {
         if (hex_otp(p)) {
             hook::log("login_bridge26: 2026 login carries an OTP -> NC_USER_LOGIN_WITH_OTP_REQ");
-            return parse_as(parser, session, kLoginOtp2016, p, kOtpLen);
+            return parse_as(parser, session, kLoginOtp2016, p, kOtpLen, size);
         }
         unsigned char l[kLoginLen2026];
         memcpy(l, p + 32, 328 - 32);
         memcpy(l + (328 - 32), p + 329, kLoginLen2026 - 329);
-        return parse_as(parser, session, kLogin2016, l, kLoginLen2026 - 33);
+        return parse_as(parser, session, kLogin2016, l, kLoginLen2026 - 33, size);
     }
-    if (n == kWillSelect2026) return 1;                               // nothing to relay
+    if (n == kWillSelect2026) { consume(session, start, size); return 1; }   // nothing to relay
     if (n == kChallengeAnswer2026) {                                  // not verified: answered with the OTP frame
         to_client(session, U(kOtp2026, s.shift), kOtpReply, sizeof kOtpReply);
+        consume(session, start, size);
         return 1;
     }
     if (op == U(kWorldSelect2026, s.shift) && n == 1) {
         EnterCriticalSection(&g_lock); g_sess[session].world = p[0]; LeaveCriticalSection(&g_lock);
-        return parse_as(parser, session, kWorldSelect2016, p, 1);
+        return parse_as(parser, session, kWorldSelect2016, p, 1, size);
     }
     return real(parser, nullptr, session);
 }

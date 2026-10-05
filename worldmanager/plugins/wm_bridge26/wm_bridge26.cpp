@@ -49,6 +49,12 @@ const unsigned kParserInServer = 0xBCBBCu;     // its CParserClient = the client
 const unsigned kSessionPacket = 0xDC;          // CWMBaseSession: the CPacket being parsed
 const unsigned kPacketFramed = 0xC;            // CPacket: the framed bytes
 const unsigned kSessionSocket = 0x28;          // CWMBaseSession: its CSocket_IOCP
+// THE PACKET IS STILL ENCRYPTED IN THE PARSER DETOUR: Parser decrypts it in place with 0x45D4B0 (byte ^= table[pos],
+// pos = u16 at session+0x11E, table at 0x497840, wrapping at 0x1F3 - the 499-byte XOR table). Found 2026-10-05 on the
+// Login twin (first live 2026 login refused); the WM login rename read and wrote encrypted bytes the same way.
+const unsigned kVaXorTable = 0x00497840u;
+const unsigned kSessionXorPos = 0x11E;
+const unsigned kXorLen = 0x1F3;
 
 const unsigned short kWmLogin2026 = 0x0C0E, kWmLogin2016 = 0x0C0F, kAvatars2016 = 0x0C14, kAvatars2026 = 0x0C0F;
 const unsigned short kLogout2026 = 0x0C15, kWrapped2026 = 0x0C23, kLogout2016 = 0x0C18, kMidLogin2026 = 0x0C18;
@@ -106,12 +112,18 @@ int frame(unsigned char* o, unsigned short op, const unsigned char* payload, int
     return h + 2 + n;
 }
 
+// the XOR stream byte at pos + i
+unsigned char key_at(unsigned pos, int i) {
+    return ((const unsigned char*)hook::rebase(kVaXorTable))[(pos + (unsigned)i) % kXorLen];
+}
+
 // ---- C->S: the WM login, renamed before the parser's pre-login gate ----------------------------------------------------
 int __fastcall on_parser(void* parser, void*, void* session) {
     unsigned char* f = session ? *(unsigned char**)((char*)session + kSessionPacket + kPacketFramed) : 0;
     int size = 0, h = f ? frame_head(f, 3, &size) : 0;
     if (h && size >= 2) {
-        unsigned op = f[h] | (f[h + 1] << 8);
+        unsigned pos = *(unsigned short*)((char*)session + kSessionXorPos);
+        unsigned op = (unsigned)(f[h] ^ key_at(pos, 0)) | ((unsigned)(f[h + 1] ^ key_at(pos, 1)) << 8);
         if (op == kWmLogin2026 || op == kWmLogin2016) {
             bool new26 = op == kWmLogin2026;
             EnterCriticalSection(&g_lock);
@@ -121,7 +133,9 @@ int __fastcall on_parser(void* parser, void*, void* session) {
             LeaveCriticalSection(&g_lock);
             if (new26) {
                 if (size - 2 == kWmLoginPayloadUs) {
-                    f[h] = (unsigned char)(kWmLogin2016 & 0xFF); f[h + 1] = (unsigned char)(kWmLogin2016 >> 8);
+                    // same length, so the stream stays in step: only the two opcode bytes change, encrypted at pos
+                    f[h] = (unsigned char)((kWmLogin2016 & 0xFF) ^ key_at(pos, 0));
+                    f[h + 1] = (unsigned char)((kWmLogin2016 >> 8) ^ key_at(pos, 1));
                     hook::log("wm_bridge26: 2026 client - WM login 0x0C0E -> 0x0C0F (%d B)", size - 2);
                 } else {
                     hook::log("wm_bridge26: 2026 WM login of %d B (not the US 320) - the German form is not supported here",
