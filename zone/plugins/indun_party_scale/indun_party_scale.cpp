@@ -25,11 +25,12 @@
 
 #include <windows.h>
 
+#include <cstdio>
 #include <cstring>
 
 namespace {
 
-const char* kState = "StaIDPartyScale";
+const char* kState = "StaIDPartyScale_C%d_%d";      // class id, members on the map (Rebalanced 0034)
 const unsigned kPlayerMap = 0x7A;            // ShinePlayer -> FieldMap* (mov eax,[ebx+0x7A] in LOGINCOMPLETE)
 const unsigned kVtPartyNumber = 0x550;       // player vtable: party number (u16, 0xFFFF = none) - indun_solo
 const unsigned kVtAbstateSet = 0x638;        // player vtable: so_AbnormalState_Set
@@ -115,30 +116,41 @@ void* dictionary() {
     return *(void**)(at + 1);
 }
 
-// The AbState holder, looked up ONCE (the dictionary is static after load) and under a fault guard: 2026-10-06 the
-// lookup faulted inside the name walk (0x63CC43) on a map login in Rou and took zone00 down (the stale dictionary, above). A fault = the plugin goes inert for good (logged), never the zone.
-void* lookup_holder() {
-    static char name[32];
-    strcpy_s(name, sizeof name, kState);
+// The AbState holders, one per (class, members): StaIDPartyScale_C<class>_<members> (the Rebalanced step 0034 writes them,
+// one strength each - the tooltip names that party size only, the values are per class; operator 2026-10-06). Each name
+// is looked up ONCE and cached (the dictionary is static after load), under a fault guard: 2026-10-06 a lookup with the
+// stale dictionary faulted inside the name walk (0x63CC43) and took zone00 down. A fault = that holder stays unknown.
+const int kMaxClass = 64;
+void* g_holder[kMaxClass][kMaxMembers + 1];
+bool g_looked[kMaxClass][kMaxMembers + 1];
+
+void* lookup(const char* text) {
+    static char name[48];
+    strcpy_s(name, sizeof name, text);
     __try {
         void* dic = dictionary();
         if (!dic) return nullptr;
         return ((FromNameFn)zone::fn::AbnormalStateDictionary__AbState__as_FromName())(dic, 0, name);
     } __except (EXCEPTION_EXECUTE_HANDLER) {
-        zone::log("indun_party_scale: FAULT looking up %s in AbState (code %08x) - plugin inert", kState, GetExceptionCode());
+        zone::log("indun_party_scale: FAULT looking up %s in AbState (code %08x)", text, GetExceptionCode());
         return nullptr;
     }
 }
 
-void* state_holder() {
-    static bool done = false;
-    static void* holder = nullptr;
-    if (!done) {
-        done = true;
-        holder = lookup_holder();
-        zone::log("indun_party_scale: %s %s (dictionary %x)", kState, holder ? "found - active" : "not usable - plugin inert", dictionary());
+void* holder_for(int cls, int members) {
+    if (cls < 0 || cls >= kMaxClass || members < 1 || members > kMaxMembers) return nullptr;
+    if (!g_looked[cls][members]) {
+        g_looked[cls][members] = true;
+        char name[48];
+        sprintf_s(name, kState, cls, members);
+        g_holder[cls][members] = lookup(name);
+        zone::log("indun_party_scale: %s %s", name, g_holder[cls][members] ? "found" : "not in AbState (no buff)");
     }
-    return holder;
+    return g_holder[cls][members];
+}
+
+int class_of(void* player) {
+    return ((unsigned char(__fastcall*)(void*, void*))zone::fn::ShineObjectClass__ShinePlayer__so_GetClass())(player, 0);
 }
 
 unsigned index_of(void* holder) { return *(unsigned*)((char*)(*(void**)holder) + 0x22); }
@@ -149,30 +161,39 @@ int current(void* player, unsigned idx) {
     return ((StrengthFn)zone::fn::ShineObjectClass__ShineMobileObject__so_AbnormalState_Strength())(player, 0, idx);
 }
 
-// put the state on at `s`, or take it off (s == 0) - only when it changes
-void apply(void* player, int s) {
-    void* holder = state_holder();
-    if (!holder) return;
-    unsigned idx = index_of(holder);
-    if (s > kMaxStrength || (s && !strength_entry(holder, s))) s = 0;   // no row for that count (a full party)
-    int now_s = current(player, idx);
-    if (now_s == s) return;
-    if (now_s) ((IdxFn)zone::fn::ShineObjectClass__ShinePlayer__so_AbnormalState_Reset())(player, 0, idx);
-    if (s) {
-        void* entry = strength_entry(holder, s);
-        unsigned long now = **(unsigned long**)zone::rebase(kVaNowOperand);
-        unsigned char ok = ((SetFn)vfn(player, kVtAbstateSet))(player, 0, player, idx, s, holder, now, 0, -1, 0, 0, 0);
-        if (ok == 1) {
-            int arg = *(int*)((char*)entry + 0x2B);
-            ((IdxFn)zone::fn::ShineObjectClass__ShineObject__so_AbnormalState_BitSet())(player, 0, idx);
-            ((Idx3Fn)vfn(player, kVtAbstateInform))(player, 0, idx, arg, 1);
-            ((Idx3Fn)zone::fn::ShineObjectClass__ShineObject__so_AbnormalState_BroadcastSet())(player, 0, idx, arg, 1);
-        } else {
-            zone::log("indun_party_scale: so_AbnormalState_Set refused strength %d on player %x", s, player);
-            return;
+// the buff for `members` party members on this map (0 = none): every other party size's state of the player's class comes
+// off, this one goes on (strength 1) - only what changes
+void apply(void* player, int members) {
+    int cls = class_of(player);
+    void* target = (members >= 1 && members <= kMaxMembers) ? holder_for(cls, members) : nullptr;
+    int was = 0;
+    for (int m = 1; m <= kMaxMembers; m++) {
+        void* h = holder_for(cls, m);
+        if (!h || h == target) continue;
+        unsigned idx = index_of(h);
+        if (current(player, idx)) {
+            ((IdxFn)zone::fn::ShineObjectClass__ShinePlayer__so_AbnormalState_Reset())(player, 0, idx);
+            was = m;
         }
     }
-    zone::log("indun_party_scale: player %x strength %d -> %d", player, now_s, s);
+    if (target && !current(player, index_of(target))) {
+        unsigned idx = index_of(target);
+        void* entry = strength_entry(target, 1);
+        if (!entry) return;
+        unsigned long now = **(unsigned long**)zone::rebase(kVaNowOperand);
+        unsigned char ok = ((SetFn)vfn(player, kVtAbstateSet))(player, 0, player, idx, 1, target, now, 0, -1, 0, 0, 0);
+        if (ok != 1) {
+            zone::log("indun_party_scale: so_AbnormalState_Set refused class %d / %d members on player %x", cls, members, player);
+            return;
+        }
+        int arg = *(int*)((char*)entry + 0x2B);
+        ((IdxFn)zone::fn::ShineObjectClass__ShineObject__so_AbnormalState_BitSet())(player, 0, idx);
+        ((Idx3Fn)vfn(player, kVtAbstateInform))(player, 0, idx, arg, 1);
+        ((Idx3Fn)zone::fn::ShineObjectClass__ShineObject__so_AbnormalState_BroadcastSet())(player, 0, idx, arg, 1);
+        zone::log("indun_party_scale: player %x (class %d) small-party buff %d -> %d members", player, cls, was, members);
+    } else if (was) {
+        zone::log("indun_party_scale: player %x (class %d) small-party buff %d -> off", player, cls, was);
+    }
 }
 
 // every member of the party that is in this zone (or just `player` without a party), minus `gone`
@@ -209,9 +230,8 @@ void refresh(void* player, void* gone = nullptr) {
     __try {
         void* list[kMaxMembers + 1];
         int n = members(player, gone, list);
-        // every refresh runs (a town login must take OFF a state left from an instance, or from the 2026-10-06 build
-        // that counted every map as an instance); the holder lookup is cached + guarded, inert if unusable
-        if (!state_holder()) { LeaveCriticalSection(&g_lock); return; }
+        // every refresh runs: a town login must take OFF a state left from an instance (holders are cached + guarded)
+        if (!dictionary()) { LeaveCriticalSection(&g_lock); return; }
         for (int i = 0; i < n; i++) {
             void* map = map_of(list[i]);
             int here = 0;
@@ -252,10 +272,7 @@ void refresh_party(unsigned short party, void* gone = nullptr) {
 typedef void(__fastcall* LoginFn)(void*, void*, void*, int, unsigned short);
 void __fastcall login_impl(void* self, void*, void* cmd, int a2, unsigned short a3) {
     ((LoginFn)g_login.trampoline)(self, 0, cmd, a2, a3);
-    if (!g_vt_player && self) {
-        g_vt_player = *(void**)self;
-        state_holder();               // the one lookup (guarded), logged at the first map login: proves it on any map
-    }
+    if (!g_vt_player && self) g_vt_player = *(void**)self;
     refresh(self);
 }
 
