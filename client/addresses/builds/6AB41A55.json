@@ -71,6 +71,8 @@
   "BuffTipFormat3": "0x005DE5EE",
   "OpenQuestWin": "0x005849F0",
   "SlideBarSetSplitCnt": "0x00522DE0",
-  "SlideListUpdateView": "0x00525B90"
+  "SlideListUpdateView": "0x00525B90",
+  "QuestLocationLabelMobCmp": "0x0061139F",
+  "QuestLocationAreaMobCmp": "0x006113E6"
  }
 }

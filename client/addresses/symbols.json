@@ -461,6 +461,20 @@
       "kind": "code",
       "use": "quest_scroll_keep",
       "note": "SlideListWin::UpdateViewList(), thiscall: redraw from top row +0x150"
+    },
+    {
+      "name": "QuestLocationLabelMobCmp",
+      "va": "0x00610E1F",
+      "kind": "code",
+      "use": "quest_location_all",
+      "note": "FullMapWin::LocationInfo(quest) 0x610CE0 (the quest window's location button): label-mark loop, cmp ax,[ebp-4] (mark mob vs the quest's FIRST MobCoordinate mob); jne 0x11 hides the mark"
+    },
+    {
+      "name": "QuestLocationAreaMobCmp",
+      "va": "0x00610E66",
+      "kind": "code",
+      "use": "quest_location_all",
+      "note": "same, area-mark loop (+0x334)"
     }
   ]
 }
