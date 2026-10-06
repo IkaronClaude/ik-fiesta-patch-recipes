@@ -475,6 +475,41 @@
       "kind": "code",
       "use": "quest_location_all",
       "note": "same, area-mark loop (+0x334)"
+    },
+    {
+      "name": "TextDataGet",
+      "va": "0x00458CC0",
+      "kind": "code",
+      "use": "instance_dismantle_text",
+      "note": "cdecl TextData lookup (u32 text id) -> const char*"
+    },
+    {
+      "name": "DismantleCountA",
+      "va": "0x00655182",
+      "kind": "code",
+      "use": "instance_dismantle_text",
+      "note": "MakeKarisWin preview 1: mov edi,[ebp-0xc]; push ebx (count); push 0x952059C5 - esi = the item"
+    },
+    {
+      "name": "DismantleCountB",
+      "va": "0x006557DD",
+      "kind": "code",
+      "use": "instance_dismantle_text",
+      "note": "MakeKarisWin preview 2: same 9 bytes as DismantleCountA"
+    },
+    {
+      "name": "DismantleCountC",
+      "va": "0x0065596A",
+      "kind": "code",
+      "use": "instance_dismantle_text",
+      "note": "MakeKarisWin Dismantle click: test eax,eax (count); jle refuse - esi = the item"
+    },
+    {
+      "name": "DismantleRefuseC",
+      "va": "0x00655A75",
+      "kind": "code",
+      "use": "instance_dismantle_text",
+      "note": "the 'This item cannot be dismantled.' branch DismantleCountC jumps to"
     }
   ]
 }

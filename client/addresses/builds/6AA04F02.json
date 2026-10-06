@@ -73,6 +73,11 @@
   "SlideBarSetSplitCnt": "0x00522C50",
   "SlideListUpdateView": "0x005259F0",
   "QuestLocationLabelMobCmp": "0x00610E1F",
-  "QuestLocationAreaMobCmp": "0x00610E66"
+  "QuestLocationAreaMobCmp": "0x00610E66",
+  "TextDataGet": "0x00458CC0",
+  "DismantleCountA": "0x00655182",
+  "DismantleCountB": "0x006557DD",
+  "DismantleCountC": "0x0065596A",
+  "DismantleRefuseC": "0x00655A75"
  }
 }
