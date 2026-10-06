@@ -41,7 +41,11 @@
 
 namespace {
 
-const char* const kWindows[] = {"QuestFinishWin", "QuestNewsWin", "MysteryVaultWin"};
+// + the card popups (operator 2026-10-03: "Make the card reveal/display window movable also (when you click an unknown card
+// it pops up)"): which of the 2026 card window classes is the reveal popup is not measured yet, so the three small card
+// popups are all registered - the log names the ones found ("popup_windows: found ...").
+const char* const kWindows[] = {"QuestFinishWin", "QuestNewsWin", "MysteryVaultWin",
+                                "CardSlotWin", "CollectCardChoiceWin", "GambleHouseCardWin"};
 const int kNumWindows = sizeof kWindows / sizeof kWindows[0];
 
 const unsigned kVaRegisterPos = caddr::va(caddr::kWinRegisterPos);
@@ -110,7 +114,10 @@ void find_windows(void* fw) {
         int k = which(p);
         if (k >= 0 && !found[k]) found[k] = p;
     }
-    for (int i = 0; i < kNumWindows; i++) g_win[i] = found[i];
+    for (int i = 0; i < kNumWindows; i++) {
+        if (found[i] && found[i] != g_win[i]) hook::log("popup_windows: found %s at %p", kWindows[i], found[i]);
+        g_win[i] = found[i];
+    }
 }
 
 // cursor (client pixels of the message's window) -> UI units
