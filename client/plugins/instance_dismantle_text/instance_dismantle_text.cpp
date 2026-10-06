@@ -1,8 +1,8 @@
-// instance_dismantle_text - the 2026 client's dismantle window (MakeKarisWin) knows instance set pieces dismantle into
-// their instance COIN (Fiesta2026on2016 Rebalanced, operator 2026-10-06: "instead of 'gives 0 Karis' for these set
-// items it will say 'gives 2 Leviathan Coin'. Via Client hook"; "Putting a +0 item into the window just shows 'The item
-// cannot be dismantled'"). The server half is the zone plugin instance_dismantle (a piece priced in a REB_IDCoin* coin
-// in ItemMoney dismantles into ONE of that coin); this mirrors its rule so the window shows what the server will do.
+// instance_dismantle_text - the 2026 client's dismantle window (MakeKarisWin) shows what an item listed in
+// ItemDismantleProduct.shn dismantles into (Fiesta2026on2016 Rebalanced, operator 2026-10-06: "instead of 'gives 0 Karis'
+// for these set items it will say 'gives 2 Leviathan Coin'. Via Client hook"; "Putting a +0 item into the window just
+// shows 'The item cannot be dismantled'"; 2026-10-07: "These dismantle tables should go into a .shn that's shared between
+// client and server"). The server half is the zone plugin instance_dismantle, which reads the SAME table from 9Data.
 //
 // ---- THE STOCK CODE (2026 Fiesta.exe, 10.6.6 addresses, read 2026-10-06) ----------------------------------------------
 //   Three places compute the Karis count from the client's ItemDismantle table (row by the item, column by the item's
@@ -15,11 +15,12 @@
 //     0xAF23C4AE "Dismantle Karis." (the button)   0x58E4D180 "Karis dismantle circle." (title)   0xD8A31FCA "<Warning>\nItem dismantled by Karis cannot\n be restored."
 //
 // ---- THIS PLUGIN ------------------------------------------------------------------------------------------------------
-//   The three count sites jump to stubs that ask coin_count(item, count): a piece whose ItemMoney price is a
-//   "REB_IDCoin*" coin gets count kCoinCount and the coin's ItemInfo Name is remembered; anything else keeps its count.
-//   The TextData lookup is wrapped: the count text is rewritten with the coin's name while one is remembered, the title
-//   and the warning always (operator's wording). ItemMoney / ItemInfo are the client's OWN ressystem tables, read once.
-//   Only the Rebalanced client: hooks\instance_dismantle_text.ini [plugin] enabled=1.
+//   ressystem\ItemDismantleProduct.shn {ItemIDX, ProductIDX, ProductLot} (written by the Rebalanced step 0039; not a
+//   checksummed table) is read at start: no table or no rows = the plugin stays out (stock window, no .ini needed).
+//   The three count sites jump to stubs that ask coin_count(item, count): a listed item gets its ProductLot and the
+//   product's ItemInfo Name (the client's own ItemInfo.shn, read once on first use); anything else keeps its count.
+//   The TextData lookup is wrapped: the count text is rewritten with the product's name while one is remembered, the
+//   title, button and warning always (operator's wording).
 #include <hook_core.h>
 #include <client_addrs.h>
 
@@ -33,8 +34,6 @@
 
 namespace {
 
-const unsigned long kCoinCount = 1;           // the zone plugin's count (instance_dismantle: always 1, below the price)
-const char kCoinPrefix[] = "REB_IDCoin";
 const unsigned kTextCount = 0x952059C5u, kTextTitle = 0x58E4D180u, kTextWarning = 0xD8A31FCAu, kTextButton = 0xAF23C4AEu;
 const char kTitle[] = "Dismantle";       // also the button (stock "Dismantle Karis.")
 const char kWarning[] = "<Warning>\nDismantled items cannot\n be restored.";
@@ -44,9 +43,10 @@ const unsigned char kStockAB[9] = {0x8B, 0x7D, 0xF4, 0x53, 0x68, 0xC5, 0x59, 0x2
 const unsigned char kStockC[2] = {0x85, 0xC0};     // test eax,eax ; then 0F 8E rel32 (jle -> DismantleRefuseC)
 
 // ---- the client's own tables ---------------------------------------------------------------------------------------
-std::map<std::string, std::string> g_piece_coin;   // set piece InxName -> coin InxName (ItemMoney, coin rows only)
-std::map<std::string, std::string> g_coin_name;    // coin InxName -> ItemInfo Name
-bool g_loaded = false;
+struct Product { std::string inx; unsigned long lot; };
+std::map<std::string, Product> g_product;          // item InxName -> what it dismantles into (ItemDismantleProduct.shn)
+std::map<std::string, std::string> g_name;         // product InxName -> ItemInfo Name
+bool g_names_loaded = false;
 
 void shn_crypt(unsigned char* d, size_t n) {
     unsigned char key = (unsigned char)n;
@@ -63,11 +63,12 @@ void shn_crypt(unsigned char* d, size_t n) {
 
 struct Col { std::string name; unsigned type; int len; };
 const unsigned kVarStr = 26;                        // the one variable-length type (zero-terminated)
+bool is_text(unsigned t) { return t == 9 || t == 10 || t == 24 || t == kVarStr; }
 
-// rows of a column SHN as {column -> raw field bytes}; only the named columns are kept
-bool shn_read(const char* path, const std::vector<std::string>& want, std::vector<std::map<std::string, std::string>>& out) {
+// rows of a column SHN as {column -> field}: text columns up to their NUL, number columns as their raw bytes
+bool shn_read(const std::string& path, const std::vector<std::string>& want, std::vector<std::map<std::string, std::string>>& out) {
     FILE* f = nullptr;
-    if (fopen_s(&f, path, "rb") != 0 || !f) return false;
+    if (fopen_s(&f, path.c_str(), "rb") != 0 || !f) return false;
     std::vector<unsigned char> b;
     unsigned char buf[65536];
     size_t r;
@@ -93,7 +94,9 @@ bool shn_read(const char* path, const std::vector<std::string>& want, std::vecto
             size_t len = c.type == kVarStr ? strnlen((const char*)d + p, n - p) + 1 : (size_t)c.len;
             if (p + len > n) return false;
             for (const std::string& w : want)
-                if (w == c.name) m[c.name] = std::string((const char*)d + p, strnlen((const char*)d + p, len));
+                if (w == c.name)
+                    m[c.name] = is_text(c.type) ? std::string((const char*)d + p, strnlen((const char*)d + p, len))
+                                                : std::string((const char*)d + p, len);
             p += len;
         }
         out.push_back(m);
@@ -102,40 +105,56 @@ bool shn_read(const char* path, const std::vector<std::string>& want, std::vecto
     return true;
 }
 
-void load_tables() {
-    if (g_loaded) return;
-    g_loaded = true;
+unsigned long number(const std::string& raw) {
+    unsigned long v = 0;
+    for (size_t i = raw.size(); i-- > 0;) v = (v << 8) | (unsigned char)raw[i];
+    return v;
+}
+
+std::string ressystem() {
     char dir[MAX_PATH];
     DWORD k = GetModuleFileNameA(nullptr, dir, MAX_PATH);
     while (k > 0 && dir[k - 1] != '\\' && dir[k - 1] != '/') k--;
     dir[k] = 0;
-    std::string res = std::string(dir) + "ressystem\\";
-    std::vector<std::map<std::string, std::string>> money, items;
-    if (!shn_read((res + "ItemMoney.shn").c_str(), {"IM_ItemIDX", "IM_MoneyIDX"}, money)) {
-        hook::log("instance_dismantle_text: cannot read %sItemMoney.shn - set pieces keep the stock count", res.c_str());
-        return;
+    return std::string(dir) + "ressystem\\";
+}
+
+bool load_products() {
+    std::vector<std::map<std::string, std::string>> rows;
+    if (!shn_read(ressystem() + "ItemDismantleProduct.shn", {"ItemIDX", "ProductIDX", "ProductLot"}, rows)) return false;
+    for (auto& m : rows) {
+        unsigned long lot = number(m["ProductLot"]);
+        if (!m["ItemIDX"].empty() && !m["ProductIDX"].empty() && lot > 0) g_product[m["ItemIDX"]] = Product{m["ProductIDX"], lot};
     }
-    for (auto& m : money)
-        if (m["IM_MoneyIDX"].compare(0, sizeof kCoinPrefix - 1, kCoinPrefix) == 0) g_piece_coin[m["IM_ItemIDX"]] = m["IM_MoneyIDX"];
-    if (shn_read((res + "ItemInfo.shn").c_str(), {"InxName", "Name"}, items))
+    return !g_product.empty();
+}
+
+void load_names() {
+    if (g_names_loaded) return;
+    g_names_loaded = true;
+    std::vector<std::map<std::string, std::string>> items;
+    std::map<std::string, bool> wanted;
+    for (auto& kv : g_product) wanted[kv.second.inx] = true;
+    if (shn_read(ressystem() + "ItemInfo.shn", {"InxName", "Name"}, items))
         for (auto& m : items)
-            if (m["InxName"].compare(0, sizeof kCoinPrefix - 1, kCoinPrefix) == 0) g_coin_name[m["InxName"]] = m["Name"];
-    hook::log("instance_dismantle_text: %u set pieces priced in %u instance coins (ItemMoney / ItemInfo)",
-              (unsigned)g_piece_coin.size(), (unsigned)g_coin_name.size());
+            if (wanted.count(m["InxName"])) g_name[m["InxName"]] = m["Name"];
+    hook::log("instance_dismantle_text: %u items dismantle into %u products (%u named)", (unsigned)g_product.size(),
+              (unsigned)wanted.size(), (unsigned)g_name.size());
 }
 
 // ---- the count sites -----------------------------------------------------------------------------------------------
-char g_coin[80];                                     // the coin the last counted item dismantles into ("" = Karis)
+char g_coin[80];                                     // the product the last counted item dismantles into ("" = Karis)
+unsigned long g_last_count = 0;
 
-// the coin a piece dismantles into (its ItemMoney price is a REB_IDCoin* coin), named into g_coin; false otherwise
 bool coin_of(const char* row) {
-    load_tables();
+    load_names();
     std::string inx(row + kRowInxName, strnlen(row + kRowInxName, 32));
-    auto it = g_piece_coin.find(inx);
-    if (it == g_piece_coin.end()) return false;
-    auto nm = g_coin_name.find(it->second);
-    const std::string& name = nm != g_coin_name.end() ? nm->second : it->second;
+    auto it = g_product.find(inx);
+    if (it == g_product.end()) return false;
+    auto nm = g_name.find(it->second.inx);
+    const std::string& name = nm != g_name.end() ? nm->second : it->second.inx;
     strncpy_s(g_coin, sizeof g_coin, name.c_str(), _TRUNCATE);
+    g_last_count = it->second.lot;
     return true;
 }
 
@@ -150,7 +169,7 @@ bool coin_of_guarded(void* item) {
 
 unsigned long __cdecl coin_count(void* item, unsigned long count) {
     g_coin[0] = 0;
-    if (coin_of_guarded(item)) return kCoinCount;
+    if (coin_of_guarded(item)) return g_last_count;
     g_coin[0] = 0;
     return count;
 }
@@ -231,8 +250,8 @@ HOOK_PLUGIN("instance_dismantle_text") {
         hook::log("instance_dismantle_text: %s - not hooked", m);
         return;
     }
-    if (!hook::ini_opted_in()) {
-        hook::log("instance_dismantle_text.ini does not say enabled=1 - the dismantle window stays stock");
+    if (!load_products()) {
+        hook::log("instance_dismantle_text: no ressystem\\ItemDismantleProduct.shn (or no rows) - the dismantle window stays stock");
         return;
     }
     unsigned char* a = (unsigned char*)hook::rebase(caddr::va(caddr::kDismantleCountA));
@@ -253,6 +272,6 @@ HOOK_PLUGIN("instance_dismantle_text") {
         return;
     if (jump_to(a, (void*)stub_a, sizeof kStockAB) && jump_to(b, (void*)stub_b, sizeof kStockAB) &&
         jump_to(c, (void*)stub_c, 8))
-        hook::log("instance_dismantle_text: enabled - instance set pieces preview / dismantle as %lu of their coin",
-                  kCoinCount);
+        hook::log("instance_dismantle_text: enabled - %u items preview / dismantle into their ItemDismantleProduct row",
+                  (unsigned)g_product.size());
 }

@@ -85,6 +85,8 @@ EXPERIMENTAL = [
     ('exp-gain-u64', []),
     # Karis dismantle of an item enchanted above its (lowered) UpLimit: drop the 'Upgrade Info Error' branch.
     ('dismantle-above-uplimit', []),
+    # 2026 item class 39 (instance keys / tickets) acts as class 0 instead of asserting (Character has the same recipe).
+    ('item-class-2026', []),
     # NOT a recipe: the disconnect a same-zone link onto an unmarkable spot causes (error 1669) cannot be skipped -
     # so_Unmark has already run and the exe never re-marks, so the player ends up in limbo (tried 2026-09-23,
     # withdrawn). The quest_gate plugin pre-checks a GM &linkto destination instead.
@@ -104,6 +106,9 @@ CHARACTER_CHAIN = [
     ('beauty-coupon-tier6', []),
     # Titles past type 127 load and save (2026 has 150); the zone half is the title_ext plugin.
     ('character-title-types', []),
+    # 2026 item class 39 (instance keys / tickets) acts as class 0 instead of asserting - the inventory sort's DB
+    # move of a swap with such an item failed (0x084F, 'Failed to move the item.'). Zone half: same recipe name.
+    ('item-class-2026', []),
 ]
 
 # WorldManager.exe (--target worldmanager): the world-wide instance-dungeon cap. Built and statically verified,

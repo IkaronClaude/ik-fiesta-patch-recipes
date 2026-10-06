@@ -1,0 +1,34 @@
+{
+  "name": "item-class-2026",
+  "summary": "An item class the 2016 exe does not know (2026's class 39 keys / tickets) is treated as class 0 instead of asserting and returning garbage.",
+  "status": "BUILT 2026-10-07.",
+  "target": {
+    "file": "Character/Character.exe",
+    "sha256": "2889640536a271468ef17cc6c74bd6f8799222e3bd95b81d53ea59d41c5a9e1c",
+    "size": 927744
+  },
+  "params": {},
+  "consts": {
+    "fail_branch": "0x0044D3EE"
+  },
+  "why": [
+    "2026 adds item class 39 (10 items: instance entry keys / tickets / event passes - SPT_Key 'The Key of Falsification',",
+    "EOL_Key, MOM_Key, SUS_Key, TEP_Key, 140IDTicket, BHKaren_Ticket, E_PumpkinPass, E_SnowmanPermit, E_Xmas2023_Key - all",
+    "MaxLot 1, no use skill). ItemAttributeClassContainer::operator[] knows ItemClassEnum 0..38 (cmp eax,0x27 / setl): on 39",
+    "it asserts 'Invalid item class[39]' and RETURNS THE CONTAINER ITSELF as the class attribute, so the caller fails.",
+    "Character.exe does this on every login with such an item and on the DB move of a swap that involves one - the 2026",
+    "client's inventory sort then shows 'Failed to move the item.' (zone so_NC_ITEMDB_fail -> 0x084F; operator 2026-10-07,",
+    "Annaaa: Protection (Tier 5) slot 124 <-> SPT_Key slot 51). An unknown class now takes class 0 (ITEMCLASS_BYTELOT, the",
+    "2016 class of plain single items - Engagement Ring, Iron Box), which is what these items are to a 2016 server.",
+    "Data stays 2026 (ItemInfo is checksummed with the 2026 client - both hold the same file)."
+  ],
+  "edits": [
+    {
+      "why": "operator[] class >= 39: push eax / push msg (assert) -> xor eax,eax ; jmp +0x15 (the class-0 lookup)",
+      "at": "fail_branch",
+      "width": 4,
+      "expect": "0xCC506850",
+      "write": "0x15EBC031"
+    }
+  ]
+}
