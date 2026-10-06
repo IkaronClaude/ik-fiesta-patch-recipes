@@ -391,6 +391,20 @@
       "kind": "code",
       "use": "recipe client-2026-quest-exp-u64",
       "note": "RewardWin (0x697D20): mov dword [ecx+0x1C], 0 - the EXP line's high dword"
+    },
+    {
+      "name": "QuestHelperAddProgress",
+      "va": "0x007EC640",
+      "kind": "code",
+      "use": "quest_hover_refresh",
+      "note": "QuestHelperMgr::AddProgressQuest(u16 quest), thiscall, ret 4 - only from the quest-script ACCEPT branch"
+    },
+    {
+      "name": "QuestHelperRemoveProgress",
+      "va": "0x007EC800",
+      "kind": "code",
+      "use": "quest_hover_refresh",
+      "note": "QuestHelperMgr::RemoveProgressQuest(u16 quest), thiscall, ret 4 - give-up / script DONE"
     }
   ]
 }

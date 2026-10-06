@@ -61,6 +61,8 @@
   "PgWinProcessMsg": "0x008784C0",
   "WinMgrIsIn": "0x00881DA0",
   "WinMgr": "0x00D1B810",
-  "RewardWinExpHighStore": "0x00697E0D"
+  "RewardWinExpHighStore": "0x00697E0D",
+  "QuestHelperAddProgress": "0x007EC640",
+  "QuestHelperRemoveProgress": "0x007EC800"
  }
 }
