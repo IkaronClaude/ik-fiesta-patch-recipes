@@ -72,10 +72,29 @@ bool is_instance(void* map) {
     return info(zone::global::fieldlist(), 0, map) != nullptr;   // fm_MapID (Name3) is the FieldMap's first field
 }
 
-void* state_holder() {
+// The AbState holder, looked up ONCE (the dictionary is static after load) and under a fault guard: 2026-10-06 the
+// lookup faulted inside AbState's name trie (0x63CC43, a non-null but invalid node on the "StaIDPartyScale" path) on a
+// map login in Rou and took zone00 down twice. A fault = the plugin goes inert for good (logged), never the zone.
+void* lookup_holder() {
     static char name[32];
     strcpy_s(name, sizeof name, kState);
-    return ((FromNameFn)zone::fn::AbnormalStateDictionary__AbState__as_FromName())(zone::global::dic_abstate(), 0, name);
+    __try {
+        return ((FromNameFn)zone::fn::AbnormalStateDictionary__AbState__as_FromName())(zone::global::dic_abstate(), 0, name);
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        zone::log("indun_party_scale: FAULT looking up %s in AbState (code %08x) - plugin inert", kState, GetExceptionCode());
+        return nullptr;
+    }
+}
+
+void* state_holder() {
+    static bool done = false;
+    static void* holder = nullptr;
+    if (!done) {
+        done = true;
+        holder = lookup_holder();
+        zone::log("indun_party_scale: %s %s", kState, holder ? "found - active" : "not usable - plugin inert");
+    }
+    return holder;
 }
 
 unsigned index_of(void* holder) { return *(unsigned*)((char*)(*(void**)holder) + 0x22); }
@@ -141,11 +160,19 @@ int members(void* player, void* gone, void** out) {
 
 // re-count the party of `player` (without `gone`, a member on the way out) and set every member's strength
 void refresh(void* player, void* gone = nullptr) {
-    if (!is_player(player) || !state_holder()) return;
+    if (!is_player(player)) return;
     EnterCriticalSection(&g_lock);
     __try {
         void* list[kMaxMembers + 1];
         int n = members(player, gone, list);
+        // nothing to do unless a member (or the leaver) is on an instance map or still carries the state: the
+        // holder is only looked up then - an ordinary town / field login never touches AbState at all
+        bool any = gone && is_player(gone) && is_instance(map_of(gone));
+        for (int i = 0; i < n && !any; i++) any = is_instance(map_of(list[i]));
+        static bool ever = false;                 // once applied, leaving an instance must still take it off
+        if (!any && !ever) { LeaveCriticalSection(&g_lock); return; }
+        if (!state_holder()) { LeaveCriticalSection(&g_lock); return; }
+        ever = true;
         for (int i = 0; i < n; i++) {
             void* map = map_of(list[i]);
             int here = 0;
