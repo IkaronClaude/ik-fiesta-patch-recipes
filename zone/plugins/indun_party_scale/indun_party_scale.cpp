@@ -35,6 +35,7 @@ const unsigned kVtPartyNumber = 0x550;       // player vtable: party number (u16
 const unsigned kVtAbstateSet = 0x638;        // player vtable: so_AbnormalState_Set
 const unsigned kVtAbstateInform = 0x3F0;     // player vtable: so_AbnormalState_Inform
 const unsigned short kNoParty = 0xFFFF;
+const unsigned kIndunMapIDClient = 0x16;     // FieldOption::InstanceDungeonInfo.MapIDClient (after ORToken + IDNo + ZoneNumber)
 const int kMaxMembers = 5;
 const int kMaxStrength = 8;
 const unsigned kVaNowOperand = 0x0041641A;   // so_AbnormalState_Set_Simple: mov ecx,[now] - the operand = &now
@@ -68,8 +69,16 @@ void* map_of(void* player) { return *(void**)((char*)player + kPlayerMap); }
 
 bool is_instance(void* map) {
     if (!map) return false;
-    auto info = (IndunInfoFn)zone::fn::FieldContainer__fc_GetFirstInstanceDungeonInfo_2();
-    return info(zone::global::fieldlist(), 0, map) != nullptr;   // fm_MapID (Name3) is the FieldMap's first field
+    // fm_MapID (Name3, 12 bytes) is the FieldMap's first field. fc_GetFirstInstanceDungeonInfo(Name3*) (0x4843E0) does
+    // NOT return null on a miss: past the last row it falls through to `mov eax, esi` = the LAST row. So a non-null
+    // result proves nothing (2026-10-06: Rou and Eld logins got the solo buff) - compare the row's MapIDClient here.
+    auto info = (const char*)((IndunInfoFn)zone::fn::FieldContainer__fc_GetFirstInstanceDungeonInfo_2())(
+        zone::global::fieldlist(), 0, map);
+    if (!info) return false;
+    char want[13] = {0}, have[13] = {0};
+    memcpy(want, map, 12);
+    memcpy(have, info + kIndunMapIDClient, 12);
+    return want[0] && strcmp(want, have) == 0;
 }
 
 // THE dictionary as this exe has it. The abstate-index-cap recipe MOVES dic_abstate (stock 0x87AEA8, 0x1620 bytes) to a
@@ -180,14 +189,9 @@ void refresh(void* player, void* gone = nullptr) {
     __try {
         void* list[kMaxMembers + 1];
         int n = members(player, gone, list);
-        // nothing to do unless a member (or the leaver) is on an instance map or still carries the state: the
-        // holder is only looked up then - an ordinary town / field login never touches AbState at all
-        bool any = gone && is_player(gone) && is_instance(map_of(gone));
-        for (int i = 0; i < n && !any; i++) any = is_instance(map_of(list[i]));
-        static bool ever = false;                 // once applied, leaving an instance must still take it off
-        if (!any && !ever) { LeaveCriticalSection(&g_lock); return; }
+        // every refresh runs (a town login must take OFF a state left from an instance, or from the 2026-10-06 build
+        // that counted every map as an instance); the holder lookup is cached + guarded, inert if unusable
         if (!state_holder()) { LeaveCriticalSection(&g_lock); return; }
-        ever = true;
         for (int i = 0; i < n; i++) {
             void* map = map_of(list[i]);
             int here = 0;
