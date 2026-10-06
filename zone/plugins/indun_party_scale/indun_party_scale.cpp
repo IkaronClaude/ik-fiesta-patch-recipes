@@ -35,7 +35,9 @@ const unsigned kVtPartyNumber = 0x550;       // player vtable: party number (u16
 const unsigned kVtAbstateSet = 0x638;        // player vtable: so_AbnormalState_Set
 const unsigned kVtAbstateInform = 0x3F0;     // player vtable: so_AbnormalState_Inform
 const unsigned short kNoParty = 0xFFFF;
-const unsigned kIndunMapIDClient = 0x16;     // FieldOption::InstanceDungeonInfo.MapIDClient (after ORToken + IDNo + ZoneNumber)
+const unsigned kIndunMapIDClient = 0x16;
+const unsigned kMapMapInfo = 0x10;           // FieldMap: MapInfo* fm_MapInfo
+const unsigned kMapInfoName = 0x2;           // MapInfo: Name3 MapName     // FieldOption::InstanceDungeonInfo.MapIDClient (after ORToken + IDNo + ZoneNumber)
 const int kMaxMembers = 5;
 const int kMaxStrength = 8;
 const unsigned kVaNowOperand = 0x0041641A;   // so_AbnormalState_Set_Simple: mov ecx,[now] - the operand = &now
@@ -67,18 +69,36 @@ unsigned short party_of(void* player) {
 
 void* map_of(void* player) { return *(void**)((char*)player + kPlayerMap); }
 
+// the map's BASE id: an instance runs on a numbered copy (fm_MapID "Leviathan00", 2026-10-06 log) whose MapInfo row is
+// the base map's ("Leviathan", FieldMap +0x10 -> MapInfo, MapName Name3 at +2) - the id Field.txt's instance rows use
+void base_id(void* map, char out[13]) {
+    memset(out, 0, 13);
+    if (!map) return;
+    const char* src = (const char*)map;                         // fm_MapID
+    __try {
+        void* info = *(void**)((char*)map + kMapMapInfo);
+        if (info && ((const char*)info + kMapInfoName)[0]) src = (const char*)info + kMapInfoName;
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+    }
+    memcpy(out, src, 12);
+}
+
 bool is_instance(void* map) {
     if (!map) return false;
-    // fm_MapID (Name3, 12 bytes) is the FieldMap's first field. fc_GetFirstInstanceDungeonInfo(Name3*) (0x4843E0) does
-    // NOT return null on a miss: past the last row it falls through to `mov eax, esi` = the LAST row. So a non-null
-    // result proves nothing (2026-10-06: Rou and Eld logins got the solo buff) - compare the row's MapIDClient here.
+    char want[13];
+    base_id(map, want);
+    if (!want[0]) return false;
+    // fc_GetFirstInstanceDungeonInfo(Name3*) (0x4843E0) does NOT return null on a miss: past the last row it falls through
+    // to `mov eax, esi` = the LAST row. So a non-null result proves nothing (2026-10-06: Rou and Eld logins got the solo
+    // buff) - compare the row's MapIDClient here.
+    char name3[12];
+    memcpy(name3, want, 12);
     auto info = (const char*)((IndunInfoFn)zone::fn::FieldContainer__fc_GetFirstInstanceDungeonInfo_2())(
-        zone::global::fieldlist(), 0, map);
+        zone::global::fieldlist(), 0, name3);
     if (!info) return false;
-    char want[13] = {0}, have[13] = {0};
-    memcpy(want, map, 12);
+    char have[13] = {0};
     memcpy(have, info + kIndunMapIDClient, 12);
-    return want[0] && strcmp(want, have) == 0;
+    return strcmp(want, have) == 0;
 }
 
 // THE dictionary as this exe has it. The abstate-index-cap recipe MOVES dic_abstate (stock 0x87AEA8, 0x1620 bytes) to a
@@ -195,8 +215,18 @@ void refresh(void* player, void* gone = nullptr) {
         for (int i = 0; i < n; i++) {
             void* map = map_of(list[i]);
             int here = 0;
-            if (is_instance(map))
+            bool inst = is_instance(map);
+            if (inst)
                 for (int k = 0; k < n; k++) here += map_of(list[k]) == map;
+            char name[13] = {0}, base[13];
+            if (map) memcpy(name, map, 12);
+            base_id(map, base);
+            for (int c = 0; c < 12; c++) {
+                if (name[c] && (name[c] < 32 || name[c] > 126)) name[c] = '?';
+                if (base[c] && (base[c] < 32 || base[c] > 126)) base[c] = '?';
+            }
+            zone::log("indun_party_scale: player %x on map '%s' (base '%s'): instance %d, %d of %d party members here", list[i],
+                      name, base, inst ? 1 : 0, here, n);
             apply(list[i], here);
         }
         if (gone && is_player(gone) && party_of(gone) == kNoParty) apply(gone, is_instance(map_of(gone)) ? 1 : 0);
