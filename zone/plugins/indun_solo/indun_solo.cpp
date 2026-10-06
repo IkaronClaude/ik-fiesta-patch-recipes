@@ -122,15 +122,17 @@ bool patch_gate_answer() {
 // key (0x10000 + chrregnum, from the zone's party table partycontainer: PARTY_SLOT.Members[].MemberInform.Member) and
 // returns the first solo instance found - the members walk into it, and the member who opened it, now in the party,
 // finds it the same way. A party that already has its own instance keeps it (the stock lookup finds that first).
-// NOT DONE: the "your progress will be lost" warning when a party WITH an instance is joined - the player's next entry
-// simply goes to the party's instance (the solo one empties and closes as stock).
+// The "your progress will be lost" warning when a party WITH an instance is joined: party_join below.
 const unsigned long kCategoryParty = 0;
 zone::Detour g_find;
 
 typedef FieldMap*(__fastcall* FindFn)(void*, void*, char*, unsigned long, void*, void*);
 
+void* g_cluster = nullptr;   // the ClusterManager the zone passes here (kept for the party-join warning below)
+
 FieldMap* __fastcall find_instance(void* self, void*, char* map, unsigned long regnum, void* category, void* level) {
     auto orig = (FindFn)g_find.trampoline;
+    g_cluster = self;
     FieldMap* r = orig(self, nullptr, map, regnum, category, level);
     if (r || (unsigned long)category != kCategoryParty || regnum >= kSoloKeyBase) return r;
     const zone::types::CParty* parties = zone::global::partycontainer();
@@ -149,6 +151,59 @@ FieldMap* __fastcall find_instance(void* self, void*, char* map, unsigned long r
     return r;
 }
 
+// ---- the warning when a party with its own instance is joined (Fiesta2026on2016 P4, operator 2026-09-27) ------------
+// "if the party already has one, the invite accept first warns 'Are you sure you want to join? Your progress in <map>
+// will be lost'". The invite is accepted in the client's own window and the party lives in the WorldManager, so there
+// is nothing to hook BEFORE the join; the zone hears of it in WorldManagerSession::wms_NC_PARTY_JOIN_CMD 0x4CD730
+// (cmd +2 = party number; it runs CParty::MemberJoin into partycontainer first). After it, every member on this zone who
+// stands in its OWN solo instance (the solo key finds the very map it is on) while the party already has a DIFFERENT
+// instance of that dungeon gets a server menu saying so - the stock way the zone asks (title, items, open: as
+// wms_NC_INSTANCE_DUNGEON_DELETE_DUNGEON_CMD 0x4845D0 builds "ID_DeleteNow"), its one button the stock smfm_Cancel.
+// The player keeps playing the solo instance; the next entry goes to the party's (find_instance above).
+const unsigned kPlayerMap = 0x7A;                // ShinePlayer -> FieldMap* (indun_party_scale)
+const unsigned kMapMapInfo = 0x10;               // FieldMap -> MapInfo*; MapInfo +2 = Name3 MapName (the base map id)
+const unsigned short kMenuRange = 1000;          // as the stock ID_DeleteNow menu
+zone::Detour g_party_join;
+char g_warn_title[] = "Your party has its own instance of this dungeon. Stay as long as you like - once you leave, your progress here is lost.";
+char g_warn_ok[] = "OK";
+
+typedef void(__fastcall* PartyJoinFn)(void*, void*, void*, int);
+
+void warn_split(unsigned short party) {
+    const zone::types::CParty* parties = zone::global::partycontainer();
+    if (!g_cluster || !parties || !parties->m_Array || party >= parties->m_NumOfParty) return;
+    auto orig_find = (FindFn)g_find.trampoline;   // the stock lookup: no solo fallback
+    const auto& slot = parties->m_Array[party];
+    for (int i = 0; i < slot.NumOfMember && i < 5; ++i) {
+        const unsigned long chr = slot.Members[i].MemberInform.Member.chrregnum;
+        if (!chr) continue;
+        void* player = zone::fn::ShineObjectManager__som_FindPlayer()(zone::global::shineobjmanager(), 0, chr);
+        if (!player) continue;                                     // on another zone
+        FieldMap* here = *(FieldMap**)((char*)player + kPlayerMap);
+        if (!here) continue;
+        const char* info = *(const char**)((char*)here + kMapMapInfo);
+        if (!info || !info[2]) continue;
+        char base[13] = {0};
+        std::memcpy(base, info + 2, 12);
+        int level = 0;
+        if (orig_find(g_cluster, nullptr, base, kSoloKeyBase + chr, (void*)kCategoryParty, &level) != here) continue;
+        FieldMap* theirs = orig_find(g_cluster, nullptr, base, party, (void*)kCategoryParty, &level);
+        if (!theirs || theirs == here) continue;
+        static unsigned char arg[256];                             // ServerMenuArgument: smfm_Cancel reads nothing
+        void* p = zone::fn::ShineObjectClass__ShinePlayer__sp_ServerMenuTitle()(player, 0, g_warn_title);
+        p = zone::fn::ShineObjectClass__ShinePlayer__sp_ServerMenuItem()(
+            p, 0, (void*)zone::fn::ServerMenuFuncter__smfm_Cancel(), g_warn_ok, (zone::types::ServerMenuArgument*)arg);
+        zone::fn::ShineObjectClass__ShinePlayer__sp_ServerMenuOpen()(p, 0, 0, 0xFFFF, nullptr, kMenuRange);
+        zone::log("indun_solo: character %lu joined party %u inside its solo %.12s - the party has its own instance: warned",
+                  chr, party, base);
+    }
+}
+
+void __fastcall party_join(void* self, void*, void* cmd, int a2) {
+    ((PartyJoinFn)g_party_join.trampoline)(self, nullptr, cmd, a2);
+    if (cmd) warn_split(*(unsigned short*)((char*)cmd + 2));
+}
+
 }  // namespace
 
 ZONEHOOK_PLUGIN("indun_solo") {
@@ -160,6 +215,8 @@ ZONEHOOK_PLUGIN("indun_solo") {
                         (void*)zone::fn::FieldContainer__fc_CanEnterIndun(), (void*)can_enter, &g_can_enter);
     zone::hook_function("ClusterManager::cm_FindExistByRegnum (a party inherits a member's solo instance)",
                         (void*)zone::fn::MapClusterManager__ClusterManager__cm_FindExistByRegnum(), (void*)find_instance, &g_find);
+    zone::hook_function("WorldManagerSession::wms_NC_PARTY_JOIN_CMD (warn a member whose party has its own instance)",
+                        (void*)zone::fn::WorldManagerSession__wms_NC_PARTY_JOIN_CMD(), (void*)party_join, &g_party_join);
     if (patch_gate_answer())
         zone::log("indun_solo: gate answer 0x5A93B1 -> solo key (>= 0x10000) with no party goes on as key type 0");
     zone::log("indun_solo: %s present - a character with no party / raid enters party instances on its own key",
