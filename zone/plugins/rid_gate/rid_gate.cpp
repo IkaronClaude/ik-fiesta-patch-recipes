@@ -118,18 +118,18 @@ void enter(zone::types::ShineObjectClass__ShinePlayer* player, const Option& o) 
         lv.LevelTo = *(unsigned short*)((char*)c + 0x24);
     }
     if (!zone::fn::FieldContainer__fc_EnterMapErrMsg()(g_fieldcontainer, 0, player, err, &lv)) return;
-    unsigned char* p = *g_packet;
-    *(unsigned short*)p = 0xA404;
-    void** vt = *(void***)player;
-    *(unsigned long*)(p + 5) = ((unsigned long(__thiscall*)(void*))vt[kVtCharNo / 4])(player);
-    *(unsigned short*)(p + 3) = *(unsigned short*)((char*)player + 4);
-    *(unsigned long*)(p + 0xD) = key;
-    std::memcpy(p + 0x11, info->Argument._raw, 20);
-    *(unsigned long*)(p + 9) = type;
-    *(unsigned short*)(p + 0x46) = 2;
-    zone::fn::ZoneRingPacketFindInstanceDungeon__zrpb_Query()(g_zrpb, 0, (zone::types::ShineObjectClass__ShineObject*)player,
-                                                           (zone::types::NETCOMMAND*)p);
-    zone::log("rid_gate: %s enters instance %.20s mode %u", "player", o.arg, o.mode);
+    // straight in: the stock IDGate click hands its FIND command to zrpb_Query (0x5A6D10), which only builds a second
+    // "Do you want to go to <map> field?" menu whose Yes is smfm_LinkToDungeon with this argument (+0 the key, +4 the
+    // argument as a string, +24 sep 0, +28 the key type) - our menu already asked, so the Yes is called directly
+    // (operator 2026-10-06: "it opens a new box ... bit redundant").
+    zone::types::ServerMenuArgument a;
+    std::memset(&a, 0, sizeof a);
+    a.sma_linkDungeon.IDRegisterNumber = key;
+    zone::fn::ORToken__ort_GetString()(info->Argument._raw, 0, (char*)a.sma_linkDungeon.argument);
+    a.sma_linkDungeon.sep = 0;
+    *(unsigned long*)a.sma_linkDungeon.category = type;
+    zone::fn::ServerMenuFuncter__smfm_LinkToDungeon()(zone::global::ServerMenuActor__sma_Functer(), 0, player, &a);
+    zone::log("rid_gate: enters instance %.20s mode %u (key %lu type %lu)", o.arg, o.mode, key, type);
 }
 
 // a ServerMenuFuncter member: __thiscall(functer, player, ServerMenuArgument*), callee pops 8
@@ -157,10 +157,16 @@ void __fastcall role(void* self, void*, zone::types::ShineObjectClass__ShinePlay
     static zone::types::ServerMenuArgument args[8];
     void* m = zone::fn::ShineObjectClass__ShinePlayer__sp_ServerMenuTitle()(player, 0, title);
     int n = 0;
-    // the open raid(s): the gate's own links
-    for (int i = 0; i < 4 && n < 6; ++i) {
+    // the open raid(s): the gate's own links. nrb_linkinform(i) is row i of the WHOLE LinkTable (0x4C5420:
+    // or_SelectFromOrder("LinkTable", i)); the stock Portal keeps the rows whose index is its argument
+    // (nrb_BriefInformSet 0x4C2360) - same filter here (2026-10-06: unfiltered, the Helga gate listed Forest of Tides,
+    // Sand Beach, Sea of Greed = rows 0-2).
+    unsigned char want[20];
+    zone::fn::ORToken__ORToken()(want, 0, x);
+    for (int i = 0; i < 4096 && n < 6; ++i) {
         auto* link = zone::fn::NPCRole_Portal__nrb_linkinform()(self, 0, i);
-        if (!link || !link->linktoserver[0]) break;
+        if (!link) break;
+        if (std::memcmp(link->index, want, sizeof want) != 0 || !link->linktoserver[0]) continue;
         map_name(link->linktoserver, texts[n], sizeof texts[n]);
         std::memset(&args[n], 0, sizeof args[n]);
         std::memcpy(&args[n].sma_link.sml_lnkinf, link, sizeof *link);
