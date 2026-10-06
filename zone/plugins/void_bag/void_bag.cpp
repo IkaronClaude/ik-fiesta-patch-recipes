@@ -384,6 +384,13 @@ int __fastcall ia_impl(void* self, void* /*edx*/, int belong, int puton, unsigne
     if (f != (unsigned short)from || t != (unsigned short)to)
         zone::log("void bag move %u -> %u judged as %u -> %u: %s", (unsigned)(unsigned short)from,
                   (unsigned)(unsigned short)to, (unsigned)f, (unsigned)t, r ? "allowed" : "refused");
+    else if (!r)
+        // every refusal, whatever the bags (ticket P2 2026-10-05: the 2026 client's inventory sort gets "Failed to move
+        // the item" = RELOC_ACK 0x024A, which sp_ItemReloc sends when this check fails for the moved item or for the
+        // item it swaps with). belong = ItemInfo.BT_Inx, puton = the item's put-on-bound flag, err = E_RELOC_ERR
+        // (1 char-bound, 2 account-bound, 3 the common matrix; 0 = no rule record for this belong type at all).
+        zone::log("reloc REFUSED by IA_CanInvenReloc: belong %d puton %d bag %u -> %u err %d", belong, puton,
+                  (unsigned)f, (unsigned)t, err ? *err : -1);
     return r;
 }
 
