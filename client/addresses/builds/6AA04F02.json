@@ -63,6 +63,11 @@
   "WinMgr": "0x00D1B810",
   "RewardWinExpHighStore": "0x00697E0D",
   "QuestHelperAddProgress": "0x007EC640",
-  "QuestHelperRemoveProgress": "0x007EC800"
+  "QuestHelperRemoveProgress": "0x007EC800",
+  "BuffDurationText": "0x005DC0B0",
+  "BuffEndTime": "0x005DE580",
+  "BuffTipFormat1": "0x005DBACB",
+  "BuffTipFormat2": "0x005DBC54",
+  "BuffTipFormat3": "0x005DE0AE"
  }
 }

@@ -405,6 +405,41 @@
       "kind": "code",
       "use": "quest_hover_refresh",
       "note": "QuestHelperMgr::RemoveProgressQuest(u16 quest), thiscall, ret 4 - give-up / script DONE"
+    },
+    {
+      "name": "BuffDurationText",
+      "va": "0x005DC0B0",
+      "kind": "code",
+      "use": "buff_duration_hide",
+      "note": "buff tooltip: remaining-time text builder, thiscall(char* buf, entry*), ret 8; end time = BuffEndTime(entry+0xA) - mktime(server tm)"
+    },
+    {
+      "name": "BuffEndTime",
+      "va": "0x005DE580",
+      "kind": "code",
+      "use": "buff_duration_hide",
+      "note": "buff entry +0xA -> end time as __int64 (thiscall, no args)"
+    },
+    {
+      "name": "BuffTipFormat1",
+      "va": "0x005DBACB",
+      "kind": "code",
+      "use": "buff_duration_hide",
+      "note": "call <va-format helper> building '%s\n\n%s: %s' (name, 'Duration Time', remaining) - buff icon tooltip site 1"
+    },
+    {
+      "name": "BuffTipFormat2",
+      "va": "0x005DBC54",
+      "kind": "code",
+      "use": "buff_duration_hide",
+      "note": "same, site 2"
+    },
+    {
+      "name": "BuffTipFormat3",
+      "va": "0x005DE0AE",
+      "kind": "code",
+      "use": "buff_duration_hide",
+      "note": "same, site 3"
     }
   ]
 }
