@@ -414,6 +414,24 @@
    "kind": "code",
    "fwd": "E8????????83C4148BCF50E8????????8BBD6CFFFFFF8B8574FFFFFF",
    "back": "B5D2F0F58BF0E8????????568BB578FFFFFF508D46465068????????"
+  },
+  "OpenQuestWin": {
+   "va": "0x005845C0",
+   "kind": "code",
+   "fwd": "558BEC568BF18B8E5803000085C97447FF750CE8????????",
+   "back": "00FFB658030000B9????????E8????????5E5DC20800CCCCCCCCCCCC"
+  },
+  "SlideBarSetSplitCnt": {
+   "va": "0x00522C50",
+   "kind": "code",
+   "fwd": "558BEC8B550889913001000085D2790CC7813001",
+   "back": "00008BCEE8????????5F5B5E8BE55DC20800CCCCCCCCCCCCCCCCCCCCCCCCCCCC"
+  },
+  "SlideListUpdateView": {
+   "va": "0x005259F0",
+   "kind": "code",
+   "fwd": "558BEC83EC20568BF15733FF8975F48B862C0100",
+   "back": "00002BC2C1F8033BF072BD5B5FB0015E5DC20800CCCCCCCC"
   }
  }
 }

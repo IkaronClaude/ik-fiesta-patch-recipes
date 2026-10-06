@@ -68,6 +68,9 @@
   "BuffEndTime": "0x005DE580",
   "BuffTipFormat1": "0x005DBACB",
   "BuffTipFormat2": "0x005DBC54",
-  "BuffTipFormat3": "0x005DE0AE"
+  "BuffTipFormat3": "0x005DE0AE",
+  "OpenQuestWin": "0x005845C0",
+  "SlideBarSetSplitCnt": "0x00522C50",
+  "SlideListUpdateView": "0x005259F0"
  }
 }

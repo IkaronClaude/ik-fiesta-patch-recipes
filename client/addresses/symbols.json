@@ -440,6 +440,27 @@
       "kind": "code",
       "use": "buff_duration_hide",
       "note": "same, site 3"
+    },
+    {
+      "name": "OpenQuestWin",
+      "va": "0x005845C0",
+      "kind": "code",
+      "use": "quest_scroll_keep",
+      "note": "GameFrameWork::OpenQuestWin(int quest, int tab), thiscall ret 8: questwin = this+0x358 -> SelectTab(tab) 0x7362C0 (rebuilds the list) + SetSelectedID(quest) 0x7362A0; the quest-finished popup's click"
+    },
+    {
+      "name": "SlideBarSetSplitCnt",
+      "va": "0x00522C50",
+      "kind": "code",
+      "use": "quest_scroll_keep",
+      "note": "SlideBar::SetSplitCnt(int n), thiscall ret 4: split +0x130 = n, clamps position +0x134 to [0, n-1], redraws"
+    },
+    {
+      "name": "SlideListUpdateView",
+      "va": "0x005259F0",
+      "kind": "code",
+      "use": "quest_scroll_keep",
+      "note": "SlideListWin::UpdateViewList(), thiscall: redraw from top row +0x150"
     }
   ]
 }
