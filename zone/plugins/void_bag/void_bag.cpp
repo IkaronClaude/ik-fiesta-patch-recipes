@@ -373,6 +373,45 @@ extern "C" void* __cdecl void_bag_of(void* player) {
 // inventory<->void move is judged as an inventory<->inventory one (always allowed), void->account storage as
 // inventory->account storage (a character-bound item refused, exactly where the inventory refuses it).
 // OPEN: official may restrict what the void bag accepts; this mirrors the inventory until that is known.
+// ---- every refused move, whatever refused it -----------------------------------------------------------------------
+// Every error exit of the move path (sp_ItemReloc's common exit 0x5370BE, the ItemRelocationManager irm_* paths) answers
+// through the player's vtable+0x308 = 0x54F050 (dept, cmd, code): it builds opcode dept<<10|cmd and sends the u16 code.
+// The 2026 client's inventory sort (2026-10-06, proxy log 11:23:51) moved two items and then got RELOC_ACK 0x084F - a
+// code no instruction in Zone.exe carries as a constant, so it is computed. Logged here with the caller's address so
+// the branch that builds it is known; codes 0x0241 (moved) are not logged.
+zone::Detour g_ack_detour;
+const unsigned kVaPlayerSendAck = 0x0054F050;   // ShinePlayer vtable slot 0x308
+const unsigned kRelocOk = 0x0241;
+
+extern "C" void* _ReturnAddress(void);
+#pragma intrinsic(_ReturnAddress)
+
+void __fastcall ack_impl(void* self, void* /*edx*/, int dept, int cmd, unsigned code) {
+    void* from = _ReturnAddress();
+    if ((unsigned short)code != kRelocOk && dept == 0xC && cmd == 0xC)
+        zone::log("reloc ACK 0x%04X to player %x (sent from %x)", (unsigned)(unsigned short)code, self, from);
+    typedef void(__fastcall * Orig)(void*, void*, int, int, unsigned);
+    ((Orig)g_ack_detour.trampoline)(self, 0, dept, cmd, code);
+}
+
+// every move that reaches the move handler - client requests AND the server's own inventory sort, which calls
+// ShinePlayer::sp_ItemReloc (0x536780) directly with a built request (so_ply_ArrangeInven 0x56389A)
+zone::Detour g_itemreloc_detour;
+const unsigned kVaItemReloc = 0x00536780;
+
+void __fastcall itemreloc_impl(void* self, void* /*edx*/, unsigned short handle, const unsigned short* req) {
+    void* from = _ReturnAddress();
+    if (req) {
+        __try {
+            zone::log("move %u:%u -> %u:%u by player %x (from %x)", (unsigned)(req[0] >> 10), (unsigned)(req[0] & 0x3FF),
+                      (unsigned)(req[1] >> 10), (unsigned)(req[1] & 0x3FF), self, from);
+        } __except (EXCEPTION_EXECUTE_HANDLER) {
+        }
+    }
+    typedef void(__fastcall * Orig)(void*, void*, unsigned short, const unsigned short*);
+    ((Orig)g_itemreloc_detour.trampoline)(self, 0, handle, req);
+}
+
 zone::Detour g_ia_detour;
 
 int __fastcall ia_impl(void* self, void* /*edx*/, int belong, int puton, unsigned from, unsigned to, int* err) {
@@ -665,6 +704,10 @@ ZONEHOOK_PLUGIN("void_bag") {
     zone::hook_function("GameDBSession::gds_NC_CHAR_GET_ITEMLIST_BY_TYPE_ACK",
                         (void*)zone::fn::GameDBSession__gds_NC_CHAR_GET_ITEMLIST_BY_TYPE_ACK(),
                         (void*)list_ack_thunk, &g_list_detour);
+    zone::hook_function("ShinePlayer vtable+0x308 (error ACK sender)", (void*)zone::rebase(kVaPlayerSendAck),
+                        (void*)ack_impl, &g_ack_detour);
+    zone::hook_function("ShinePlayer::sp_ItemReloc", (void*)zone::rebase(kVaItemReloc), (void*)itemreloc_impl,
+                        &g_itemreloc_detour);
     zone::hook_function("CItemAuthorityBase::IA_CanInvenReloc",
                         (void*)zone::fn::CItemAuthorityBase__IA_CanInvenReloc(),
                         (void*)ia_thunk, &g_ia_detour);
