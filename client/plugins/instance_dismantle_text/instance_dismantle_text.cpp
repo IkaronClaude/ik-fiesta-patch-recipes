@@ -12,7 +12,7 @@
 //     click      0x655E9A  test eax,eax (count) ; jle 0x655FA5 "This item cannot be dismantled." (0xD27B2055)
 //   A set piece's row says 0 - the window refuses it although the server would dismantle it.
 //   The texts are TextData ids read through the cdecl lookup 0x458CC0 (u32 id -> const char*), each used once here:
-//     0x58E4D180 "Karis dismantle circle." (title)   0xD8A31FCA "<Warning>\nItem dismantled by Karis cannot\n be restored."
+//     0xAF23C4AE "Dismantle Karis." (the button)   0x58E4D180 "Karis dismantle circle." (title)   0xD8A31FCA "<Warning>\nItem dismantled by Karis cannot\n be restored."
 //
 // ---- THIS PLUGIN ------------------------------------------------------------------------------------------------------
 //   The three count sites jump to stubs that ask coin_count(item, count): a piece whose ItemMoney price is a
@@ -35,8 +35,8 @@ namespace {
 
 const unsigned long kCoinCount = 1;           // the zone plugin's count (instance_dismantle: always 1, below the price)
 const char kCoinPrefix[] = "REB_IDCoin";
-const unsigned kTextCount = 0x952059C5u, kTextTitle = 0x58E4D180u, kTextWarning = 0xD8A31FCAu;
-const char kTitle[] = "Dismantle";
+const unsigned kTextCount = 0x952059C5u, kTextTitle = 0x58E4D180u, kTextWarning = 0xD8A31FCAu, kTextButton = 0xAF23C4AEu;
+const char kTitle[] = "Dismantle";       // also the button (stock "Dismantle Karis.")
 const char kWarning[] = "<Warning>\nDismantled items cannot\n be restored.";
 const unsigned kItemRow = 0x70, kRowInxName = 2;   // item object -> ItemInfo row; row +2 = InxName (32)
 
@@ -200,7 +200,7 @@ typedef const char*(__cdecl* TextFn)(unsigned id);
 char g_count_text[256];
 
 const char* __cdecl text_impl(unsigned id) {
-    if (id == kTextTitle) return kTitle;
+    if (id == kTextTitle || id == kTextButton) return kTitle;
     if (id == kTextWarning) return kWarning;
     const char* s = ((TextFn)g_text.trampoline)(id);
     if (id == kTextCount && g_coin[0]) {
