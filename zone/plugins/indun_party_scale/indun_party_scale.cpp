@@ -72,14 +72,29 @@ bool is_instance(void* map) {
     return info(zone::global::fieldlist(), 0, map) != nullptr;   // fm_MapID (Name3) is the FieldMap's first field
 }
 
+// THE dictionary as this exe has it. The abstate-index-cap recipe MOVES dic_abstate (stock 0x87AEA8, 0x1620 bytes) to a
+// bigger block and rewrites every `mov ecx, 0x87aea8`, so the stock global is STALE memory - passing it is what crashed
+// zone00 on 2026-10-06 (the name walk followed garbage at stale+0xE18). Read it where the zone itself takes it:
+// MapBuffDataBox::mbdb_SetAbstate, `mov ecx, &dic_abstate` (B9 imm32) right before its as_FromName call.
+const unsigned kVaMapBuffDicMov = 0x00464620;
+void* dictionary() {
+    const unsigned char* at = (const unsigned char*)zone::rebase(kVaMapBuffDicMov);
+    if (at[0] != 0xB9 || at[5] != 0xE8) {
+        zone::log("indun_party_scale: no `mov ecx, &dic_abstate; call` at %x (%02x .. %02x) - plugin inert", at, at[0], at[5]);
+        return nullptr;
+    }
+    return *(void**)(at + 1);
+}
+
 // The AbState holder, looked up ONCE (the dictionary is static after load) and under a fault guard: 2026-10-06 the
-// lookup faulted inside AbState's name trie (0x63CC43, a non-null but invalid node on the "StaIDPartyScale" path) on a
-// map login in Rou and took zone00 down twice. A fault = the plugin goes inert for good (logged), never the zone.
+// lookup faulted inside the name walk (0x63CC43) on a map login in Rou and took zone00 down (the stale dictionary, above). A fault = the plugin goes inert for good (logged), never the zone.
 void* lookup_holder() {
     static char name[32];
     strcpy_s(name, sizeof name, kState);
     __try {
-        return ((FromNameFn)zone::fn::AbnormalStateDictionary__AbState__as_FromName())(zone::global::dic_abstate(), 0, name);
+        void* dic = dictionary();
+        if (!dic) return nullptr;
+        return ((FromNameFn)zone::fn::AbnormalStateDictionary__AbState__as_FromName())(dic, 0, name);
     } __except (EXCEPTION_EXECUTE_HANDLER) {
         zone::log("indun_party_scale: FAULT looking up %s in AbState (code %08x) - plugin inert", kState, GetExceptionCode());
         return nullptr;
@@ -92,7 +107,7 @@ void* state_holder() {
     if (!done) {
         done = true;
         holder = lookup_holder();
-        zone::log("indun_party_scale: %s %s", kState, holder ? "found - active" : "not usable - plugin inert");
+        zone::log("indun_party_scale: %s %s (dictionary %x)", kState, holder ? "found - active" : "not usable - plugin inert", dictionary());
     }
     return holder;
 }
@@ -203,7 +218,10 @@ void refresh_party(unsigned short party, void* gone = nullptr) {
 typedef void(__fastcall* LoginFn)(void*, void*, void*, int, unsigned short);
 void __fastcall login_impl(void* self, void*, void* cmd, int a2, unsigned short a3) {
     ((LoginFn)g_login.trampoline)(self, 0, cmd, a2, a3);
-    if (!g_vt_player && self) g_vt_player = *(void**)self;
+    if (!g_vt_player && self) {
+        g_vt_player = *(void**)self;
+        state_holder();               // the one lookup (guarded), logged at the first map login: proves it on any map
+    }
     refresh(self);
 }
 
