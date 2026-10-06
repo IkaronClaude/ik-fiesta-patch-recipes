@@ -510,6 +510,27 @@
       "kind": "code",
       "use": "instance_dismantle_text",
       "note": "the 'This item cannot be dismantled.' branch DismantleCountC jumps to"
+    },
+    {
+      "name": "KillLineWindow",
+      "va": "0x007ED8F4",
+      "kind": "code",
+      "use": "quest_name_probe",
+      "note": "quest window kill line: cmp byte [esi+5],0 ; jne (esi = QuestEndNpc row, eax = MobInfo row)"
+    },
+    {
+      "name": "KillLinePopup",
+      "va": "0x00734063",
+      "kind": "code",
+      "use": "quest_name_probe",
+      "note": "objective popup kill line: cmp byte [edi+5],0 ; jne (edi = QuestEndNpc row, eax = MobInfo row)"
+    },
+    {
+      "name": "MobLocaName",
+      "va": "0x008FAF20",
+      "kind": "code",
+      "use": "quest_name_probe",
+      "note": "cdecl MobLoca lookup (u32 name id) -> const char*"
     }
   ]
 }

@@ -78,6 +78,9 @@
   "DismantleCountA": "0x006556B2",
   "DismantleCountB": "0x00655D0D",
   "DismantleCountC": "0x00655E9A",
-  "DismantleRefuseC": "0x00655FA5"
+  "DismantleRefuseC": "0x00655FA5",
+  "KillLineWindow": "0x007EE074",
+  "KillLinePopup": "0x007346A3",
+  "MobLocaName": "0x008FB6B0"
  }
 }

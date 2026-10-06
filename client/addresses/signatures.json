@@ -476,6 +476,26 @@
    "kind": "code",
    "fwd": "8BB3280100006855207BD2E8????????83C4048B",
    "back": "24000000008B01FF90140100005F5E5B8BE55DC3"
+  },
+  "KillLineWindow": {
+   "va": "0x007ED8F4",
+   "kind": "code",
+   "fwd": "807E05007532FF7022E8????????50FF760A5768",
+   "back": "0F85????????85C9740A8B4DB48B55AC0FB63C0A"
+  },
+  "KillLinePopup": {
+   "va": "0x00734063",
+   "kind": "code",
+   "fwd": "807F05007527FF70228B770AE8????????5653508D85F0FEFFFF68????????50E8????????83C418E9????????0FB74703B9FFFF00008985D4FEFFFF663BC10F84??????",
+   "back": "BB0100000085D2740B8B8DD0FEFFFF0FB65C0A18"
+  },
+  "MobLocaName": {
+   "va": "0x008FAF20",
+   "kind": "code",
+   "fwd": null,
+   "back": "008BE55DC20C00E8CD7F1200CCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCC",
+   "call": "E8????????83C4048945948D459CB9????????50",
+   "anchor": "0x0048FAAC"
   }
  }
 }
