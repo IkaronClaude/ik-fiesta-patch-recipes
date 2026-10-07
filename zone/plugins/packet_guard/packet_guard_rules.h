@@ -254,3 +254,23 @@ static const Rule kRules[] = {
     {0xD407, 18, -1, 0, 0, 0, "NC_PET_SET_NAME_REQ"},
     {0xD409, 2, -1, 0, 0, 0, "NC_PET_SET_NAME_CANCEL_REQ"},
 };
+// {opcode, offset, size, name}: a fixed string field that must end in a NUL
+struct StringField { unsigned short op; unsigned short at; unsigned short size; const char* name; };
+static const StringField kStrings[] = {
+    {0x0813, 14, 20, "NC_MISC_PINGTEST_TOOL_WM_CLIENT_ZONE_DB.TargetCharName"},
+    {0x181F, 0, 12, "NC_MAP_MULTY_LINK_SELECT_REQ.LinkMapName"},
+    {0x204F, 2, 37, "NC_ACT_WEDDING_PROPOSEREQ_REQ.propose_word"},
+    {0x2051, 3, 37, "NC_ACT_WEDDING_PROPOSEACK_ACK.response_word"},
+    {0x6801, 0, 30, "NC_BOOTH_OPEN_REQ.signboard"},
+    {0x6C06, 0, 32, "NC_SCENARIO_AREAENTRY_ACK.areaindex"},
+    {0x6C08, 0, 32, "NC_SCENARIO_AREALEAVE_ACK.areaindex"},
+    {0x74AC, 1, 16, "NC_GUILD_RENAME_REQ.sGuildName"},
+    {0x8C03, 1, 9, "NC_MINIHOUSE_BUILDING_REQ.password"},
+    {0x8C03, 10, 21, "NC_MINIHOUSE_BUILDING_REQ.title"},
+    {0x8C03, 32, 101, "NC_MINIHOUSE_BUILDING_REQ.sNotify"},
+    {0x8C10, 2, 9, "NC_MINIHOUSE_VISIT_REQ.password"},
+    {0x8C2B, 0, 9, "NC_MINIHOUSE_MODIFY_PASSWORD_REQ.password"},
+    {0x8C2E, 0, 21, "NC_MINIHOUSE_MODIFY_TITLE_REQ.title"},
+    {0xC401, 0, 20, "NC_COLLECT_PEEPING_REQ.charname"},
+    {0xD407, 2, 16, "NC_PET_SET_NAME_REQ.sPetName"},
+};

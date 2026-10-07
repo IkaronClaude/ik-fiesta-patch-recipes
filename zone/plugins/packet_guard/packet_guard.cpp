@@ -28,6 +28,11 @@ const unsigned kVaProtocolStore = 0x004D4510u;   // protocolstore(PROTOCOLFUNCTI
 zone::Detour g_store;
 
 short g_rule_of[0x10000];                        // opcode -> index into kRules, -1 none
+short g_string_of[0x10000];                      // opcode -> first index into kStrings, -1 none
+unsigned g_terminated[0x10000];
+// a terminated copy lives in a per-thread ring: the zone keeps the last command pointer for a while (sp_LastProtocol)
+thread_local unsigned char t_copy[4][0x2000];
+thread_local int t_copy_next = 0;
 unsigned g_dropped[0x10000], g_short[0x10000];
 
 bool should_log(unsigned n) { return n <= 20 || n % 1000 == 0; }
@@ -63,6 +68,25 @@ void on_packet(hook::proto::Call& c) {
             zone::log("packet_guard: short %s 0x%04X from char %u: %d byte(s) < the 2016 struct's %u (passed on, #%u)",
                       r.name, c.op, char_no(c.self), n, r.size, g_short[c.op]);
     }
+    // fixed string fields must end inside their field: a name / title / password with no NUL is read on into the
+    // fields after it (or past the packet) by the zone's string copies. Terminated in a copy, never in the receive buffer.
+    const int s0 = g_string_of[c.op];
+    if (s0 >= 0 && n + 2 <= (int)sizeof t_copy[0]) {
+        unsigned char* copy = 0;
+        for (int s = s0; s < (int)(sizeof kStrings / sizeof kStrings[0]) && kStrings[s].op == c.op; s++) {
+            const StringField& f = kStrings[s];
+            if (n < f.at + f.size || memchr(p + f.at, 0, f.size)) continue;
+            if (!copy) {
+                copy = t_copy[t_copy_next++ & 3];
+                memcpy(copy, cmd, n + 2);
+                c.args[0] = (hook::u32)copy;
+            }
+            copy[2 + f.at + f.size - 1] = 0;
+            if (should_log(++g_terminated[c.op]))
+                zone::log("packet_guard: %s from char %u had no NUL in its %u bytes - terminated (#%u)", f.name,
+                          char_no(c.self), f.size, g_terminated[c.op]);
+        }
+    }
     c.original();
 }
 
@@ -70,6 +94,7 @@ void __cdecl store(void* table) {
     ((void(__cdecl*)(void*))g_store.trampoline)(table);
     if (table != zone::client_protocol_table()) return;
     int hooked = 0, counted = 0;
+    for (int s = (int)(sizeof kStrings / sizeof kStrings[0]) - 1; s >= 0; s--) g_string_of[kStrings[s].op] = (short)s;
     for (int i = 0; i < (int)(sizeof kRules / sizeof kRules[0]); i++) {
         const Rule& r = kRules[i];
         if (r.size == 0 && r.count_at < 0) continue;             // nothing to check
@@ -88,6 +113,7 @@ void __cdecl store(void* table) {
 
 ZONEHOOK_PLUGIN("packet_guard") {
     memset(g_rule_of, 0xFF, sizeof g_rule_of);
+    memset(g_string_of, 0xFF, sizeof g_string_of);
     zone::hook_function("protocolstore(ShinePlayer table) 0x4D4510 (+ packet length checks)",
                         (void*)zone::rebase(kVaProtocolStore), (void*)store, &g_store);
 }
