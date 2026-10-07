@@ -21,23 +21,25 @@
 //   * a vault that has such rows is REFUSED as a whole to a character who has none of the HIGH JOBS (the operator's
 //     rule: a vault with job items opens only once the character has a job; 2026-10-03: "if there are ANY high-class
 //     requirements for any class, we allow opening if we are ANY high class, even if our class does not have an item
-//     for it in it"). The high jobs are listed in ../9Data/Shine/VaultJobs.txt (written by Fiesta2026on2016
-//     migrations-rebalance/0009: every job that has job rows in some vault); without that file only a character
-//     whose own job has rows in THIS vault may open it (the rule before). A refusal: the free-slot check reports 0
+//     for it in it"). The high jobs = every job that has job rows in some vault: read from the server's own
+//     MysteryVaultServer.shn (its ChrClass column, with the zone's CDataReader - no side file; was VaultJobs.txt, written
+//     by Fiesta2026on2016's REB 0009 until 2026-10-07); without them only a character whose own job has rows in THIS
+//     vault may open it (the rule before). A refusal: the free-slot check reports 0
 //     for this one call, so the zone takes its own "fail" path and nothing is made or consumed, and the error becomes
 //     0x709, which the 2026 client shows as "Cannot use due to the Class Requirement." (its GetErrMsg 0x4BDBB0).
 // Every other row goes through the stock gate unchanged.
 #include <zonehook.h>
 #include <zone_functions.h>
+#include <zone_types.h>
 
-#include <cstdio>
+#include <cstring>
 
 namespace {
 
 const int kJobBase = 100;                         // ChrClass kJobBase + class id = that one job
 const int kJobLast = kJobBase + 127;
 const unsigned short kErrClass = 0x709;            // "Cannot use due to the Class Requirement." (2026 client)
-const char* kHighJobs = "../9Data/Shine/VaultJobs.txt";
+const char kTable[] = "../9Data/Shine/MysteryVaultServer.shn";
 bool g_high[256] = {};                             // class id -> a high job
 bool g_have_high = false;                          // the list was read
 
@@ -102,24 +104,38 @@ void __declspec(naked) empty_thunk() { __asm { jmp empty_impl } }
 
 }  // namespace
 
+// the high jobs: every ChrClass kJobBase + id of MysteryVaultServer (the zone's own table, read with its CDataReader)
 void load_high_jobs() {
-    FILE* f = std::fopen(kHighJobs, "r");
-    if (!f) {
-        zone::log("no %s - only a job with rows in the vault may open it", kHighJobs);
-        return;
-    }
-    char line[128];
-    int n = 0;
-    while (std::fgets(line, sizeof line, f)) {
-        unsigned id = 0;
-        if (line[0] != '#' && std::sscanf(line, "%u", &id) == 1 && id < 256) {
-            g_high[id] = true;
-            n++;
+    using zone::types::CDataReader;
+    using zone::types::CDataReader__FIELD;
+    using zone::types::CDataReader__HEAD;
+    void* reader = ::operator new(sizeof(CDataReader));
+    zone::fn::CDataReader__CDataReader()(reader, nullptr);
+    int off = -1, size = 0, n = 0;
+    if (zone::fn::CDataReader__Read()(reader, nullptr, (char*)kTable) != 0) {
+        CDataReader* r = (CDataReader*)reader;
+        const CDataReader__FIELD* f = (const CDataReader__FIELD*)((const unsigned char*)r->m_pHead + sizeof(CDataReader__HEAD));
+        int at = 0;
+        for (unsigned i = 0; i < r->m_pHead->nNumOfField; ++i) {
+            if (!std::strcmp(f[i].Name, "ChrClass")) { off = at; size = (int)f[i].Size; }
+            at += (int)f[i].Size;
+        }
+        unsigned long rows = off < 0 ? 0 : zone::fn::CDataReader__GetNumOfRecord()(reader, nullptr);
+        for (unsigned long i = 0; i < rows; ++i) {
+            const unsigned char* rec = (const unsigned char*)zone::fn::CDataReader__GetRecord()(reader, nullptr, i);
+            if (!rec) continue;
+            unsigned long c = size == 1 ? rec[off] : size == 2 ? *(const unsigned short*)(rec + off) : *(const unsigned long*)(rec + off);
+            if (c > (unsigned long)kJobBase && c <= (unsigned long)kJobLast && !g_high[c - kJobBase]) {
+                g_high[c - kJobBase] = true;
+                n++;
+            }
         }
     }
-    std::fclose(f);
+    zone::fn::CDataReader___CDataReader()(reader, nullptr);
+    ::operator delete(reader);
     g_have_high = n > 0;
-    zone::log("high jobs: %d (any of them opens a vault with job rows)", n);
+    if (off < 0) zone::log("%s: no ChrClass column - only a job with rows in the vault may open it", kTable);
+    else zone::log("high jobs: %d from %s (any of them opens a vault with job rows)", n, kTable);
 }
 
 ZONEHOOK_PLUGIN("vault_jobs") {
