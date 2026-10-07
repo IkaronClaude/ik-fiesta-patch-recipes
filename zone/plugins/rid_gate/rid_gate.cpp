@@ -139,6 +139,101 @@ void __fastcall enter_functer(void* /*functer*/, void*, zone::types::ShineObject
     if (player && idx < sizeof g_options / sizeof g_options[0]) enter(player, g_options[idx]);
 }
 
+// ---- the menu entries ----------------------------------------------------------------------------------------------------
+const int kShown = 3;                // ServerMenuWin (client) shows at most 3 buttons: SetServerMenu clamps the count
+const int kMaxEntries = 8;
+enum { kAll = 0, kLink = 1, kInstance = 2 };
+struct Entry {
+    int kind;
+    char text[32];
+    zone::types::ServerMenuArgument arg;
+    void* functer;
+};
+struct Sub {                         // a group's own menu: which gate, which group
+    void* self;
+    unsigned short npc;
+    int kind;
+    char arg[24];
+};
+Sub g_subs[64];
+unsigned g_next_sub = 0;
+
+// the gate's entries of one kind (kAll: links, then the instance modes)
+int collect(void* self, const char* x, int want, Entry* e) {
+    int n = 0;
+    if (want != kInstance) {
+        // the open raid(s): the gate's own links. nrb_linkinform(i) is row i of the WHOLE LinkTable (0x4C5420:
+        // or_SelectFromOrder("LinkTable", i)); the stock Portal keeps the rows whose index is its argument
+        // (nrb_BriefInformSet 0x4C2360) - same filter here (2026-10-06: unfiltered, the Helga gate listed Forest of
+        // Tides, Sand Beach, Sea of Greed = rows 0-2).
+        unsigned char want_tok[20];
+        zone::fn::ORToken__ORToken()(want_tok, 0, (char*)x);
+        for (int i = 0; i < 4096 && n < 6; ++i) {
+            auto* link = zone::fn::NPCRole_Portal__nrb_linkinform()(self, 0, i);
+            if (!link) break;
+            if (std::memcmp(link->index, want_tok, sizeof want_tok) != 0 || !link->linktoserver[0]) continue;
+            Entry& en = e[n++];
+            std::memset(&en, 0, sizeof en);
+            en.kind = kLink;
+            map_name(link->linktoserver, en.text, sizeof en.text);
+            std::memcpy(&en.arg.sma_link.sml_lnkinf, link, sizeof *link);
+            en.arg.sma_link.sml_LevelFrom = 1;
+            en.arg.sma_link.sml_LevelTo = 0xFFFF;
+            en.functer = (void*)zone::fn::ServerMenuFuncter__smfm_Link();
+        }
+    }
+    if (want != kLink) {
+        // the instance versions: X_I1 (mode 1), X_I2 (mode 2)
+        for (unsigned char mode = 1; mode <= 2 && n < kMaxEntries; ++mode) {
+            Option o = {};
+            std::snprintf(o.arg, sizeof o.arg, "%.17s_I%u", x, mode);
+            o.mode = mode;
+            auto* info = instance(o.arg, mode);
+            if (!info) continue;
+            unsigned idx = g_next_option++ % (sizeof g_options / sizeof g_options[0]);
+            g_options[idx] = o;
+            Entry& en = e[n++];
+            std::memset(&en, 0, sizeof en);
+            en.kind = kInstance;
+            map_name(info->MapIDClient, en.text, sizeof en.text);
+            *(unsigned*)en.arg._raw = idx;
+            en.functer = (void*)enter_functer;
+        }
+    }
+    return n;
+}
+
+// a menu of these entries (at most kShown - 1 of them) and Cancel
+void open_menu(zone::types::ShineObjectClass__ShinePlayer* player, unsigned short npc, Entry* e, int n) {
+    static char title[] = "Where do you want to go?";
+    static char cancel[] = "Cancel";
+    static Entry shown[kShown];
+    static zone::types::ServerMenuArgument none;
+    if (n > kShown - 1) {
+        zone::log("rid_gate: %d entries for one menu - only the first %d shown", n, kShown - 1);
+        n = kShown - 1;
+    }
+    void* m = zone::fn::ShineObjectClass__ShinePlayer__sp_ServerMenuTitle()(player, 0, title);
+    for (int i = 0; i < n; ++i) {
+        shown[i] = e[i];
+        m = zone::fn::ShineObjectClass__ShinePlayer__sp_ServerMenuItem()(m, 0, shown[i].functer, shown[i].text, &shown[i].arg);
+    }
+    m = zone::fn::ShineObjectClass__ShinePlayer__sp_ServerMenuItem()(
+        m, 0, (void*)zone::fn::ServerMenuFuncter__smfm_Cancel(), cancel, &none);
+    zone::fn::ShineObjectClass__ShinePlayer__sp_ServerMenuOpen()(m, 0, 0, npc, nullptr, kMenuRange);
+}
+
+// a group's button: its own menu, the group's entries and Cancel
+void __fastcall sub_functer(void* /*functer*/, void*, zone::types::ShineObjectClass__ShinePlayer* player,
+                            zone::types::ServerMenuArgument* arg) {
+    unsigned idx = *(unsigned*)arg->_raw;
+    if (!player || idx >= sizeof g_subs / sizeof g_subs[0]) return;
+    Sub sub = g_subs[idx];
+    Entry e[kMaxEntries];
+    int n = collect(sub.self, sub.arg, sub.kind, e);
+    open_menu(player, sub.npc, e, n);
+}
+
 typedef void(__fastcall* RoleFn)(void*, void*, zone::types::ShineObjectClass__ShinePlayer*,
                                  zone::types::NPCManager__NPCIndexArray*, unsigned short);
 
@@ -151,51 +246,38 @@ void __fastcall role(void* self, void*, zone::types::ShineObjectClass__ShinePlay
     }
     char x[24] = {0};
     std::memcpy(x, tpl + kArgOffset, 20);
-    static char title[] = "Where do you want to go?";
-    static char texts[8][32];
-    static char cancel[] = "Cancel";
-    static zone::types::ServerMenuArgument args[8];
-    void* m = zone::fn::ShineObjectClass__ShinePlayer__sp_ServerMenuTitle()(player, 0, title);
-    int n = 0;
-    // the open raid(s): the gate's own links. nrb_linkinform(i) is row i of the WHOLE LinkTable (0x4C5420:
-    // or_SelectFromOrder("LinkTable", i)); the stock Portal keeps the rows whose index is its argument
-    // (nrb_BriefInformSet 0x4C2360) - same filter here (2026-10-06: unfiltered, the Helga gate listed Forest of Tides,
-    // Sand Beach, Sea of Greed = rows 0-2).
-    unsigned char want[20];
-    zone::fn::ORToken__ORToken()(want, 0, x);
-    for (int i = 0; i < 4096 && n < 6; ++i) {
-        auto* link = zone::fn::NPCRole_Portal__nrb_linkinform()(self, 0, i);
-        if (!link) break;
-        if (std::memcmp(link->index, want, sizeof want) != 0 || !link->linktoserver[0]) continue;
-        map_name(link->linktoserver, texts[n], sizeof texts[n]);
-        std::memset(&args[n], 0, sizeof args[n]);
-        std::memcpy(&args[n].sma_link.sml_lnkinf, link, sizeof *link);
-        args[n].sma_link.sml_LevelFrom = 1;
-        args[n].sma_link.sml_LevelTo = 0xFFFF;
-        m = zone::fn::ShineObjectClass__ShinePlayer__sp_ServerMenuItem()(
-            m, 0, (void*)zone::fn::ServerMenuFuncter__smfm_Link(), texts[n], &args[n]);
-        ++n;
+    Entry e[kMaxEntries];
+    int n = collect(self, x, kAll, e);
+    if (n + 1 <= kShown) {                               // it fits: every entry and Cancel in one menu
+        open_menu(player, npc->handle, e, n);
+        return;
     }
-    // the instance versions: X_I1 (mode 1), X_I2 (mode 2)
-    for (unsigned char mode = 1; mode <= 2 && n < 8; ++mode) {
-        Option o = {};
-        std::snprintf(o.arg, sizeof o.arg, "%.17s_I%u", x, mode);
-        o.mode = mode;
-        auto* info = instance(o.arg, mode);
-        if (!info) continue;
-        unsigned idx = g_next_option++ % (sizeof g_options / sizeof g_options[0]);
-        g_options[idx] = o;
-        map_name(info->MapIDClient, texts[n], sizeof texts[n]);
-        std::memset(&args[n], 0, sizeof args[n]);
-        *(unsigned*)args[n]._raw = idx;
-        m = zone::fn::ShineObjectClass__ShinePlayer__sp_ServerMenuItem()(m, 0, (void*)enter_functer, texts[n], &args[n]);
-        ++n;
+    // more than the client shows (ServerMenuWin: 3 buttons, the rest are dropped - operator 2026-10-07, the gate's
+    // Cancel never appeared): one button per GROUP - the raid link(s), the instance mode(s) - a group of one is its own
+    // entry, a bigger one opens its own menu (submenu functer); Cancel last
+    Entry top[kShown];
+    int t = 0;
+    for (int kind = kLink; kind <= kInstance; ++kind) {
+        int first = -1, count = 0;
+        for (int i = 0; i < n; ++i)
+            if (e[i].kind == kind) { if (first < 0) first = i; ++count; }
+        if (!count) continue;
+        if (count == 1) { top[t++] = e[first]; continue; }
+        Entry& g = top[t++];
+        std::memset(&g, 0, sizeof g);
+        g.kind = kind;
+        std::snprintf(g.text, sizeof g.text, "%s", kind == kInstance ? "Instance" : e[first].text);
+        Sub& sub = g_subs[g_next_sub++ % (sizeof g_subs / sizeof g_subs[0])];
+        sub.self = self;
+        sub.npc = npc->handle;
+        sub.kind = kind;
+        std::memcpy(sub.arg, x, sizeof sub.arg);
+        *(unsigned*)g.arg._raw = (unsigned)(&sub - g_subs);
+        g.functer = (void*)sub_functer;
     }
-    static zone::types::ServerMenuArgument none;
-    m = zone::fn::ShineObjectClass__ShinePlayer__sp_ServerMenuItem()(
-        m, 0, (void*)zone::fn::ServerMenuFuncter__smfm_Cancel(), cancel, &none);
-    zone::fn::ShineObjectClass__ShinePlayer__sp_ServerMenuOpen()(m, 0, 0, npc->handle, nullptr, kMenuRange);
+    open_menu(player, npc->handle, top, t);
 }
+
 
 unsigned imm32(unsigned va, unsigned at) { return *(unsigned*)((unsigned char*)zone::rebase(va) + at); }
 
