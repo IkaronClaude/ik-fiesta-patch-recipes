@@ -112,6 +112,57 @@ void __fastcall ctor(void* self, void*, zone::types::ShineObjectClass__ShinePlay
               it->second.first, count, product);
 }
 
+// ---- THE COUNT CHECK (operator 2026-10-07: Advanced Courage Boots +0 -> "An item that will not produce Karis") -------
+// Before the producer is built, sp_NC_ITEM_DISMANTLE_REQ reads the Karis COUNT of the item's +level row and category
+// (jump table 0x52969D .. 0x529738: 0 -> error 0x168A) - a +0 item has 0 in every category, so a listed set piece never
+// reached the constructor hook. At 0x52968E (mov ecx, [ebp-0x21b4]; 6 bytes) edi still holds the item's ItemInfo row: a
+// LISTED item jumps straight to 0x529746 with count 1 (the constructor hook then sets the product and its lot); anything
+// else runs the original instruction and goes on to the stock check.
+const unsigned kVaCountCheck = 0x0052968E, kVaCountBack = 0x00529694, kVaCountOk = 0x00529746;
+const unsigned char kCountCheckBytes[6] = {0x8B, 0x8D, 0x4C, 0xDE, 0xFF, 0xFF};
+unsigned g_count_back = 0, g_count_ok = 0;
+unsigned g_skipped = 0;
+
+extern "C" int __cdecl listed_row(const zone::types::ItemInfo* row) {
+    if (!row) return 0;
+    if (!g_resolved) resolve();
+    if (g_ids->find(row->ID) == g_ids->end()) return 0;
+    if (++g_skipped <= 20 || g_skipped % 1000 == 0)
+        zone::log("instance_dismantle: item %u (%s) is listed - the Karis count check skipped (#%u)", row->ID, row->InxName, g_skipped);
+    return 1;
+}
+
+void __declspec(naked) count_check() {
+    __asm {
+        pushad
+        push edi
+        call listed_row
+        add  esp, 4
+        test eax, eax
+        popad                      // popad leaves the flags of the test
+        jnz  listed
+        mov  ecx, dword ptr [ebp - 0x21b4]
+        jmp  dword ptr [g_count_back]
+    listed:
+        mov  eax, 1
+        jmp  dword ptr [g_count_ok]
+    }
+}
+
+bool patch_count_check() {
+    unsigned char* p = (unsigned char*)zone::rebase(kVaCountCheck);
+    if (std::memcmp(p, kCountCheckBytes, sizeof kCountCheckBytes)) {
+        zone::log("instance_dismantle: 0x%08X is not mov ecx, [ebp-0x21b4] - count check NOT patched (a +0 set piece is refused)",
+                  kVaCountCheck);
+        return false;
+    }
+    g_count_back = (unsigned)zone::rebase(kVaCountBack);
+    g_count_ok = (unsigned)zone::rebase(kVaCountOk);
+    unsigned char jmp[6] = {0xE9, 0, 0, 0, 0, 0x90};
+    *(int*)(jmp + 1) = (int)((unsigned char*)count_check - (p + 5));
+    return hook::write_code(p, jmp, sizeof jmp);
+}
+
 }  // namespace
 
 ZONEHOOK_PLUGIN("instance_dismantle") {
@@ -123,5 +174,7 @@ ZONEHOOK_PLUGIN("instance_dismantle") {
     }
     zone::hook_function("ItemDismantleProducer::ItemDismantleProducer (listed items make their product)",
                         (void*)zone::fn::ItemDismantleProducer__ItemDismantleProducer(), (void*)ctor, &g_ctor);
-    zone::log("instance_dismantle: %u items dismantle by %s", (unsigned)g_rows->size(), kTable);
+    bool counted = patch_count_check();
+    zone::log("instance_dismantle: %u items dismantle by %s; the Karis count check %s", (unsigned)g_rows->size(), kTable,
+              counted ? "skips them (0x52968E)" : "is NOT patched");
 }
