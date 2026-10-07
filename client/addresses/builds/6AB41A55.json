@@ -81,6 +81,9 @@
   "DismantleRefuseC": "0x00655FA5",
   "KillLineWindow": "0x007EE074",
   "KillLinePopup": "0x007346A3",
-  "MobLocaName": "0x008FB6B0"
+  "MobLocaName": "0x008FB6B0",
+  "ServerMenuOnBut2": "0x0069DFC0",
+  "ServerMenuEscCall": "0x005823A8",
+  "ServerMenuPriorityCall": "0x0079060E"
  }
 }

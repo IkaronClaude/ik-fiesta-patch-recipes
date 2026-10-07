@@ -531,6 +531,27 @@
       "kind": "code",
       "use": "quest_name_probe",
       "note": "cdecl MobLoca lookup (u32 name id) -> const char*"
+    },
+    {
+      "name": "ServerMenuOnBut2",
+      "va": "0x0069D9F0",
+      "kind": "code",
+      "use": "menu_escape",
+      "note": "ServerMenuWin::OnBut2 (2016 PDB): sends reply byte [this+0x182], closes; 2016 CancelServerMenuWin = jmp here"
+    },
+    {
+      "name": "ServerMenuEscCall",
+      "va": "0x00581F88",
+      "kind": "code",
+      "use": "menu_escape",
+      "note": "call OnBut2 in the frame's window-close (Escape) path: E8 rel32, ecx = the ServerMenuWin"
+    },
+    {
+      "name": "ServerMenuPriorityCall",
+      "va": "0x0078FFFE",
+      "kind": "code",
+      "use": "menu_escape",
+      "note": "call OnBut2 when a higher-priority window replaces the menu: E8 rel32, ecx = the ServerMenuWin"
     }
   ]
 }
