@@ -81,9 +81,10 @@ void __declspec(naked) invalid_role() {
 }
 
 // ---- the menu --------------------------------------------------------------------------------------------------------
-struct Option {          // one instance button: the argument + mode it enters
+struct Option {          // one instance button: the argument + mode it enters, from which gate
     char arg[24];
     unsigned char mode;
+    unsigned short npc;
 };
 Option g_options[64];
 unsigned g_next_option = 0;
@@ -106,10 +107,28 @@ FieldOption__InstanceDungeonInfo* instance(const char* arg, unsigned char mode) 
     return info;
 }
 
+// HARD (mode 2) goes through the STOCK difficulty select. A mode-2 entry is not just a different row: the stock
+// sp_NC_INSTANCE_DUNGEON_LEVEL_SELECT_MENU_ACK (0x485810, the client's answer to the level-select window) sends 0xA40E to
+// the WorldManager with the level at +0x26, which registers it against the party's instance key; its answer comes back
+// as wms_..._LEVEL_SELECT_JOIN_ACK (0x485B90), which enters. The FIND our normal button uses carries no level, so a
+// mode-2 row was never matched and Hard did nothing (operator 2026-10-08). We call the stock handler with the gate's
+// handle and level 2, exactly what the client sends ({+2 npc handle, +4 level}; the trailing args are unused). The three
+// handlers it runs through demand an IDGate (role type 4) and look the instance up by the gate's own argument - see
+// the role-check stubs and find_hook below, which let an RID gate through and map X -> X_I<mode>.
+void enter_hard(zone::types::ShineObjectClass__ShinePlayer* player, const Option& o) {
+    unsigned char cmd[8] = {0};
+    *(unsigned short*)(cmd + 2) = o.npc;
+    *(unsigned*)(cmd + 4) = o.mode;
+    zone::fn::ShineObjectClass__ShinePlayer__sp_NC_INSTANCE_DUNGEON_LEVEL_SELECT_MENU_ACK()(
+        player, 0, (zone::types::NETCOMMAND*)cmd, 6, 0);
+    zone::log("rid_gate: hard - stock level select for %.20s mode %u (gate %u)", o.arg, o.mode, o.npc);
+}
+
 // the instance button: the stock IDGate click
 void enter(zone::types::ShineObjectClass__ShinePlayer* player, const Option& o) {
     auto* info = instance(o.arg, o.mode);
     if (!info) return;
+    if (o.mode >= 2) { enter_hard(player, o); return; }
     unsigned long key = 0xFFFFFFFF, type = 0xFFFFFFFF;
     auto err = zone::fn::FieldContainer__fc_CanEnterIndun()(g_fieldcontainer, 0, player, info, &key, &type);
     zone::types::FieldContainer__EnterFieldErrInfo lv = {1, 0};
@@ -159,7 +178,7 @@ Sub g_subs[64];
 unsigned g_next_sub = 0;
 
 // the gate's entries of one kind (kAll: links, then the instance modes)
-int collect(void* self, const char* x, int want, Entry* e) {
+int collect(void* self, const char* x, int want, Entry* e, unsigned short npc) {
     int n = 0;
     if (want != kInstance) {
         // the open raid(s): the gate's own links. nrb_linkinform(i) is row i of the WHOLE LinkTable (0x4C5420:
@@ -183,13 +202,16 @@ int collect(void* self, const char* x, int want, Entry* e) {
         }
     }
     if (want != kLink) {
-        // the instance versions: X_I1 (mode 1), X_I2 (mode 2)
-        for (unsigned char mode = 1; mode <= 2 && n < kMaxEntries; ++mode) {
+        // the instance versions: X_I1 = Normal (ModeIDLv 1), X_I2 = Hard (ModeIDLv 2 - entered through the stock level
+        // select, see enter_hard; a hard row stored at mode 1 is accepted too and entered like a normal one)
+        for (unsigned char slot = 1; slot <= 2 && n < kMaxEntries; ++slot) {
             Option o = {};
-            std::snprintf(o.arg, sizeof o.arg, "%.17s_I%u", x, mode);
-            o.mode = mode;
-            auto* info = instance(o.arg, mode);
+            std::snprintf(o.arg, sizeof o.arg, "%.17s_I%u", x, slot);
+            auto* info = instance(o.arg, slot);
+            if (!info && slot == 2) info = instance(o.arg, 1);
             if (!info) continue;
+            o.mode = info->ModeIDLv;
+            o.npc = npc;
             unsigned idx = g_next_option++ % (sizeof g_options / sizeof g_options[0]);
             g_options[idx] = o;
             Entry& en = e[n++];
@@ -197,7 +219,7 @@ int collect(void* self, const char* x, int want, Entry* e) {
             en.kind = kInstance;
             // "Normal" / "Hard", not the instance map's name: the menu said [Instance] and then
             // [Malephar's Lair (Instance)] for both modes - too long, and it does not say which is which (operator 2026-10-08)
-            std::snprintf(en.text, sizeof en.text, "%s", mode == 1 ? "Normal" : "Hard");
+            std::snprintf(en.text, sizeof en.text, "%s", slot == 1 ? "Normal" : "Hard");
             *(unsigned*)en.arg._raw = idx;
             en.functer = (void*)enter_functer;
         }
@@ -232,7 +254,7 @@ void __fastcall sub_functer(void* /*functer*/, void*, zone::types::ShineObjectCl
     if (!player || idx >= sizeof g_subs / sizeof g_subs[0]) return;
     Sub sub = g_subs[idx];
     Entry e[kMaxEntries];
-    int n = collect(sub.self, sub.arg, sub.kind, e);
+    int n = collect(sub.self, sub.arg, sub.kind, e, sub.npc);
     open_menu(player, sub.npc, e, n);
 }
 
@@ -249,7 +271,7 @@ void __fastcall role(void* self, void*, zone::types::ShineObjectClass__ShinePlay
     char x[24] = {0};
     std::memcpy(x, tpl + kArgOffset, 20);
     Entry e[kMaxEntries];
-    int n = collect(self, x, kAll, e);
+    int n = collect(self, x, kAll, e, npc->handle);
     if (n + 1 <= kShown) {                               // it fits: every entry and Cancel in one menu
         open_menu(player, npc->handle, e, n);
         return;
@@ -281,6 +303,105 @@ void __fastcall role(void* self, void*, zone::types::ShineObjectClass__ShinePlay
 }
 
 
+// ---- the stock difficulty select, for an RID gate -----------------------------------------------------------------------
+// MENU_ACK (0x485810), CHECK_ACK (0x485540) and JOIN_ACK (0x485B90) each refuse an NPC that is not an IDGate:
+//   call <vfunc +0x4D0> ; cmp al, 4 ; je ok          ("Invalid NPC Handle3")
+// Each site is detoured to a stub that runs the call, then also accepts an RID gate (the NPC record - NPCIndexArray, its
+// template at +0 - is in ebx at MENU_ACK / CHECK_ACK and in edi at JOIN_ACK).
+const unsigned kVaMenuCheck = 0x485973, kVaMenuOk = 0x485990, kVaMenuNo = 0x485979;
+const unsigned kVaCheckCheck = 0x485643, kVaCheckOk = 0x485652, kVaCheckNo = 0x485649;
+const unsigned kVaJoinCheck = 0x485C9C, kVaJoinOk = 0x485CAE, kVaJoinNo = 0x485CA2;
+const unsigned char kMenuBytes[6] = {0xFF, 0xD0, 0x3C, 0x04, 0x74, 0x17};
+const unsigned char kCheckBytes[6] = {0xFF, 0xD2, 0x3C, 0x04, 0x74, 0x09};
+const unsigned char kJoinBytes[6] = {0xFF, 0xD0, 0x3C, 0x04, 0x74, 0x0C};
+unsigned g_menu_ok = 0, g_menu_no = 0, g_check_ok = 0, g_check_no = 0, g_join_ok = 0, g_join_no = 0;
+
+int __stdcall rid_npc(void* index_array) {
+    auto* a = (zone::types::NPCManager__NPCIndexArray*)index_array;
+    const char* tpl = a && a->pnt ? (const char*)a->pnt : nullptr;
+    return tpl && is_rid(tpl + kRoleOffset) ? 1 : 0;
+}
+
+void __declspec(naked) menu_check() {
+    __asm {
+        call eax
+        cmp  al, 4
+        je   menu_yes
+        pushad
+        push ebx
+        call rid_npc
+        test eax, eax
+        popad
+        jnz  menu_yes
+        jmp  dword ptr [g_menu_no]
+    menu_yes:
+        jmp  dword ptr [g_menu_ok]
+    }
+}
+void __declspec(naked) check_check() {
+    __asm {
+        call edx
+        cmp  al, 4
+        je   check_yes
+        pushad
+        push ebx
+        call rid_npc
+        test eax, eax
+        popad
+        jnz  check_yes
+        jmp  dword ptr [g_check_no]
+    check_yes:
+        jmp  dword ptr [g_check_ok]
+    }
+}
+void __declspec(naked) join_check() {
+    __asm {
+        call eax
+        cmp  al, 4
+        je   join_yes
+        pushad
+        push edi
+        call rid_npc
+        test eax, eax
+        popad
+        jnz  join_yes
+        jmp  dword ptr [g_join_no]
+    join_yes:
+        jmp  dword ptr [g_join_ok]
+    }
+}
+
+bool patch_check(unsigned va, const unsigned char (&want)[6], void* stub, const char* what) {
+    unsigned char* p = (unsigned char*)zone::rebase(va);
+    if (std::memcmp(p, want, sizeof want) != 0) {
+        zone::log("rid_gate: unexpected bytes at %s 0x%X - hard mode through an RID gate NOT enabled", what, va);
+        return false;
+    }
+    unsigned char jmp[6] = {0xE9, 0, 0, 0, 0, 0x90};
+    *(int*)(jmp + 1) = (int)((unsigned char*)stub - (p + 5));
+    hook::write_code(p, jmp, sizeof jmp);
+    return true;
+}
+
+// The handlers look the instance up by the GATE's argument X and a level; our rows are X_I<mode>. A lookup that misses
+// is retried as X_I<mode> - only our rows have that shape, so a stock gate's miss stays a miss.
+zone::Detour g_find;
+typedef FieldOption__InstanceDungeonInfo*(__fastcall* FindFn)(void*, void*, void*, void*);
+FieldOption__InstanceDungeonInfo* __fastcall find_hook(void* self, void* edx, void* token, void* mode) {
+    auto* r = ((FindFn)g_find.trampoline)(self, edx, token, mode);
+    if (!token || (r && std::memcmp(r->Argument._raw, token, 20) == 0)) return r;
+    char x[24] = {0};
+    zone::fn::ORToken__ort_GetString()(token, 0, x);
+    if (!x[0] || std::strstr(x, "_I")) return r;
+    char arg[24];
+    std::snprintf(arg, sizeof arg, "%.17s_I%u", x, (unsigned)(unsigned long)mode);
+    unsigned char tok[20];
+    zone::fn::ORToken__ORToken()(tok, 0, arg);
+    auto* r2 = ((FindFn)g_find.trampoline)(self, edx, tok, mode);
+    if (r2 && std::memcmp(r2->Argument._raw, tok, sizeof tok) == 0 && r2->ModeIDLv == (unsigned)(unsigned long)mode) return r2;
+    return r;
+}
+
 unsigned imm32(unsigned va, unsigned at) { return *(unsigned*)((unsigned char*)zone::rebase(va) + at); }
 
 }  // namespace
@@ -304,4 +425,14 @@ ZONEHOOK_PLUGIN("rid_gate") {
     zone::hook_function("NPCRole_Portal::nrb_Role (RIDGate / RID4Gate menu)", (void*)zone::fn::NPCRole_Portal__nrb_Role(),
                         (void*)role, &g_role);
     zone::log("rid_gate: Role RIDGate / RID4Gate = a Gate whose menu adds the instance rows <arg>_I1 / <arg>_I2");
+    // hard mode: the stock difficulty select accepts an RID gate (see enter_hard)
+    g_menu_ok = (unsigned)zone::rebase(kVaMenuOk);   g_menu_no = (unsigned)zone::rebase(kVaMenuNo);
+    g_check_ok = (unsigned)zone::rebase(kVaCheckOk); g_check_no = (unsigned)zone::rebase(kVaCheckNo);
+    g_join_ok = (unsigned)zone::rebase(kVaJoinOk);   g_join_no = (unsigned)zone::rebase(kVaJoinNo);
+    bool ok = patch_check(kVaMenuCheck, kMenuBytes, (void*)menu_check, "LEVEL_SELECT_MENU_ACK")
+           && patch_check(kVaCheckCheck, kCheckBytes, (void*)check_check, "LEVEL_SELECT_CHECK_ACK")
+           && patch_check(kVaJoinCheck, kJoinBytes, (void*)join_check, "LEVEL_SELECT_JOIN_ACK");
+    zone::hook_function("FieldContainer::fc_GetInstanceDungeonInfo (an RID gate's X -> X_I<mode>)",
+                        (void*)zone::fn::FieldContainer__fc_GetInstanceDungeonInfo(), (void*)find_hook, &g_find);
+    zone::log("rid_gate: hard mode through the stock level select %s", ok ? "enabled" : "NOT enabled (see above)");
 }
