@@ -5,7 +5,7 @@
 // ---- DATA ----------------------------------------------------------------------------------------------------------------
 //   9Data/Shine/ItemDropTogether.txt, read with the zone's own OptionReader (no side format):
 //     #table       ItemDropTogether
-//     #columntype  INDEX   STRING[33] DWRD  STRING[33] DWRD  STRING[33] DWRD
+//     #columntype  STRING[33] STRING[33] DWRD  STRING[33] DWRD  STRING[33] DWRD
 //     #columnname  ItemIDX Together1  Rate1 Together2  Rate2 Together3  Rate3
 //     #record      B_CrackerAndrasSword    B_CrackerAndrasShield 1000000 - 0 - 0
 //   Up to three partners per item (operator 2026-10-08 P5 "multi-piggyback (1 item leads to 2 others)"), each with its
@@ -46,8 +46,10 @@ using namespace zone::types;
 const char kFile[] = "../9Data/Shine/ItemDropTogether.txt";
 const int kPartners = 3;
 const unsigned kRate100 = 1000000;
-// packed row offsets: ItemIDX INDEX (20), then per partner STRING[33] + DWRD (37)
-const unsigned kRowFirst = 20, kPartnerStride = 37, kNameLen = 33;
+// packed row offsets: ItemIDX STRING[33] (an INDEX column holds only 20 bytes - "B_CrackerAscalonHammer" read as
+// "B_CrackerAscalonHamm" and the Kellon Hammer never brought its shield, operator 2026-10-08), then per partner
+// STRING[33] + DWRD (37)
+const unsigned kRowFirst = 33, kPartnerStride = 37, kNameLen = 33;
 const char kTable[] = "ItemDropTogether";
 const unsigned kVtLevel = 0x708;              // ShineObject: the level an item's attributes are made at (cDropItem 0x5D9D5A)
 const unsigned kVtAttrCreate = 0x2C;          // ItemAttributeClass: make the item's attributes (cDropItem 0x5D9D80)
@@ -94,8 +96,8 @@ void load() {
     for (int i = 0; i < 65536; ++i) {
         auto* row = (unsigned char*)zone::fn::OptionReader__or_SelectFromOrder()(g_reader, 0, table, i);
         if (!row) break;
-        char a[24] = {0};
-        zone::fn::ORToken__ort_GetString()(row, 0, a);
+        char a[kNameLen + 1] = {0};
+        std::memcpy(a, row, kNameLen);
         unsigned short ia = item_id(a);
         if (ia == 0xFFFF) { zone::log("piggyback_drops: row %d: unknown item %s - skipped", i, a); ++bad; continue; }
         for (int k = 0; k < kPartners; ++k) {
