@@ -217,6 +217,7 @@ __declspec(naked) void stub_c() {
 hook::Detour g_text;
 typedef const char*(__cdecl* TextFn)(unsigned id);
 char g_count_text[256];
+char g_result_text[256];
 
 const char* __cdecl text_impl(unsigned id) {
     if (id == kTextTitle || id == kTextButton) return kTitle;
@@ -229,6 +230,20 @@ const char* __cdecl text_impl(unsigned id) {
         for (const char* c = g_coin; *c; c++) esc += *c == '%' ? std::string("%%") : std::string(1, *c);
         std::snprintf(g_count_text, sizeof g_count_text, "%%d %s will be created \nwhen you dismantle this item.", esc.c_str());
         return g_count_text;
+    }
+    // THE RESULT MESSAGES (operator 2026-10-08: 'The status message still says "Karis has been created."'): matched by their
+    // TEXT, not their id (TextData ids are exe hashes) - rewritten while the item in the window dismantles into a coin
+    if (s && g_coin[0]) {
+        if (std::strcmp(s, "Item has been dismantled. Karis has been created.") == 0) {
+            std::snprintf(g_result_text, sizeof g_result_text, "Item has been dismantled. %lu %s %s been created.",
+                          g_last_count, g_coin, g_last_count == 1 ? "has" : "have");
+            return g_result_text;
+        }
+        if (std::strcmp(s, "Karis creation complete.") == 0) {
+            std::snprintf(g_result_text, sizeof g_result_text, "%s creation complete.", g_coin);
+            return g_result_text;
+        }
+        if (std::strcmp(s, "Item is being dismantled by Karis.") == 0) return "Item is being dismantled.";
     }
     return s;
 }
