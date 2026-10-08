@@ -195,7 +195,9 @@ int collect(void* self, const char* x, int want, Entry* e) {
             Entry& en = e[n++];
             std::memset(&en, 0, sizeof en);
             en.kind = kInstance;
-            map_name(info->MapIDClient, en.text, sizeof en.text);
+            // "Normal" / "Hard", not the instance map's name: the menu said [Instance] and then
+            // [Malephar's Lair (Instance)] for both modes - too long, and it does not say which is which (operator 2026-10-08)
+            std::snprintf(en.text, sizeof en.text, "%s", mode == 1 ? "Normal" : "Hard");
             *(unsigned*)en.arg._raw = idx;
             en.functer = (void*)enter_functer;
         }
