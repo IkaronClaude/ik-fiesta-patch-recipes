@@ -202,6 +202,15 @@ int collect(void* self, const char* x, int want, Entry* e, unsigned short npc) {
         }
     }
     if (want != kLink) {
+        // ONE MODE ONLY = "Instance" (operator 2026-10-09: the Psiken gate said "Psiken Mansion" and "Normal"): a gate whose
+        // raid has no hard instance shows its one instance beside the open raid, where "Normal" reads like the open map.
+        // "Normal" / "Hard" are kept for a gate that has both (they sit in the Instance submenu there).
+        int modes = 0;
+        for (unsigned char slot = 1; slot <= 2; ++slot) {
+            char a[24];
+            std::snprintf(a, sizeof a, "%.17s_I%u", x, slot);
+            if (instance(a, slot) || (slot == 2 && instance(a, 1))) ++modes;
+        }
         // the instance versions: X_I1 = Normal (ModeIDLv 1), X_I2 = Hard (ModeIDLv 2 - entered through the stock level
         // select, see enter_hard; a hard row stored at mode 1 is accepted too and entered like a normal one)
         for (unsigned char slot = 1; slot <= 2 && n < kMaxEntries; ++slot) {
@@ -219,7 +228,7 @@ int collect(void* self, const char* x, int want, Entry* e, unsigned short npc) {
             en.kind = kInstance;
             // "Normal" / "Hard", not the instance map's name: the menu said [Instance] and then
             // [Malephar's Lair (Instance)] for both modes - too long, and it does not say which is which (operator 2026-10-08)
-            std::snprintf(en.text, sizeof en.text, "%s", slot == 1 ? "Normal" : "Hard");
+            std::snprintf(en.text, sizeof en.text, "%s", modes == 1 ? "Instance" : slot == 1 ? "Normal" : "Hard");
             *(unsigned*)en.arg._raw = idx;
             en.functer = (void*)enter_functer;
         }
