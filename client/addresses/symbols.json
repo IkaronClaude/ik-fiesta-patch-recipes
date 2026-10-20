@@ -636,6 +636,20 @@
       "kind": "data",
       "use": "remote_control",
       "note": "PgWin::ms_iMsX (2016 0xB59688); ms_iMsY follows (+4)"
+    },
+    {
+      "name": "NetAddNetMsg",
+      "va": "0x00890670",
+      "kind": "code",
+      "use": "clienthook.h",
+      "note": "PgNet::AddNetMsg(data, len) (2016 0x8C79D0): thiscall, ret 8 - appends to the packet being built"
+    },
+    {
+      "name": "NetSendNetMsg",
+      "va": "0x00890B00",
+      "kind": "code",
+      "use": "clienthook.h",
+      "note": "PgNet::SendNetMsg(data, len) (2016 0x8C7A40): thiscall, ret 8 - appends the last part and sends; the packet starts with its opcode"
     }
   ]
 }

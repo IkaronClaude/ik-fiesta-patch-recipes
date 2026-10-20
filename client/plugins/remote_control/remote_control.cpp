@@ -783,6 +783,36 @@ bool on_avatar_list(const client::Packet& p) {
     return false;
 }
 
+// -burst <dir> [-burstsecs N]: screenshots 4 a second for N seconds (default 10) from the moment the client reports the
+// map loaded - it sends NC_MAP_LOGINCOMPLETE_CMD (0x1803) when its loading screen ends - as <dir>/NNN.bmp (frame NNN is
+// at NNN * 0.25 s). The same start and cadence as fiesta-godot's --shot-times, for a frame-by-frame comparison.
+char g_burst_dir[MAX_PATH] = {0};
+int g_burst_secs = 10;
+volatile LONG g_burst_started = 0;
+
+DWORD WINAPI burst_worker(LPVOID) {
+    DWORD t0 = GetTickCount();
+    int frames = g_burst_secs * 4;
+    for (int k = 0; k < frames; k++) {
+        DWORD due = t0 + (DWORD)k * 250;
+        DWORD now = GetTickCount();
+        if (due > now) Sleep(due - now);
+        char path[MAX_PATH];
+        sprintf_s(path, "%s\\%03d.bmp", g_burst_dir, k);
+        bool ok = d3d_shot(path);
+        if (!ok || k % 4 == 0) hook::log("burst %03d at %lu ms: %s", k, GetTickCount() - t0, ok ? "ok" : "FAILED");
+    }
+    hook::log("burst: %d frames in %s", frames, g_burst_dir);
+    return 0;
+}
+
+void on_sent(const client::Packet& p) {
+    if (p.op == 0x1803 && g_burst_dir[0] && InterlockedExchange(&g_burst_started, 1) == 0) {
+        hook::log("burst: map login complete (0x1803) - %d s of shots at 4/s into %s", g_burst_secs, g_burst_dir);
+        CreateThread(nullptr, 0, burst_worker, nullptr, 0, nullptr);
+    }
+}
+
 // game thread, once per frame
 void auto_world_tick() {
     if (g_world_done || !g_ws) return;
@@ -1045,6 +1075,12 @@ HOOK_PLUGIN("remote_control") {
         }
     }
     if (strstr(GetCommandLineA(), "-stdinlogin")) read_stdin_login();
+    arg_str("-burst", g_burst_dir, sizeof(g_burst_dir));
+    if (arg_int("-burstsecs") > 0) g_burst_secs = arg_int("-burstsecs");
+    if (g_burst_dir[0]) {
+        CreateDirectoryA(g_burst_dir, nullptr);
+        if (!client::on_send(on_sent)) hook::log("remote_control: no send hook - -burst cannot start");
+    }
     HMODULE exe = GetModuleHandleA(nullptr);
     g_di8_create = (DI8CreateFn)hook::iat_hook(exe, "DINPUT8.dll", "DirectInput8Create", (void*)&my_di8_create);
     g_get_cursor = (GetCursorPosFn)hook::iat_hook(exe, "USER32.dll", "GetCursorPos", (void*)&my_get_cursor);

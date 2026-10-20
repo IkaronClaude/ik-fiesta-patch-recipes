@@ -96,6 +96,8 @@
   "CharSelectProcessInput": "0x004746A0",
   "CharSelectSelectAvatar": "0x00473A60",
   "WorldListCount": "0x00C31584",
-  "PgWinMouseX": "0x00D1B778"
+  "PgWinMouseX": "0x00D1B778",
+  "NetAddNetMsg": "0x00890670",
+  "NetSendNetMsg": "0x00890B00"
  }
 }
