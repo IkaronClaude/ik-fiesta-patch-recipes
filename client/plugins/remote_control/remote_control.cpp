@@ -908,7 +908,7 @@ std::string dump_wins(const char* filter) {
             if (tail <= 0) continue;
             tail--;
         }
-        sprintf_s(b, " | %s %d %d %d %d", cls, x, y, wd, ht);
+        sprintf_s(b, " | %s %d %d %d %d @%p", cls, x, y, wd, ht, w);
         out += b;
     }
     return out;
