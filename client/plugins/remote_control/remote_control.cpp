@@ -32,6 +32,7 @@
 #include <hook_core.h>
 #include <client_addrs.h>
 #include <clienthook.h>
+#include <pgwin_msg.h>
 #pragma comment(lib, "ws2_32.lib")
 #pragma comment(lib, "gdi32.lib")
 #pragma comment(lib, "user32.lib")
@@ -850,6 +851,72 @@ void auto_char_tick(void* cs) {
     g_char_at = GetTickCount();
 }
 
+// ---- "wins [class]": the UI as the client has it ------------------------------------------------------------------------
+// Every window the window manager holds (PgWinMgr caddr::kWinMgr: a NiTPointerList at +0x24 - head +0x28, count +0x30;
+// items {next, prev, element}, read off PgWinMgr::IsIn 10.6.6 0x8824F0) with its RTTI class and GetXPos / GetYPos /
+// GetWidth / GetHeight (vtable +0xA4 / +0xA8 / +0x90 / +0x94, as popup_windows reads them). For windows whose class
+// contains the filter, their child controls too: the window's own fields 0x100..0x1000 scanned for PgWin objects (the
+// client keeps its controls as members). For pixel-exact layout comparisons with fiesta-godot.
+typedef int(__fastcall* WinGetter)(void*, void*);
+
+bool win_rect(void* w, int* x, int* y, int* wd, int* ht) {
+    __try {
+        *x = ((WinGetter)pgwin::vtable_entry(w, 0xA4 / 4))(w, nullptr);
+        *y = ((WinGetter)pgwin::vtable_entry(w, 0xA8 / 4))(w, nullptr);
+        *wd = ((WinGetter)pgwin::vtable_entry(w, 0x90 / 4))(w, nullptr);
+        *ht = ((WinGetter)pgwin::vtable_entry(w, 0x94 / 4))(w, nullptr);
+        return true;
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        return false;
+    }
+}
+
+const char* safe_class(void* w) {
+    __try {
+        const char* c = pgwin::class_of(w);
+        return c ? c : "?";
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        return "?";
+    }
+}
+
+void* read_ptr(const void* a) {
+    __try {
+        return *(void* const*)a;
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        return nullptr;
+    }
+}
+
+std::string dump_wins(const char* filter) {
+    std::string out = "ok";
+    char* mgr = (char*)hook::rebase(caddr::va(caddr::kWinMgr));
+    if (!caddr::va(caddr::kWinMgr)) return "err no PgWinMgr address for this build";
+    void* item = read_ptr(mgr + 0x28);
+    char b[200];
+    for (int n = 0; item && n < 6000; n++, item = read_ptr(item)) {
+        void* w = read_ptr((char*)item + 8);
+        if (!w) continue;
+        int x = 0, y = 0, wd = 0, ht = 0;
+        if (!win_rect(w, &x, &y, &wd, &ht)) continue;
+        const char* cls = safe_class(w);
+        sprintf_s(b, " | %s %d %d %d %d", cls, x, y, wd, ht);
+        out += b;
+        if (!filter[0] || !strstr(cls, filter)) continue;
+        for (unsigned o = 0x100; o < 0x1000; o += 4) {
+            void* c = read_ptr((char*)w + o);
+            if (!c || (uintptr_t)c < 0x10000 || c == w) continue;
+            const char* cc = safe_class(c);
+            if (cc[0] == '?' || !strstr(cc, "Pg") && !strstr(cc, "Win") && !strstr(cc, "But")) continue;
+            int cx = 0, cy = 0, cw = 0, ch = 0;
+            if (!win_rect(c, &cx, &cy, &cw, &ch)) continue;
+            sprintf_s(b, " |   +%03x %s %d %d %d %d", o, cc, cx, cy, cw, ch);
+            out += b;
+        }
+    }
+    return out;
+}
+
 std::string handle(const std::string& line) {
     char cmd[32] = {0};
     if (sscanf_s(line.c_str(), "%31s", cmd, (unsigned)sizeof(cmd)) != 1) return "err empty";
@@ -907,6 +974,7 @@ std::string handle(const std::string& line) {
         }
         return out;
     }
+    if (c == "wins") return dump_wins(rest);
     if (c == "stats") {
         char b[400];
         sprintf_s(b, "ok cs %p ms %d,%d cursor %ld (last %ld,%ld) async %ld state kb %ld ms %ld (failed %ld) data kb %ld ms %ld devices kb %d ms %d",
