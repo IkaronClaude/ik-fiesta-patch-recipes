@@ -98,3 +98,21 @@ It also has `pgwin::process()` (deliver now, as `SendMsg`), `post()`, `alive()` 
 `is()` (RTTI class names) and the message table read from both clients (1 close, 4 edit notify, 5 command to the owner
 -> `OnCommand`, 7 button state 0 hover / 1 press / 2 release). Several plugins may each `install()`: the detours chain.
 First user: `plugins/win_msg_probe` (diagnostic).
+
+## `include/clienthook.h` - the client's server packets (header-only)
+
+The client-side counterpart of the servers' `hook::proto` packet hooks. Every server packet - login, world manager,
+zone - passes `PgNet::DispatchMsg` (2016 0x8C7B60), which calls the connection's own virtual `ProcessNetMsg(dept, cmd,
+len, data)` first (`Net::ProcessNetMsg`, `caddr::kNetProcessNetMsg`, 10.6.6 0x818000) and the current frame work's only
+when that returns false. `clienthook.h` hooks that one function, on the game thread, payload after the opcode:
+
+```cpp
+#include <clienthook.h>
+bool on_packet(const client::Packet& p) {              // p.op / p.dept / p.cmd / p.len / p.data
+    if (p.op == 0x0C0F) hook::log("avatar list, %d bytes", p.len);
+    return false;                                      // true = swallow (the client's own "handled")
+}
+HOOK_PLUGIN("x") { client::on_packet(on_packet); }
+```
+
+First user: `plugins/remote_control` (`-charname`: the slot from NC_USER_LOGINWORLD_ACK).

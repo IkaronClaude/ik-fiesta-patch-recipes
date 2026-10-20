@@ -15,8 +15,9 @@ Build: `common\build_plugin.bat client remote_control`; deploy `build\plugins\re
 | `-stdinlogin` | read `<user>\n<password>\n` from stdin at load; typed into the login form the moment its edit field has the focus, then wiped. The password never sits on a command line. |
 | `-world <index>` | join the server list's entry `<index>` (display order). Without it, a list of exactly one world is joined. |
 | `-char <slot>` | select character slot `<slot>` at char select and enter with it |
+| `-charname <name>` | the same, by name: the slot comes from the character list packet (NC_USER_LOGINWORLD_ACK 0x0C0F, caught with `clienthook.h`) |
 
-`python tools/remote_client.py launch --user botgate [--world 0] [--char 0]` does all of this (password from
+`python tools/remote_client.py launch --user botgate [--world 0] [--char 0 | --charname StyleTest]` does all of this (password from
 `FIESTA_PASS` or a prompt, piped).
 
 ## hooks\remote_control.ini
@@ -50,8 +51,9 @@ machine may not reach.
     including the per-frame flush - and NiInputMouse then drops its button state: the press counter
     (PgWin 0xD1C7B4, 2016 `ms_kbLbutPressed`) never rose and the char-select pick never ran. Once remote input is in
     use an unacquired device reads as a healthy, empty one.
-- **Auto world / char** call the client's own functions on the game thread (2026 VAs, image base 0x400000; the exe is
-  ASLR-rebased, `rva()` adds the delta):
+- **Auto world / char** call the client's own functions on the game thread. Every address comes from the registry
+  (`client/addresses`, `caddr::k*`; the VAs below are 10.6.6's), rebased (the exe is ASLR-relocated); a build that lacks
+  one turns auto select off:
   - `WorldSelectWin::UpdateServerBtnState(btn)` 0x55DF30 (page `+0x158`, selected world number `+0x15C`; world count
     0xC32584, list 0xC32588 - 18-byte entries, number at +0x10) then `OnCmdOk(1)` 0x55E120 -> `WorldSelectOk` 0x5573D0
     -> `NcUserWorldSelectReq` 0x554DA0 (0x0C0A). The window object is captured by naked stubs on its own virtuals
@@ -60,7 +62,10 @@ machine may not reach.
     `+0x134`, 6 per page). A second call on the selected slot is the second click that enters (its `bl == dl` branch).
     The pick maps the hit node's name `Avatar0`..`Avatar6` to the slot.
 
+- **`-charname`:** each avatar record of 0x0C0F starts like the 2016 PDB's `PROTO_AVATARINFORMATION` (chrregnum +0, name
+  +4, level +0x18, slot +0x1A) but is 161 bytes on the 2026 wire (130 in 2016) - read from a capture, the rest of the
+  2026 record is not traced. The list is logged (`avatar list: slot N name level L`).
+
 ## Not done
 
-- `-char` by character name (the avatar store is 0xC1CB08; where it keeps the names is not traced yet).
 - `-char` on a later page (only the shown page is selectable).

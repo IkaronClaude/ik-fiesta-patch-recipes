@@ -84,6 +84,18 @@
   "MobLocaName": "0x008FAF20",
   "ServerMenuOnBut2": "0x0069D9F0",
   "ServerMenuEscCall": "0x00581F88",
-  "ServerMenuPriorityCall": "0x0078FFFE"
+  "ServerMenuPriorityCall": "0x0078FFFE",
+  "NetProcessNetMsg": "0x008178A0",
+  "WorldSelectBtnState": "0x0055DB10",
+  "WorldSelectCmdOk": "0x0055DD00",
+  "WorldSelectVirtual0": "0x0055BF20",
+  "WorldSelectVirtual1": "0x0055E090",
+  "WorldSelectVirtual2": "0x0055C660",
+  "WorldSelectVirtual3": "0x0055C7E0",
+  "WorldSelectVirtual4": "0x0055DC00",
+  "CharSelectProcessInput": "0x004746A0",
+  "CharSelectSelectAvatar": "0x00473A60",
+  "WorldListCount": "0x00C31584",
+  "PgWinMouseX": "0x00D1B778"
  }
 }

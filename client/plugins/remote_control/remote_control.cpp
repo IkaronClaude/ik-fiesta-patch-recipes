@@ -30,6 +30,8 @@
 #pragma comment(lib, "dxguid.lib")
 
 #include <hook_core.h>
+#include <client_addrs.h>
+#include <clienthook.h>
 #pragma comment(lib, "ws2_32.lib")
 #pragma comment(lib, "gdi32.lib")
 #pragma comment(lib, "user32.lib")
@@ -604,14 +606,16 @@ int WSAAPI my_connect(SOCKET s, const sockaddr* a, int len) {
     return ((ConnectFn)g_connect_detour.trampoline)(s, a, len);
 }
 
-const DWORD VA_MSX = 0xD1C778, VA_MSY = 0xD1C77C;   // PgWin::ms_iMsX / ms_iMsY (2016 0xB59688 / 0xB5968C)
-void* rva(DWORD va) { return (char*)GetModuleHandleA(nullptr) + (va - 0x400000); }   // the exe is ASLR-rebased
+// a client address for the running build (client_addrs.h), rebased - the exe is ASLR-relocated
+void* at(caddr::Sym s) { return hook::rebase(caddr::va(s)); }
 
 // 2026 0x4746A0 = CharSelectFrameWork::ProcessInput (thiscall, no args; 2016 0x411F20): the game-thread tick -char uses
-const DWORD VA_CS_INPUT = 0x4746A0;
+
 typedef void(__fastcall* VoidThisFn)(void*, void*);
 hook::Detour g_csinput_detour;
+volatile void* g_cs = nullptr;   // the live CharSelectFrameWork ("stats" shows it)
 void __fastcall my_cs_input(void* self, void* edx) {
+    g_cs = self;
     ((VoidThisFn)g_csinput_detour.trampoline)(self, edx);
     auto_char_tick(self);
 }
@@ -694,7 +698,6 @@ DWORD WINAPI auto_login(LPVOID) {
 //   count 0xC32584, list 0xC32588: 18-byte entries, number at +0x10) and OnCmdOk(bool) 0x55E120 -> WorldSelectOk ->
 //   NC_USER_WORLDSELECT_REQ; CharSelectFrameWork::SelectAvatar(page slot) 0x473A60 (page [+0x134], 6 per page).
 // The WorldSelectWin object is captured by signature-agnostic stubs on its own virtuals (2026 vtable 0xB15xxx).
-const DWORD VA_WS_BTNSTATE = 0x55DF30, VA_WS_CMDOK = 0x55E120, VA_WORLD_COUNT = 0xC32584, VA_SELECT_AVATAR = 0x473A60;
 int g_want_world = -1, g_want_char = -1;
 volatile void* g_ws = nullptr;
 volatile DWORD g_ws_tick = 0;
@@ -715,26 +718,75 @@ WS_STUB(3, 0x55CC00)
 WS_STUB(4, 0x55E020)
 
 void hook_ws_stubs() {
-    struct { DWORD va; void* stub; hook::Detour* d; void** tramp; } t[] = {
-        {0x55C340, (void*)&ws_stub0, &g_ws_detour0, &g_ws_tramp0}, {0x55E4B0, (void*)&ws_stub1, &g_ws_detour1, &g_ws_tramp1},
-        {0x55CA80, (void*)&ws_stub2, &g_ws_detour2, &g_ws_tramp2}, {0x55CC00, (void*)&ws_stub3, &g_ws_detour3, &g_ws_tramp3},
-        {0x55E020, (void*)&ws_stub4, &g_ws_detour4, &g_ws_tramp4}};
+    struct { caddr::Sym sym; void* stub; hook::Detour* d; void** tramp; } t[] = {
+        {caddr::kWorldSelectVirtual0, (void*)&ws_stub0, &g_ws_detour0, &g_ws_tramp0},
+        {caddr::kWorldSelectVirtual1, (void*)&ws_stub1, &g_ws_detour1, &g_ws_tramp1},
+        {caddr::kWorldSelectVirtual2, (void*)&ws_stub2, &g_ws_detour2, &g_ws_tramp2},
+        {caddr::kWorldSelectVirtual3, (void*)&ws_stub3, &g_ws_detour3, &g_ws_tramp3},
+        {caddr::kWorldSelectVirtual4, (void*)&ws_stub4, &g_ws_detour4, &g_ws_tramp4}};
     for (auto& e : t)
-        if (hook::hook_function("WorldSelectWin virtual", rva(e.va), e.stub, e.d)) *e.tramp = e.d->trampoline;
+        if (hook::hook_function(caddr::kNames[e.sym], at(e.sym), e.stub, e.d)) *e.tramp = e.d->trampoline;
+}
+
+// the switch itself, as a whole word ("-char" is not "-charname"), or nullptr
+const char* find_switch(const char* name) {
+    size_t n = strlen(name);
+    for (const char* c = strstr(GetCommandLineA(), name); c; c = strstr(c + 1, name))
+        if (c[n] == ' ' || c[n] == 0) return c + n;
+    return nullptr;
 }
 
 int arg_int(const char* name) {
-    const char* c = strstr(GetCommandLineA(), name);
+    const char* c = find_switch(name);
     if (!c) return -1;
-    c += strlen(name);
     while (*c == ' ') c++;
     return (*c >= '0' && *c <= '9') ? atoi(c) : -1;
+}
+
+// the value after a command-line switch ("-charname GateBot"), up to the next space
+void arg_str(const char* name, char* out, size_t cap) {
+    out[0] = 0;
+    const char* c = find_switch(name);
+    if (!c) return;
+    while (*c == ' ') c++;
+    size_t k = 0;
+    while (*c && *c != ' ' && *c != '"' && k + 1 < cap) out[k++] = *c++;
+    out[k] = 0;
+}
+
+// -charname: the slot comes from the character list, NC_USER_LOGINWORLD_ACK (0x0C0F) from the world manager:
+// [worldmanager u16][numofavatar u8] ... numofavatar records. Each record starts like the 2016 PDB's
+// PROTO_AVATARINFORMATION (chrregnum u32 +0, name Name5 +4, level u16 +0x18, slot u8 +0x1A) but is 161 bytes on the
+// 2026 wire, not 130 - READ FROM A CAPTURE (bridge log, 5 avatars in 827 bytes: names at 26 + 161*i), the 2026 record
+// is not traced field by field. The records are taken as the packet's last numofavatar * 161 bytes.
+char g_want_name[32] = {0};
+const int kAvatarRecord = 161;
+
+bool on_avatar_list(const client::Packet& p) {
+    if (p.op != 0x0C0F || p.len < 3) return false;
+    int n = p.data[2];
+    int first = p.len - n * kAvatarRecord;
+    if (first < 3) {
+        hook::log("avatar list: %d avatars do not fit %d bytes of %d-byte records", n, p.len, kAvatarRecord);
+        return false;
+    }
+    for (int i = 0; i < n; i++) {
+        const unsigned char* r = p.data + first + i * kAvatarRecord;
+        char name[21] = {0};
+        memcpy(name, r + 4, 20);
+        int slot = r[0x1A], level = r[0x18] | (r[0x19] << 8);
+        bool pick = g_want_name[0] && _stricmp(name, g_want_name) == 0;
+        if (pick) g_want_char = slot;
+        hook::log("avatar list: slot %d %s level %d%s", slot, name, level, pick ? "  <- -charname" : "");
+    }
+    if (g_want_name[0] && g_want_char < 0) hook::log("avatar list: no character named %s", g_want_name);
+    return false;
 }
 
 // game thread, once per frame
 void auto_world_tick() {
     if (g_world_done || !g_ws) return;
-    int n = *(int*)rva(VA_WORLD_COUNT);
+    int n = *(int*)at(caddr::kWorldListCount);
     int idx = g_want_world >= 0 ? g_want_world : (n == 1 ? 0 : -1);
     if (n <= 0 || idx < 0) return;
     g_world_done = true;
@@ -744,9 +796,9 @@ void auto_world_tick() {
     }
     char* ws = (char*)g_ws;
     *(int*)(ws + 0x158) = idx / 8;
-    ((IntThisFn)rva(VA_WS_BTNSTATE))(ws, nullptr, idx % 8);
+    ((IntThisFn)at(caddr::kWorldSelectBtnState))(ws, nullptr, idx % 8);
     hook::log("auto world: index %d of %d -> world %d, joining", idx, n, *(int*)(ws + 0x15C));
-    ((IntThisFn)rva(VA_WS_CMDOK))(ws, nullptr, 1);
+    ((IntThisFn)at(caddr::kWorldSelectCmdOk))(ws, nullptr, 1);
 }
 
 // game thread, char select's ProcessInput. SelectAvatar on the already-selected slot is the second click that logs in
@@ -762,7 +814,7 @@ void auto_char_tick(void* cs) {
         hook::log("auto char: slot %d is not on the shown page %d", g_want_char, page);
         return;
     }
-    ((IntThisFn)rva(VA_SELECT_AVATAR))(cs, nullptr, g_want_char % 6);
+    ((IntThisFn)at(caddr::kCharSelectSelectAvatar))(cs, nullptr, g_want_char % 6);
     hook::log(g_char_step == 0 ? "auto char: slot %d selected" : "auto char: slot %d confirmed, entering", g_want_char);
     g_char_step++;
     g_char_at = GetTickCount();
@@ -783,7 +835,7 @@ std::string handle(const std::string& line) {
         sscanf_s(rest, "%31s %u", as, (unsigned)sizeof(as), &len);
         const char* t = as[0] == '*' ? as + 1 : as;
         DWORD v = strtoul(t, nullptr, 16);
-        const unsigned char* src = as[0] == '*' ? (const unsigned char*)(uintptr_t)v : (const unsigned char*)rva(v);
+        const unsigned char* src = as[0] == '*' ? (const unsigned char*)(uintptr_t)v : (const unsigned char*)hook::rebase(v);
         if (len > 4096) len = 4096;
         std::vector<unsigned char> buf(len);
         SIZE_T got = 0;
@@ -801,10 +853,34 @@ std::string handle(const std::string& line) {
         }
         return out;
     }
+    if (c == "find") {   // find <text>: addresses (up to 16) of <text> in committed read/write memory
+        std::string needle(rest);
+        if (needle.empty()) return "err find <text>";
+        std::string out = "ok";
+        int hits = 0;
+        MEMORY_BASIC_INFORMATION mi;
+        for (char* a = nullptr; hits < 16 && VirtualQuery(a, &mi, sizeof(mi)) == sizeof(mi);
+             a = (char*)mi.BaseAddress + mi.RegionSize) {
+            if (mi.State != MEM_COMMIT || (mi.Protect & (PAGE_GUARD | PAGE_NOACCESS)) ||
+                !(mi.Protect & (PAGE_READWRITE | PAGE_WRITECOPY | PAGE_EXECUTE_READWRITE)))
+                continue;
+            std::vector<char> buf(mi.RegionSize);
+            SIZE_T got = 0;
+            if (!ReadProcessMemory(GetCurrentProcess(), mi.BaseAddress, buf.data(), mi.RegionSize, &got)) continue;
+            for (size_t i = 0; hits < 16 && i + needle.size() <= got; i++)
+                if (buf[i] == needle[0] && memcmp(&buf[i], needle.data(), needle.size()) == 0) {
+                    char h[24];
+                    sprintf_s(h, " %p", (char*)mi.BaseAddress + i);
+                    out += h;
+                    hits++;
+                }
+        }
+        return out;
+    }
     if (c == "stats") {
         char b[400];
-        sprintf_s(b, "ok ms %d,%d cursor %ld (last %ld,%ld) async %ld state kb %ld ms %ld (failed %ld) data kb %ld ms %ld devices kb %d ms %d",
-                  *(int*)rva(VA_MSX), *(int*)rva(VA_MSY), g_n_cursor, g_last_cursor.x, g_last_cursor.y, g_n_async, g_n_state_kb, g_n_state_ms, g_n_state_fail,
+        sprintf_s(b, "ok cs %p ms %d,%d cursor %ld (last %ld,%ld) async %ld state kb %ld ms %ld (failed %ld) data kb %ld ms %ld devices kb %d ms %d",
+                  g_cs, ((int*)at(caddr::kPgWinMouseX))[0], ((int*)at(caddr::kPgWinMouseX))[1], g_n_cursor, g_last_cursor.x, g_last_cursor.y, g_n_async, g_n_state_kb, g_n_state_ms, g_n_state_fail,
                   g_n_data_kb, g_n_data_ms, g_nkb, g_nmice);
         return b;
     }
@@ -940,7 +1016,22 @@ HOOK_PLUGIN("remote_control") {
     GetPrivateProfileStringA("config", "bind", "127.0.0.1", g_bind, sizeof(g_bind), ini);
     InitializeCriticalSection(&g_cap_lock);
     InitializeCriticalSection(&g_in_lock);
-    hook::hook_function("CharSelectFrameWork::ProcessInput", rva(VA_CS_INPUT), (void*)&my_cs_input, &g_csinput_detour);
+    if (const char* m = caddr::missing({caddr::kCharSelectProcessInput, caddr::kCharSelectSelectAvatar,
+                                        caddr::kWorldSelectBtnState, caddr::kWorldSelectCmdOk, caddr::kWorldListCount,
+                                        caddr::kPgWinMouseX, caddr::kWorldSelectVirtual0, caddr::kWorldSelectVirtual1,
+                                        caddr::kWorldSelectVirtual2, caddr::kWorldSelectVirtual3,
+                                        caddr::kWorldSelectVirtual4})) {
+        hook::log("remote_control: %s - no auto world / char select", m);
+    } else {
+        g_want_world = arg_int("-world");
+        g_want_char = arg_int("-char");
+        arg_str("-charname", g_want_name, sizeof(g_want_name));
+        hook::hook_function("CharSelectFrameWork::ProcessInput", at(caddr::kCharSelectProcessInput), (void*)&my_cs_input,
+                            &g_csinput_detour);
+        hook_ws_stubs();
+        if (g_want_name[0] && !client::on_packet(on_avatar_list))
+            hook::log("remote_control: no packet hook - -charname %s cannot be resolved", g_want_name);
+    }
     char remap[128] = {0};
     GetPrivateProfileStringA("config", "remap", "", remap, sizeof(remap), ini);
     char* gt = strchr(remap, '>');
@@ -954,9 +1045,6 @@ HOOK_PLUGIN("remote_control") {
         }
     }
     if (strstr(GetCommandLineA(), "-stdinlogin")) read_stdin_login();
-    g_want_world = arg_int("-world");
-    g_want_char = arg_int("-char");
-    hook_ws_stubs();
     HMODULE exe = GetModuleHandleA(nullptr);
     g_di8_create = (DI8CreateFn)hook::iat_hook(exe, "DINPUT8.dll", "DirectInput8Create", (void*)&my_di8_create);
     g_get_cursor = (GetCursorPosFn)hook::iat_hook(exe, "USER32.dll", "GetCursorPos", (void*)&my_get_cursor);

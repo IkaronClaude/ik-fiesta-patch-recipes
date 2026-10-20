@@ -3,6 +3,9 @@
     python client_sigs.py make                       # (re)build signatures.json from symbols.json + the reference exe
     python client_sigs.py resolve <Fiesta.exe>       # find every symbol in a new exe -> builds/<stamp>.json + report
     python client_sigs.py header                     # regenerate ../include/client_addrs.h from builds/*.json
+    python client_sigs.py locate <Fiesta.exe> <va> [code|data]
+                                                     # an address found in ANOTHER build -> the reference exe's (to
+                                                     # add a symbol to symbols.json, which takes reference addresses)
 
 HOW A SYMBOL IS FOUND
   code  A signature taken AT the address in the reference exe: the instruction bytes from there on, with every byte
@@ -209,6 +212,34 @@ def resolve(path):
     print('-> %s: %d/%d found%s' % (dst, len(found), len(sigs['symbols']), (', %d MISSING - fix by hand' % miss) if miss else ''))
 
 
+def locate(path, va, kind='code'):
+    """the reference-exe address of `va` in the exe at `path` - the same signatures as make / resolve, the other way"""
+    src = Exe(path)
+    ref = Exe(json.load(open(SYMBOLS, encoding='utf-8'))['reference']['exe'])
+    if kind == 'code':
+        for back in (False, True):
+            pat = grow(src, va, back)
+            h = hits(ref, pat) if pat else []
+            if len(h) == 1:
+                print('0x%08X (%s)' % (h[0] + (len(pat) // 2 if back else 0), 'back' if back else 'fwd'))
+                return
+        for c in src.call_sites(va):
+            pat = grow(src, c)
+            h = hits(ref, pat) if pat else []
+            if len(h) == 1:
+                print('0x%08X (call)' % (h[0] + 5 + struct.unpack_from('<i', ref.img, h[0] + 1 - ref.base)[0]))
+                return
+    else:
+        for r in sorted(r for r in src.relocs if src.t0 <= r < src.t1 and src.u32(r) == va):
+            ins = next((i.address for i in src.md.disasm(src.b(r - 8, 24), r - 8) if i.address <= r < i.address + i.size), None)
+            pat = grow(src, ins) if ins is not None else None
+            h = hits(ref, pat) if pat else []
+            if len(h) == 1:
+                print('0x%08X (anchor)' % ref.u32(h[0] + r - ins))
+                return
+    print('NOT FOUND')
+
+
 def header():
     syms = [s['name'] for s in json.load(open(SYMBOLS, encoding='utf-8'))['symbols']]
     builds = [json.load(open(os.path.join(BUILDS, f), encoding='utf-8')) for f in sorted(os.listdir(BUILDS)) if f.endswith('.json')]
@@ -260,6 +291,8 @@ if __name__ == '__main__':
         make()
     elif cmd == 'resolve' and len(sys.argv) > 2:
         resolve(sys.argv[2])
+    elif cmd == 'locate' and len(sys.argv) > 3:
+        locate(sys.argv[2], int(sys.argv[3], 16), sys.argv[4] if len(sys.argv) > 4 else 'code')
     elif cmd == 'header':
         header()
     else:

@@ -552,6 +552,90 @@
       "kind": "code",
       "use": "menu_escape",
       "note": "call OnBut2 when a higher-priority window replaces the menu: E8 rel32, ecx = the ServerMenuWin"
+    },
+    {
+      "name": "NetProcessNetMsg",
+      "va": "0x008178A0",
+      "kind": "code",
+      "use": "clienthook.h",
+      "note": "Net::ProcessNetMsg (PgNet vtable +0x18, 2016 PgNet::ProcessNetMsg 0x8C7D60): thiscall(dept, cmd, len, data) -> bool, ret 0x10 - every server packet, before the framework's own ProcessNetMsg"
+    },
+    {
+      "name": "WorldSelectBtnState",
+      "va": "0x0055DB10",
+      "kind": "code",
+      "use": "remote_control",
+      "note": "WorldSelectWin::UpdateServerBtnState(btn) (2016 0x474650): thiscall, ret 4; page +0x158, selected world number +0x15C"
+    },
+    {
+      "name": "WorldSelectCmdOk",
+      "va": "0x0055DD00",
+      "kind": "code",
+      "use": "remote_control",
+      "note": "WorldSelectWin::OnCmdOk(bool) (2016 0x474610): thiscall, ret 4 -> AccountFrameWork::WorldSelectOk -> NC_USER_WORLDSELECT_REQ"
+    },
+    {
+      "name": "WorldSelectVirtual0",
+      "va": "0x0055BF20",
+      "kind": "code",
+      "use": "remote_control",
+      "note": "a WorldSelectWin virtual (captures the window object)"
+    },
+    {
+      "name": "WorldSelectVirtual1",
+      "va": "0x0055E090",
+      "kind": "code",
+      "use": "remote_control",
+      "note": "a WorldSelectWin virtual (captures the window object)"
+    },
+    {
+      "name": "WorldSelectVirtual2",
+      "va": "0x0055C660",
+      "kind": "code",
+      "use": "remote_control",
+      "note": "a WorldSelectWin virtual (captures the window object)"
+    },
+    {
+      "name": "WorldSelectVirtual3",
+      "va": "0x0055C7E0",
+      "kind": "code",
+      "use": "remote_control",
+      "note": "a WorldSelectWin virtual (captures the window object)"
+    },
+    {
+      "name": "WorldSelectVirtual4",
+      "va": "0x0055DC00",
+      "kind": "code",
+      "use": "remote_control",
+      "note": "a WorldSelectWin virtual (captures the window object)"
+    },
+    {
+      "name": "CharSelectProcessInput",
+      "va": "0x004746A0",
+      "kind": "code",
+      "use": "remote_control",
+      "note": "CharSelectFrameWork::ProcessInput (2016 0x411F20): thiscall, no args - the char-select 3D pick"
+    },
+    {
+      "name": "CharSelectSelectAvatar",
+      "va": "0x00473A60",
+      "kind": "code",
+      "use": "remote_control",
+      "note": "CharSelectFrameWork::SelectAvatar(page slot) (2016 0x411AF0): thiscall, ret 4; page +0x134, 6 per page; again on the selected slot = enter"
+    },
+    {
+      "name": "WorldListCount",
+      "va": "0x00C31584",
+      "kind": "data",
+      "use": "remote_control",
+      "note": "the server list's world count (2016 0xB300C4); the list follows: 18-byte entries, world number at +0x10"
+    },
+    {
+      "name": "PgWinMouseX",
+      "va": "0x00D1B778",
+      "kind": "data",
+      "use": "remote_control",
+      "note": "PgWin::ms_iMsX (2016 0xB59688); ms_iMsY follows (+4)"
     }
   ]
 }
