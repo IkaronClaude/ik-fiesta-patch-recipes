@@ -298,10 +298,12 @@ hook::Detour g_sc_present_detour;
 
 void auto_world_tick();
 void auto_char_tick(void* cs);
+void wins_tick();
 
 HRESULT STDMETHODCALLTYPE my_present(IDirect3DDevice9* dev, const RECT* a, const RECT* b, HWND w, const RGNDATA* r) {
     capture_now(dev);
     auto_world_tick();
+    wins_tick();
     return ((PresentFn)g_present_detour.trampoline)(dev, a, b, w, r);
 }
 
@@ -854,9 +856,9 @@ void auto_char_tick(void* cs) {
 // ---- "wins [class]": the UI as the client has it ------------------------------------------------------------------------
 // Every window the window manager holds (PgWinMgr caddr::kWinMgr: a NiTPointerList at +0x24 - head +0x28, count +0x30;
 // items {next, prev, element}, read off PgWinMgr::IsIn 10.6.6 0x8824F0) with its RTTI class and GetXPos / GetYPos /
-// GetWidth / GetHeight (vtable +0xA4 / +0xA8 / +0x90 / +0x94, as popup_windows reads them). For windows whose class
-// contains the filter, their child controls too: the window's own fields 0x100..0x1000 scanned for PgWin objects (the
-// client keeps its controls as members). For pixel-exact layout comparisons with fiesta-godot.
+// GetWidth / GetHeight (vtable +0xA4 / +0xA8 / +0x90 / +0x94, as popup_windows reads them). The list is flat: each
+// window is followed by its controls (positions relative to it). For pixel-exact layout comparisons with fiesta-godot.
+// (A scan of a window's fields for child controls was removed: it called getters on misidentified objects and hung.)
 typedef int(__fastcall* WinGetter)(void*, void*);
 
 bool win_rect(void* w, int* x, int* y, int* wd, int* ht) {
@@ -894,27 +896,54 @@ std::string dump_wins(const char* filter) {
     if (!caddr::va(caddr::kWinMgr)) return "err no PgWinMgr address for this build";
     void* item = read_ptr(mgr + 0x28);
     char b[200];
-    for (int n = 0; item && n < 6000; n++, item = read_ptr(item)) {
+    int tail = 0;                        // with a filter: a matching window and the 40 entries after it (its controls)
+    for (int n = 0; item && n < 50000; n++, item = read_ptr(item)) {
         void* w = read_ptr((char*)item + 8);
         if (!w) continue;
         int x = 0, y = 0, wd = 0, ht = 0;
         if (!win_rect(w, &x, &y, &wd, &ht)) continue;
         const char* cls = safe_class(w);
+        if (filter[0]) {
+            if (strstr(cls, filter)) tail = 41;
+            if (tail <= 0) continue;
+            tail--;
+        }
         sprintf_s(b, " | %s %d %d %d %d", cls, x, y, wd, ht);
         out += b;
-        if (!filter[0] || !strstr(cls, filter)) continue;
-        for (unsigned o = 0x100; o < 0x1000; o += 4) {
-            void* c = read_ptr((char*)w + o);
-            if (!c || (uintptr_t)c < 0x10000 || c == w) continue;
-            const char* cc = safe_class(c);
-            if (cc[0] == '?' || !strstr(cc, "Pg") && !strstr(cc, "Win") && !strstr(cc, "But")) continue;
-            int cx = 0, cy = 0, cw = 0, ch = 0;
-            if (!win_rect(c, &cx, &cy, &cw, &ch)) continue;
-            sprintf_s(b, " |   +%03x %s %d %d %d %d", o, cc, cx, cy, cw, ch);
-            out += b;
-        }
     }
     return out;
+}
+
+// "wins" runs on the game thread (the window list changes under it otherwise): the serve thread posts the request, the
+// Present hook answers it, the serve thread waits up to 3 s
+CRITICAL_SECTION g_wins_lock;
+HANDLE g_wins_done = nullptr;
+volatile LONG g_wins_pending = 0;
+std::string g_wins_result;
+std::string g_wins_filter;
+
+void wins_tick() {
+    if (!g_wins_pending) return;
+    std::string r = dump_wins(g_wins_filter.c_str());
+    EnterCriticalSection(&g_wins_lock);
+    g_wins_result = r;
+    LeaveCriticalSection(&g_wins_lock);
+    InterlockedExchange(&g_wins_pending, 0);
+    SetEvent(g_wins_done);
+}
+
+std::string wins_on_game_thread(const char* filter) {
+    g_wins_filter = filter;
+    ResetEvent(g_wins_done);
+    InterlockedExchange(&g_wins_pending, 1);
+    if (WaitForSingleObject(g_wins_done, 3000) != WAIT_OBJECT_0) {
+        InterlockedExchange(&g_wins_pending, 0);
+        return "err the game thread did not answer (no frame presented)";
+    }
+    EnterCriticalSection(&g_wins_lock);
+    std::string r = g_wins_result;
+    LeaveCriticalSection(&g_wins_lock);
+    return r;
 }
 
 std::string handle(const std::string& line) {
@@ -974,7 +1003,7 @@ std::string handle(const std::string& line) {
         }
         return out;
     }
-    if (c == "wins") return dump_wins(rest);
+    if (c == "wins") return wins_on_game_thread(rest);
     if (c == "stats") {
         char b[400];
         sprintf_s(b, "ok cs %p ms %d,%d cursor %ld (last %ld,%ld) async %ld state kb %ld ms %ld (failed %ld) data kb %ld ms %ld devices kb %d ms %d",
@@ -1114,6 +1143,8 @@ HOOK_PLUGIN("remote_control") {
     GetPrivateProfileStringA("config", "bind", "127.0.0.1", g_bind, sizeof(g_bind), ini);
     InitializeCriticalSection(&g_cap_lock);
     InitializeCriticalSection(&g_in_lock);
+    InitializeCriticalSection(&g_wins_lock);
+    g_wins_done = CreateEventA(nullptr, TRUE, FALSE, nullptr);
     if (const char* m = caddr::missing({caddr::kCharSelectProcessInput, caddr::kCharSelectSelectAvatar,
                                         caddr::kWorldSelectBtnState, caddr::kWorldSelectCmdOk, caddr::kWorldListCount,
                                         caddr::kPgWinMouseX, caddr::kWorldSelectVirtual0, caddr::kWorldSelectVirtual1,
