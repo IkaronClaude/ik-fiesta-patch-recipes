@@ -1,0 +1,973 @@
+// remote_control - DIAGNOSTIC / TEST: drive the official 2026 client from outside, so fiesta-godot's visuals can be
+// compared with the baseline under the same inputs (operator 2026-10-17: "log in using the official client and cast
+// skills and screenshot at specific times etc.").
+//
+// ---- THIS PLUGIN -------------------------------------------------------------------------------------------------------
+//   A TCP listener on 127.0.0.1 (port from hooks\remote_control.ini [config] port=, default 27015; bind=0.0.0.0 to
+//   allow another machine - only on a trusted network: anyone who can connect can type into the client). One command
+//   per line, one reply line each ("ok ..." / "err ..."). Input goes to the game's own top-level window as the window
+//   messages Windows would send (the client reads keys / mouse from its WndProc), so nothing in the exe changes:
+//     ping                          -> ok pong
+//     size                          -> ok <w> <h>            the client area
+//     key <vk> [press|down|up]      a virtual key (decimal or 0x..), default press = down + up
+//     text <string...>              WM_CHAR per character (a chat line, a login name)
+//     move <x> <y>                  WM_MOUSEMOVE at client (x, y)
+//     click <x> <y> [left|right]    move + button down + up
+//     down <x> <y> [left|right] / up <x> <y> [left|right]   (drags, held camera turns)
+//     wheel <x> <y> <delta>         WM_MOUSEWHEEL (120 = one notch away)
+//     shot <path>                   the client area as a 32-bit BMP (PrintWindow, also under other windows; 3 s limit,
+//                                   "err capture failed" while the game is busy loading)
+//   Input is POSTED (the game's thread is busy for seconds while it loads a map; nothing here waits on it).
+//     quit                          closes this connection
+//   Driver: fiesta-godot tools/remote_client.py (timed sequences: log in, cast, screenshot at given times).
+#include <winsock2.h>
+#include <ws2tcpip.h>
+#include <windows.h>
+
+#include <d3d9.h>
+#define DIRECTINPUT_VERSION 0x0800
+#include <dinput.h>
+#pragma comment(lib, "dxguid.lib")
+
+#include <hook_core.h>
+#pragma comment(lib, "ws2_32.lib")
+#pragma comment(lib, "gdi32.lib")
+#pragma comment(lib, "user32.lib")
+
+#include <cstdio>
+#include <cstdlib>
+#include <cstring>
+#include <string>
+#include <vector>
+
+namespace {
+
+int g_port = 27015;
+char g_bind[64] = "127.0.0.1";
+
+struct FindCtx {
+    DWORD pid;
+    HWND best;
+    int area;
+};
+
+BOOL CALLBACK find_proc(HWND h, LPARAM lp) {
+    FindCtx* c = (FindCtx*)lp;
+    DWORD pid = 0;
+    GetWindowThreadProcessId(h, &pid);
+    if (pid != c->pid || !IsWindowVisible(h) || GetWindow(h, GW_OWNER) != nullptr) return TRUE;
+    RECT r{};
+    GetClientRect(h, &r);
+    int a = (r.right - r.left) * (r.bottom - r.top);
+    if (a > c->area) {
+        c->area = a;
+        c->best = h;
+    }
+    return TRUE;
+}
+
+// the game window: this process's largest visible top-level window
+HWND game_window() {
+    FindCtx c{GetCurrentProcessId(), nullptr, 0};
+    EnumWindows(find_proc, (LPARAM)&c);
+    return c.best;
+}
+
+// the window that takes the game's input: the top-level window's child of the same class ("Gamebryo Application", the
+// render window, live 2026-10-20), else the top-level one
+HWND input_window(HWND top) {
+    HWND c = FindWindowExA(top, nullptr, "Gamebryo Application", nullptr);
+    return c ? c : top;
+}
+
+// where typed keys go: the focused window of the game's UI thread when it is one of the client's edit controls (the
+// login name / password, chat: real Win32 child windows of class "PgEditWin"), else the render window
+HWND key_window(HWND top) {
+    GUITHREADINFO gi{};
+    gi.cbSize = sizeof(gi);
+    if (GetGUIThreadInfo(GetWindowThreadProcessId(top, nullptr), &gi) && gi.hwndFocus) {
+        char cls[64] = {0};
+        GetClassNameA(gi.hwndFocus, cls, sizeof(cls));
+        if (strcmp(cls, "PgEditWin") == 0) return gi.hwndFocus;
+    }
+    return input_window(top);
+}
+
+LPARAM key_lparam(UINT vk, bool up) {
+    UINT sc = MapVirtualKeyA(vk, MAPVK_VK_TO_VSC);
+    LPARAM lp = 1 | (sc << 16);
+    if (vk == VK_LEFT || vk == VK_RIGHT || vk == VK_UP || vk == VK_DOWN || vk == VK_INSERT || vk == VK_DELETE ||
+        vk == VK_HOME || vk == VK_END || vk == VK_PRIOR || vk == VK_NEXT)
+        lp |= 1 << 24;
+    if (up) lp |= (1u << 30) | (1u << 31);
+    return lp;
+}
+
+void send_key(HWND w, UINT vk, int mode) {   // 0 press, 1 down, 2 up
+    UINT down = (vk == VK_MENU || vk == VK_F10) ? WM_SYSKEYDOWN : WM_KEYDOWN;
+    UINT up = (vk == VK_MENU || vk == VK_F10) ? WM_SYSKEYUP : WM_KEYUP;
+    if (mode != 2) PostMessageA(w, down, vk, key_lparam(vk, false));
+    if (mode != 1) {
+        if (mode == 0) Sleep(30);
+        PostMessageA(w, up, vk, key_lparam(vk, true));
+    }
+}
+
+void mouse(HWND w, UINT msg, int x, int y, WPARAM keys) {
+    PostMessageA(w, msg, keys, MAKELPARAM(x, y));
+}
+
+bool write_bmp(const char* path, HBITMAP bmp, int W, int H, HDC dc) {
+    BITMAPINFO bi{};
+    bi.bmiHeader.biSize = sizeof(BITMAPINFOHEADER);
+    bi.bmiHeader.biWidth = W;
+    bi.bmiHeader.biHeight = -H;
+    bi.bmiHeader.biPlanes = 1;
+    bi.bmiHeader.biBitCount = 32;
+    std::string px((size_t)W * H * 4, '\0');
+    if (!GetDIBits(dc, bmp, 0, H, &px[0], &bi, DIB_RGB_COLORS)) return false;
+    BITMAPFILEHEADER fh{};
+    fh.bfType = 0x4D42;
+    fh.bfOffBits = sizeof(fh) + sizeof(BITMAPINFOHEADER);
+    fh.bfSize = fh.bfOffBits + (DWORD)px.size();
+    HANDLE h = CreateFileA(path, GENERIC_WRITE, 0, nullptr, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, nullptr);
+    if (h == INVALID_HANDLE_VALUE) return false;
+    DWORD n = 0;
+    WriteFile(h, &fh, sizeof(fh), &n, nullptr);
+    WriteFile(h, &bi.bmiHeader, sizeof(BITMAPINFOHEADER), &n, nullptr);
+    WriteFile(h, px.data(), (DWORD)px.size(), &n, nullptr);
+    CloseHandle(h);
+    return true;
+}
+
+bool screenshot(HWND w, const char* path) {
+    RECT r{};
+    GetClientRect(w, &r);
+    int W = r.right, H = r.bottom;
+    if (W <= 0 || H <= 0) return false;
+    HDC wdc = GetDC(w);
+    HDC mem = CreateCompatibleDC(wdc);
+    HBITMAP bmp = CreateCompatibleBitmap(wdc, W, H);
+    HGDIOBJ old = SelectObject(mem, bmp);
+    // PrintWindow (PW_CLIENTONLY | PW_RENDERFULLCONTENT) reads the composed image even under other windows, but it needs
+    // the game's UI thread, which is busy for seconds while a map loads: it runs on a worker with a 3 s limit (a late
+    // one is left to finish on its own - its bitmap is then leaked, not freed under it); then the screen under the
+    // client area, which needs the window uncovered
+    struct Job {
+        HWND w;
+        HDC dc;
+        BOOL ok;
+    };
+    Job* job = new Job{w, mem, FALSE};
+    HANDLE th = CreateThread(nullptr, 0, [](LPVOID p) -> DWORD {
+        Job* j = (Job*)p;
+        j->ok = PrintWindow(j->w, j->dc, 0x1 | 0x2);
+        return 0;
+    }, job, 0, nullptr);
+    if (th && WaitForSingleObject(th, 3000) != WAIT_OBJECT_0) {
+        CloseHandle(th);
+        hook::log("shot: PrintWindow busy - left running");
+        return false;                           // mem / bmp / job stay alive for the late PrintWindow
+    }
+    if (th) CloseHandle(th);
+    BOOL ok = job->ok;
+    delete job;
+    if (!ok) {
+        POINT p{0, 0};
+        ClientToScreen(w, &p);
+        HDC sdc = GetDC(nullptr);
+        ok = BitBlt(mem, 0, 0, W, H, sdc, p.x, p.y, SRCCOPY | CAPTUREBLT);
+        ReleaseDC(nullptr, sdc);
+    }
+    SelectObject(mem, old);
+    bool done = ok && write_bmp(path, bmp, W, H, mem);
+    DeleteObject(bmp);
+    DeleteDC(mem);
+    ReleaseDC(w, wdc);
+    return done;
+}
+
+// ---- Direct3D 9 capture -----------------------------------------------------------------------------------------------
+// The client loads d3d9.dll itself (no static import): the plugin, loaded before any window, detours the exported
+// Direct3DCreate9, patches the returned IDirect3D9's CreateDevice (vtable 16) and the new device's Present (17). A "shot"
+// asks the next Present to copy the back buffer (GetRenderTargetData into a SYSTEMMEM surface) and write it - exactly
+// the frame the game shows, covered window or not.
+typedef IDirect3D9*(WINAPI* Create9Fn)(UINT);
+typedef HRESULT(STDMETHODCALLTYPE* CreateDeviceFn)(IDirect3D9*, UINT, D3DDEVTYPE, HWND, DWORD, D3DPRESENT_PARAMETERS*,
+                                                     IDirect3DDevice9**);
+typedef HRESULT(STDMETHODCALLTYPE* PresentFn)(IDirect3DDevice9*, const RECT*, const RECT*, HWND, const RGNDATA*);
+hook::Detour g_create9_detour;
+CreateDeviceFn g_create_device = nullptr;
+PresentFn g_present = nullptr;          // (set once any device is hooked)
+// every vtable patched -> its own original Present (a capability-check device and the real one may differ)
+struct VPatch {
+    void** vt;
+    void* orig;
+};
+VPatch g_dev_vts[8];
+int g_ndev = 0;
+VPatch g_sc_vts[8];
+int g_nsc = 0;
+typedef HRESULT(STDMETHODCALLTYPE* ScPresentFn)(IDirect3DSwapChain9*, const RECT*, const RECT*, HWND, const RGNDATA*,
+                                                  DWORD);
+void* orig_of(VPatch* v, int n, void** vt) {
+    for (int i = 0; i < n; i++)
+        if (v[i].vt == vt) return v[i].orig;
+    return nullptr;
+}
+CRITICAL_SECTION g_cap_lock;
+char g_cap_path[MAX_PATH] = {0};
+HANDLE g_cap_done = nullptr;
+bool g_cap_ok = false;
+volatile LONG g_presents = 0;
+
+bool save_surface(IDirect3DDevice9* dev, const char* path) {
+    IDirect3DSurface9* bb = nullptr;
+    if (FAILED(dev->GetBackBuffer(0, 0, D3DBACKBUFFER_TYPE_MONO, &bb)) || !bb) return false;
+    D3DSURFACE_DESC d{};
+    bb->GetDesc(&d);
+    // a multisampled back buffer is resolved into a plain render target first (GetRenderTargetData refuses MSAA)
+    IDirect3DSurface9* src = bb;
+    IDirect3DSurface9* resolved = nullptr;
+    if (d.MultiSampleType != D3DMULTISAMPLE_NONE &&
+        SUCCEEDED(dev->CreateRenderTarget(d.Width, d.Height, d.Format, D3DMULTISAMPLE_NONE, 0, FALSE, &resolved, nullptr)) &&
+        SUCCEEDED(dev->StretchRect(bb, nullptr, resolved, nullptr, D3DTEXF_NONE)))
+        src = resolved;
+    IDirect3DSurface9* sys = nullptr;
+    bool ok = false;
+    if (SUCCEEDED(dev->CreateOffscreenPlainSurface(d.Width, d.Height, d.Format, D3DPOOL_SYSTEMMEM, &sys, nullptr)) &&
+        SUCCEEDED(dev->GetRenderTargetData(src, sys))) {
+        D3DLOCKED_RECT lr{};
+        if (SUCCEEDED(sys->LockRect(&lr, nullptr, D3DLOCK_READONLY))) {
+            if (d.Format == D3DFMT_X8R8G8B8 || d.Format == D3DFMT_A8R8G8B8) {
+                int W = (int)d.Width, H = (int)d.Height;
+                BITMAPINFOHEADER bh{};
+                bh.biSize = sizeof(bh);
+                bh.biWidth = W;
+                bh.biHeight = -H;
+                bh.biPlanes = 1;
+                bh.biBitCount = 32;
+                BITMAPFILEHEADER fh{};
+                fh.bfType = 0x4D42;
+                fh.bfOffBits = sizeof(fh) + sizeof(bh);
+                fh.bfSize = fh.bfOffBits + (DWORD)W * H * 4;
+                HANDLE h = CreateFileA(path, GENERIC_WRITE, 0, nullptr, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, nullptr);
+                if (h != INVALID_HANDLE_VALUE) {
+                    DWORD n = 0;
+                    WriteFile(h, &fh, sizeof(fh), &n, nullptr);
+                    WriteFile(h, &bh, sizeof(bh), &n, nullptr);
+                    for (int y = 0; y < H; y++) {
+                        unsigned char* row = (unsigned char*)lr.pBits + (size_t)y * lr.Pitch;
+                        for (int x = 0; x < W; x++) row[x * 4 + 3] = 255;   // X8: opaque
+                        WriteFile(h, row, (DWORD)W * 4, &n, nullptr);
+                    }
+                    CloseHandle(h);
+                    ok = true;
+                }
+            } else {
+                hook::log("shot: back buffer format %d not handled", (int)d.Format);
+            }
+            sys->UnlockRect();
+        }
+    }
+    if (sys) sys->Release();
+    if (resolved) resolved->Release();
+    bb->Release();
+    return ok;
+}
+
+void capture_now(IDirect3DDevice9* dev) {
+    InterlockedIncrement(&g_presents);
+    EnterCriticalSection(&g_cap_lock);
+    if (g_cap_path[0]) {
+        g_cap_ok = save_surface(dev, g_cap_path);
+        if (!g_cap_ok) hook::log("shot: the back buffer copy failed");
+        g_cap_path[0] = 0;
+        SetEvent(g_cap_done);
+    }
+    LeaveCriticalSection(&g_cap_lock);
+}
+
+// Present is DETOURED in its code, not swapped in the vtable: patching the vtable slot caught 8 Presents in 30 s from
+// a client drawing ~10 fps (live 2026-10-20) - the renderer reaches the function some other way
+hook::Detour g_present_detour;
+hook::Detour g_sc_present_detour;
+
+void auto_world_tick();
+void auto_char_tick(void* cs);
+
+HRESULT STDMETHODCALLTYPE my_present(IDirect3DDevice9* dev, const RECT* a, const RECT* b, HWND w, const RGNDATA* r) {
+    capture_now(dev);
+    auto_world_tick();
+    return ((PresentFn)g_present_detour.trampoline)(dev, a, b, w, r);
+}
+
+HRESULT STDMETHODCALLTYPE my_sc_present(IDirect3DSwapChain9* sc, const RECT* a, const RECT* b, HWND w, const RGNDATA* r,
+                                        DWORD f) {
+    IDirect3DDevice9* dev = nullptr;
+    if (SUCCEEDED(sc->GetDevice(&dev)) && dev) {
+        capture_now(dev);
+        dev->Release();
+    }
+    return ((ScPresentFn)g_sc_present_detour.trampoline)(sc, a, b, w, r, f);
+}
+
+HRESULT STDMETHODCALLTYPE my_create_device(IDirect3D9* d3d, UINT ad, D3DDEVTYPE t, HWND w, DWORD f,
+                                           D3DPRESENT_PARAMETERS* pp, IDirect3DDevice9** out) {
+    HRESULT hr = g_create_device(d3d, ad, t, w, f, pp, out);
+    if (SUCCEEDED(hr) && out && *out) {
+        void** vt = hook::vtable_of(*out);
+        if (!g_present_detour.installed && hook::hook_function("IDirect3DDevice9::Present", vt[17], (void*)&my_present,
+                                                               &g_present_detour))
+            g_present = (PresentFn)g_present_detour.trampoline;
+        IDirect3DSwapChain9* sc = nullptr;
+        if (SUCCEEDED((*out)->GetSwapChain(0, &sc)) && sc) {
+            if (!g_sc_present_detour.installed)
+                hook::hook_function("IDirect3DSwapChain9::Present", hook::vtable_of(sc)[3], (void*)&my_sc_present,
+                                    &g_sc_present_detour);
+            sc->Release();
+        }
+        hook::log("Direct3D device %p (%ux%u fmt %d ms %d, flags %x): Present hooked", *out, pp ? pp->BackBufferWidth : 0,
+                  pp ? pp->BackBufferHeight : 0, pp ? (int)pp->BackBufferFormat : -1, pp ? (int)pp->MultiSampleType : -1, f);
+    }
+    return hr;
+}
+
+IDirect3D9* WINAPI my_create9(UINT v) {
+    IDirect3D9* d = ((Create9Fn)g_create9_detour.trampoline)(v);
+    if (d && !g_create_device) {
+        g_create_device = (CreateDeviceFn)hook::vtable_set(hook::vtable_of(d), 16, (void*)&my_create_device);
+        hook::log("IDirect3D9 %p: CreateDevice hooked", d);
+    }
+    return d;
+}
+
+// the game's own frame: wait for the next Present to write it (3 s); false when Present is not hooked / not running
+bool d3d_shot(const char* path) {
+    if (!g_present) return false;
+    EnterCriticalSection(&g_cap_lock);
+    strcpy_s(g_cap_path, path);
+    ResetEvent(g_cap_done);
+    LeaveCriticalSection(&g_cap_lock);
+    if (WaitForSingleObject(g_cap_done, 3000) != WAIT_OBJECT_0) {
+        hook::log("shot: no Present in 3 s (%ld presents so far)", g_presents);
+        EnterCriticalSection(&g_cap_lock);
+        g_cap_path[0] = 0;
+        LeaveCriticalSection(&g_cap_lock);
+        return false;
+    }
+    return g_cap_ok;
+}
+
+// ---- input: DirectInput 8 -----------------------------------------------------------------------------------------------
+// The client reads keyboard and mouse through DirectInput 8 (DINPUT8 DirectInput8Create import), the cursor through
+// GetCursorPos and buttons partly through GetAsyncKeyState - posted window messages reach only its edit controls
+// (WM_CHAR typed into the login name, live; clicks and keys were ignored). So input is injected below the game:
+// DirectInput8Create -> IDirectInput8::CreateDevice (vtable 3) learns which device is the keyboard / mouse; their
+// GetDeviceState / GetDeviceData (detoured in the shared CDIDev code, vtable 9 / 10) report the injected keys and
+// buttons as held / as buffered events, also while the device is not acquired (window in the background);
+// GetCursorPos answers the injected position and GetAsyncKeyState the injected buttons while remote input is active.
+typedef HRESULT(WINAPI* DI8CreateFn)(HINSTANCE, DWORD, REFIID, LPVOID*, LPUNKNOWN);
+typedef HRESULT(STDMETHODCALLTYPE* DICreateDeviceFn)(IDirectInput8A*, REFGUID, LPDIRECTINPUTDEVICE8A*, LPUNKNOWN);
+typedef HRESULT(STDMETHODCALLTYPE* GetStateFn)(IDirectInputDevice8A*, DWORD, LPVOID);
+typedef HRESULT(STDMETHODCALLTYPE* GetDataFn)(IDirectInputDevice8A*, DWORD, LPDIDEVICEOBJECTDATA, LPDWORD, DWORD);
+typedef BOOL(WINAPI* GetCursorPosFn)(LPPOINT);
+typedef SHORT(WINAPI* GetAsyncKeyStateFn)(int);
+DI8CreateFn g_di8_create = nullptr;
+DICreateDeviceFn g_di_create_device = nullptr;
+hook::Detour g_getstate_detour, g_getdata_detour;
+GetCursorPosFn g_get_cursor = nullptr;
+GetAsyncKeyStateFn g_get_async = nullptr;
+// every keyboard / mouse device the game creates (live: two of each - the one polled is not always the last)
+IDirectInputDevice8A* g_kbs[4] = {nullptr};
+IDirectInputDevice8A* g_mice[4] = {nullptr};
+int g_nkb = 0, g_nmice = 0;
+bool is_kb(IDirectInputDevice8A* d) {
+    for (int i = 0; i < g_nkb; i++)
+        if (g_kbs[i] == d) return true;
+    return false;
+}
+bool is_mouse(IDirectInputDevice8A* d) {
+    for (int i = 0; i < g_nmice; i++)
+        if (g_mice[i] == d) return true;
+    return false;
+}
+CRITICAL_SECTION g_in_lock;
+unsigned char g_keys[256] = {0};             // DIK -> 0x80 held
+unsigned char g_buttons[8] = {0};            // mouse buttons held
+bool g_cursor_on = false;                    // GetCursorPos answers g_cursor
+POINT g_cursor{0, 0};
+// one event queue PER DEVICE: the game polls two mice each frame (live, "stats") - a shared queue went to whichever
+// polled first, and the click never reached the NiInputMouse that PgWinMgr::ProcessInput asks (2016 0x8B860F)
+std::vector<DIDEVICEOBJECTDATA> g_kb_q[4], g_ms_q[4];
+DWORD g_seq = 1;
+LONG g_ms_dx[4] = {0}, g_ms_dy[4] = {0};  // relative motion owed to each mouse's next polled state (di_cursor)
+// diagnostics ("stats"): how the game polls its input
+volatile LONG g_n_cursor = 0, g_n_async = 0, g_n_state_kb = 0, g_n_state_ms = 0, g_n_data_kb = 0, g_n_data_ms = 0,
+              g_n_state_fail = 0, g_n_wndmsg = 0;
+POINT g_last_cursor{0, 0};
+
+void push_event(std::vector<DIDEVICEOBJECTDATA>& q, DWORD ofs, DWORD data) {
+    DIDEVICEOBJECTDATA e{};
+    e.dwOfs = ofs;
+    e.dwData = data;
+    e.dwTimeStamp = GetTickCount();
+    e.dwSequence = g_seq++;
+    q.push_back(e);
+}
+
+HRESULT STDMETHODCALLTYPE my_get_state(IDirectInputDevice8A* dev, DWORD cb, LPVOID data) {
+    HRESULT hr = ((GetStateFn)g_getstate_detour.trampoline)(dev, cb, data);
+    bool kb = is_kb(dev), ms = is_mouse(dev);
+    if (!kb && !ms) return hr;
+    InterlockedIncrement(kb ? &g_n_state_kb : &g_n_state_ms);
+    if (FAILED(hr)) InterlockedIncrement(&g_n_state_fail);
+    EnterCriticalSection(&g_in_lock);
+    bool any = g_cursor_on;
+    for (int i = 0; i < 256 && !any; i++) any = g_keys[i] != 0;
+    if (FAILED(hr) && any && data) {
+        memset(data, 0, cb);
+        hr = DI_OK;
+    }
+    if (SUCCEEDED(hr) && data) {
+        if (kb && cb >= 256) {
+            for (int i = 0; i < 256; i++) ((unsigned char*)data)[i] |= g_keys[i];
+        } else if (ms && cb >= sizeof(DIMOUSESTATE)) {
+            DIMOUSESTATE* m = (DIMOUSESTATE*)data;
+            for (int i = 0; i < 4; i++) m->rgbButtons[i] |= g_buttons[i];
+            for (int i = 0; i < g_nmice; i++)
+                if (g_mice[i] == dev) {
+                    m->lX += g_ms_dx[i];
+                    m->lY += g_ms_dy[i];
+                    g_ms_dx[i] = g_ms_dy[i] = 0;
+                }
+        }
+    }
+    LeaveCriticalSection(&g_in_lock);
+    return hr;
+}
+
+HRESULT STDMETHODCALLTYPE my_get_data(IDirectInputDevice8A* dev, DWORD cbo, LPDIDEVICEOBJECTDATA rg, LPDWORD inout,
+                                      DWORD flags) {
+    DWORD cap = inout ? *inout : 0;
+    HRESULT hr = ((GetDataFn)g_getdata_detour.trampoline)(dev, cbo, rg, inout, flags);
+    bool kb = is_kb(dev), ms = is_mouse(dev);
+    if (kb || ms) InterlockedIncrement(kb ? &g_n_data_kb : &g_n_data_ms);
+    if ((!kb && !ms) || !inout) return hr;
+    // an unacquired device (the window is not foreground) fails every read, the per-frame flush (rg NULL) included, and
+    // NiInputMouse then treats it as lost and drops its button state - so the injected press never became
+    // ButtonWasPressed (PgWin press counter 0xD1C7B4 stayed 0, the char-select pick never ran). Once remote input is in
+    // use, an unacquired device reads as a healthy, empty one.
+    if (g_cursor_on && (hr == DIERR_NOTACQUIRED || hr == DIERR_INPUTLOST)) {
+        *inout = 0;
+        hr = DI_OK;
+    }
+    if (!rg || (flags & DIGDD_PEEK)) return hr;
+    EnterCriticalSection(&g_in_lock);
+    int qi = 0;
+    for (int i = 0; i < 4; i++)
+        if ((kb ? g_kbs[i] : g_mice[i]) == dev) qi = i;
+    std::vector<DIDEVICEOBJECTDATA>& q = kb ? g_kb_q[qi] : g_ms_q[qi];
+    if (!q.empty()) {
+        if (FAILED(hr)) {
+            *inout = 0;
+            hr = DI_OK;
+        }
+        DWORD n = *inout;
+        size_t used = 0;
+        while (used < q.size() && n < cap) {
+            memcpy((char*)rg + (size_t)n * cbo, &q[used],
+                   cbo < sizeof(DIDEVICEOBJECTDATA) ? cbo : sizeof(DIDEVICEOBJECTDATA));
+            n++;
+            used++;
+        }
+        q.erase(q.begin(), q.begin() + used);
+        *inout = n;
+    }
+    LeaveCriticalSection(&g_in_lock);
+    return hr;
+}
+
+HRESULT STDMETHODCALLTYPE my_di_create_device(IDirectInput8A* di, REFGUID g, LPDIRECTINPUTDEVICE8A* out, LPUNKNOWN u) {
+    HRESULT hr = g_di_create_device(di, g, out, u);
+    if (SUCCEEDED(hr) && out && *out) {
+        bool kb = IsEqualGUID(g, GUID_SysKeyboard) != 0, ms = IsEqualGUID(g, GUID_SysMouse) != 0;
+        if (kb && g_nkb < 4) g_kbs[g_nkb++] = *out;
+        if (ms && g_nmice < 4) g_mice[g_nmice++] = *out;
+        void** vt = hook::vtable_of(*out);
+        if (!g_getstate_detour.installed)
+            hook::hook_function("IDirectInputDevice8::GetDeviceState", vt[9], (void*)&my_get_state, &g_getstate_detour);
+        if (!g_getdata_detour.installed)
+            hook::hook_function("IDirectInputDevice8::GetDeviceData", vt[10], (void*)&my_get_data, &g_getdata_detour);
+        hook::log("DirectInput device %p (%s)", *out, kb ? "keyboard" : (ms ? "mouse" : "other"));
+    }
+    return hr;
+}
+
+HRESULT WINAPI my_di8_create(HINSTANCE h, DWORD v, REFIID r, LPVOID* out, LPUNKNOWN u) {
+    HRESULT hr = g_di8_create(h, v, r, out, u);
+    if (SUCCEEDED(hr) && out && *out && !g_di_create_device)
+        g_di_create_device = (DICreateDeviceFn)hook::vtable_set(hook::vtable_of(*out), 3, (void*)&my_di_create_device);
+    return hr;
+}
+
+BOOL WINAPI my_get_cursor(LPPOINT p) {
+    InterlockedIncrement(&g_n_cursor);
+    EnterCriticalSection(&g_in_lock);
+    bool on = g_cursor_on;
+    POINT c = g_cursor;
+    LeaveCriticalSection(&g_in_lock);
+    if (on && p) {
+        *p = c;
+        g_last_cursor = c;
+        return TRUE;
+    }
+    BOOL r = g_get_cursor(p);
+    if (p) g_last_cursor = *p;
+    return r;
+}
+
+SHORT WINAPI my_get_async(int vk) {
+    InterlockedIncrement(&g_n_async);
+    SHORT r = g_get_async(vk);
+    EnterCriticalSection(&g_in_lock);
+    if (vk == VK_LBUTTON && g_buttons[0]) r |= (SHORT)0x8000;
+    if (vk == VK_RBUTTON && g_buttons[1]) r |= (SHORT)0x8000;
+    UINT sc = MapVirtualKeyA((UINT)vk, MAPVK_VK_TO_VSC);
+    if (sc && sc < 256 && g_keys[sc]) r |= (SHORT)0x8000;
+    LeaveCriticalSection(&g_in_lock);
+    return r;
+}
+
+// the DIK of a virtual key (its scan code; extended keys | 0x80)
+UINT dik_of(UINT vk) {
+    UINT sc = MapVirtualKeyA(vk, MAPVK_VK_TO_VSC);
+    if (vk == VK_LEFT || vk == VK_RIGHT || vk == VK_UP || vk == VK_DOWN || vk == VK_INSERT || vk == VK_DELETE ||
+        vk == VK_HOME || vk == VK_END || vk == VK_PRIOR || vk == VK_NEXT || vk == VK_RCONTROL || vk == VK_RMENU)
+        sc |= 0x80;
+    return sc & 0xFF;
+}
+
+void di_key(UINT vk, bool down) {
+    UINT dik = dik_of(vk);
+    if (!dik) return;
+    EnterCriticalSection(&g_in_lock);
+    g_keys[dik] = down ? 0x80 : 0;
+    for (int i = 0; i < g_nkb; i++) push_event(g_kb_q[i], dik, down ? 0x80 : 0);
+    LeaveCriticalSection(&g_in_lock);
+}
+
+void di_button(int b, bool down) {
+    EnterCriticalSection(&g_in_lock);
+    g_buttons[b] = down ? 0x80 : 0;
+    for (int i = 0; i < g_nmice; i++) push_event(g_ms_q[i], DIMOFS_BUTTON0 + b, down ? 0x80 : 0);
+    LeaveCriticalSection(&g_in_lock);
+}
+
+// a teleported cursor alone is not enough: the window manager re-hit-tests on mouse MOTION, so without DI deltas the
+// click went to the window the cursor was last seen moving over (which consumed the press counter, PgWin 0xD1C7B4).
+// Every move also reports the relative motion, as axis events and in the next polled state.
+void di_cursor(POINT screen) {
+    EnterCriticalSection(&g_in_lock);
+    POINT from = g_cursor;
+    if (!g_cursor_on) g_get_cursor(&from);
+    LONG dx = screen.x - from.x, dy = screen.y - from.y;
+    if (!dx && !dy) dx = 1;  // still a motion: the game hit-tests on it
+    for (int i = 0; i < g_nmice; i++) {
+        push_event(g_ms_q[i], DIMOFS_X, (DWORD)dx);
+        push_event(g_ms_q[i], DIMOFS_Y, (DWORD)dy);
+        g_ms_dx[i] += dx;
+        g_ms_dy[i] += dy;
+    }
+    g_cursor_on = true;
+    g_cursor = screen;
+    LeaveCriticalSection(&g_in_lock);
+}
+
+// ---- address remap ---------------------------------------------------------------------------------------------------
+// hooks\remote_control.ini [config] remap=<from ip>><to ip>: a connect() to <from> goes to <to> (same port). For a client
+// on the bridge's own machine: the bridge hands out its advertised address (the LAN one the operator's client dials),
+// which this machine may not reach - remap=172.31.248.91>127.0.0.1. ws2_32!connect is detoured (any import path).
+typedef int(WSAAPI* ConnectFn)(SOCKET, const sockaddr*, int);
+hook::Detour g_connect_detour;
+in_addr g_remap_from{}, g_remap_to{};
+bool g_remap = false;
+
+int WSAAPI my_connect(SOCKET s, const sockaddr* a, int len) {
+    if (g_remap && a && a->sa_family == AF_INET && len >= (int)sizeof(sockaddr_in) &&
+        ((const sockaddr_in*)a)->sin_addr.s_addr == g_remap_from.s_addr) {
+        sockaddr_in c = *(const sockaddr_in*)a;
+        c.sin_addr = g_remap_to;
+        hook::log("connect: remapped to port %u on the local address", ntohs(c.sin_port));
+        return ((ConnectFn)g_connect_detour.trampoline)(s, (const sockaddr*)&c, sizeof(c));
+    }
+    return ((ConnectFn)g_connect_detour.trampoline)(s, a, len);
+}
+
+const DWORD VA_MSX = 0xD1C778, VA_MSY = 0xD1C77C;   // PgWin::ms_iMsX / ms_iMsY (2016 0xB59688 / 0xB5968C)
+void* rva(DWORD va) { return (char*)GetModuleHandleA(nullptr) + (va - 0x400000); }   // the exe is ASLR-rebased
+
+// 2026 0x4746A0 = CharSelectFrameWork::ProcessInput (thiscall, no args; 2016 0x411F20): the game-thread tick -char uses
+const DWORD VA_CS_INPUT = 0x4746A0;
+typedef void(__fastcall* VoidThisFn)(void*, void*);
+hook::Detour g_csinput_detour;
+void __fastcall my_cs_input(void* self, void* edx) {
+    ((VoidThisFn)g_csinput_detour.trampoline)(self, edx);
+    auto_char_tick(self);
+}
+
+// ---- -stdinlogin ------------------------------------------------------------------------------------------------------
+// Fiesta.exe ... -stdinlogin: the launcher pipes "<user>\n<password>\n" into stdin (never on the command line, where the
+// process list would show it). Read once at load; the moment the login form has a focused PgEditWin the account is
+// typed, Tab, the password, Enter - no waiting on a scripted delay. The buffer is wiped once used.
+char g_login[2][128] = {{0}};
+bool g_stdin_login = false;
+
+void read_stdin_login() {
+    HANDLE in = GetStdHandle(STD_INPUT_HANDLE);
+    if (!in || in == INVALID_HANDLE_VALUE) {
+        hook::log("-stdinlogin: no stdin");
+        return;
+    }
+    char buf[300] = {0};
+    DWORD got = 0, n = 0;
+    while (got < sizeof(buf) - 1 && ReadFile(in, buf + got, (DWORD)(sizeof(buf) - 1 - got), &n, nullptr) && n) {
+        got += n;
+        int lines = 0;
+        for (DWORD i = 0; i < got; i++) lines += buf[i] == '\n';
+        if (lines >= 2) break;
+    }
+    int f = 0, k = 0;
+    for (DWORD i = 0; i < got && f < 2; i++) {
+        char c = buf[i];
+        if (c == '\r') continue;
+        if (c == '\n') { f++; k = 0; continue; }
+        if (k < 127) g_login[f][k++] = c;
+    }
+    SecureZeroMemory(buf, sizeof(buf));
+    g_stdin_login = g_login[0][0] && g_login[1][0];
+    hook::log("-stdinlogin: %s", g_stdin_login ? "account read" : "stdin had no user/password lines");
+}
+
+void tap(HWND top, UINT vk) {
+    HWND kw = key_window(top);
+    if (kw != input_window(top)) send_key(kw, vk, 1);
+    di_key(vk, true);
+    Sleep(150);
+    di_key(vk, false);
+    if (kw != input_window(top)) send_key(kw, vk, 2);
+}
+
+void type_into_focus(HWND top, const char* t) {
+    HWND kw = key_window(top);
+    for (const char* p = t; *p; p++) PostMessageA(kw, WM_CHAR, (unsigned char)*p, 1);
+}
+
+DWORD WINAPI auto_login(LPVOID) {
+    for (int i = 0; i < 6000; i++) {   // up to 10 min of patch / intro
+        HWND top = game_window();
+        if (top && key_window(top) != input_window(top)) {
+            Sleep(300);                  // let the form finish building around the field
+            type_into_focus(top, g_login[0]);
+            Sleep(100);
+            tap(top, VK_TAB);
+            Sleep(100);
+            type_into_focus(top, g_login[1]);
+            Sleep(100);
+            tap(top, VK_RETURN);
+            hook::log("-stdinlogin: login form filled and submitted after %d ms", i * 100);
+            SecureZeroMemory(g_login, sizeof(g_login));
+            return 0;
+        }
+        Sleep(100);
+    }
+    hook::log("-stdinlogin: no login field appeared");
+    SecureZeroMemory(g_login, sizeof(g_login));
+    return 0;
+}
+
+// ---- auto world / character select ------------------------------------------------------------------------------------
+// -world <index>: the server list's index (display order) to join; without it, a list of exactly one world is joined.
+// -char <slot>: the character slot to select at char select (then Enter). Both act on the game thread (Present),
+// through the client's own functions:
+//   WorldSelectWin::UpdateServerBtnState(btn) 2026 0x55DF30 (page [+0x158], selected world number [+0x15C]; world
+//   count 0xC32584, list 0xC32588: 18-byte entries, number at +0x10) and OnCmdOk(bool) 0x55E120 -> WorldSelectOk ->
+//   NC_USER_WORLDSELECT_REQ; CharSelectFrameWork::SelectAvatar(page slot) 0x473A60 (page [+0x134], 6 per page).
+// The WorldSelectWin object is captured by signature-agnostic stubs on its own virtuals (2026 vtable 0xB15xxx).
+const DWORD VA_WS_BTNSTATE = 0x55DF30, VA_WS_CMDOK = 0x55E120, VA_WORLD_COUNT = 0xC32584, VA_SELECT_AVATAR = 0x473A60;
+int g_want_world = -1, g_want_char = -1;
+volatile void* g_ws = nullptr;
+volatile DWORD g_ws_tick = 0;
+bool g_world_done = false;
+typedef void(__fastcall* IntThisFn)(void*, void*, int);
+
+#define WS_STUB(N, VA)                                                                                                  \
+    hook::Detour g_ws_detour##N;                                                                                        \
+    void* g_ws_tramp##N = nullptr;                                                                                      \
+    __declspec(naked) void ws_stub##N() {                                                                               \
+        __asm { mov g_ws, ecx }                                                                                         \
+        __asm { jmp g_ws_tramp##N }                                                                                     \
+    }
+WS_STUB(0, 0x55C340)
+WS_STUB(1, 0x55E4B0)
+WS_STUB(2, 0x55CA80)
+WS_STUB(3, 0x55CC00)
+WS_STUB(4, 0x55E020)
+
+void hook_ws_stubs() {
+    struct { DWORD va; void* stub; hook::Detour* d; void** tramp; } t[] = {
+        {0x55C340, (void*)&ws_stub0, &g_ws_detour0, &g_ws_tramp0}, {0x55E4B0, (void*)&ws_stub1, &g_ws_detour1, &g_ws_tramp1},
+        {0x55CA80, (void*)&ws_stub2, &g_ws_detour2, &g_ws_tramp2}, {0x55CC00, (void*)&ws_stub3, &g_ws_detour3, &g_ws_tramp3},
+        {0x55E020, (void*)&ws_stub4, &g_ws_detour4, &g_ws_tramp4}};
+    for (auto& e : t)
+        if (hook::hook_function("WorldSelectWin virtual", rva(e.va), e.stub, e.d)) *e.tramp = e.d->trampoline;
+}
+
+int arg_int(const char* name) {
+    const char* c = strstr(GetCommandLineA(), name);
+    if (!c) return -1;
+    c += strlen(name);
+    while (*c == ' ') c++;
+    return (*c >= '0' && *c <= '9') ? atoi(c) : -1;
+}
+
+// game thread, once per frame
+void auto_world_tick() {
+    if (g_world_done || !g_ws) return;
+    int n = *(int*)rva(VA_WORLD_COUNT);
+    int idx = g_want_world >= 0 ? g_want_world : (n == 1 ? 0 : -1);
+    if (n <= 0 || idx < 0) return;
+    g_world_done = true;
+    if (idx >= n) {
+        hook::log("auto world: index %d but the list has %d", idx, n);
+        return;
+    }
+    char* ws = (char*)g_ws;
+    *(int*)(ws + 0x158) = idx / 8;
+    ((IntThisFn)rva(VA_WS_BTNSTATE))(ws, nullptr, idx % 8);
+    hook::log("auto world: index %d of %d -> world %d, joining", idx, n, *(int*)(ws + 0x15C));
+    ((IntThisFn)rva(VA_WS_CMDOK))(ws, nullptr, 1);
+}
+
+// game thread, char select's ProcessInput. SelectAvatar on the already-selected slot is the second click that logs in
+// (its bl == dl branch, 2026 0x473AD5 -> 0x473C8D), so: select, and a second later select again.
+DWORD g_char_at = 0;
+int g_char_step = 0;
+void auto_char_tick(void* cs) {
+    if (g_char_step >= 2 || g_want_char < 0) return;
+    if (g_char_step == 1 && GetTickCount() - g_char_at < 1000) return;
+    int page = *(unsigned char*)((char*)cs + 0x134);
+    if (g_want_char / 6 != page) {
+        g_char_step = 2;
+        hook::log("auto char: slot %d is not on the shown page %d", g_want_char, page);
+        return;
+    }
+    ((IntThisFn)rva(VA_SELECT_AVATAR))(cs, nullptr, g_want_char % 6);
+    hook::log(g_char_step == 0 ? "auto char: slot %d selected" : "auto char: slot %d confirmed, entering", g_want_char);
+    g_char_step++;
+    g_char_at = GetTickCount();
+}
+
+std::string handle(const std::string& line) {
+    char cmd[32] = {0};
+    if (sscanf_s(line.c_str(), "%31s", cmd, (unsigned)sizeof(cmd)) != 1) return "err empty";
+    std::string c = cmd;
+    if (c == "ping") return "ok pong";
+    HWND w = game_window();
+    if (!w) return "err no game window";
+    const char* rest = line.c_str() + c.size();
+    while (*rest == ' ') rest++;
+    if (c == "peek") {   // peek <va> [len]: exe-relative (2026 VA, rebased) or, with *, an absolute address; hex + ascii
+        char as[32] = {0};
+        unsigned len = 64;
+        sscanf_s(rest, "%31s %u", as, (unsigned)sizeof(as), &len);
+        const char* t = as[0] == '*' ? as + 1 : as;
+        DWORD v = strtoul(t, nullptr, 16);
+        const unsigned char* src = as[0] == '*' ? (const unsigned char*)(uintptr_t)v : (const unsigned char*)rva(v);
+        if (len > 4096) len = 4096;
+        std::vector<unsigned char> buf(len);
+        SIZE_T got = 0;
+        if (!ReadProcessMemory(GetCurrentProcess(), src, buf.data(), len, &got) || !got) return "err unreadable";
+        std::string out = "ok";
+        char h[16];
+        for (SIZE_T i = 0; i < got; i++) {
+            if (i % 16 == 0) { sprintf_s(h, " | %04x ", (unsigned)i); out += h; }
+            sprintf_s(h, "%02x", buf[i]);
+            out += h;
+            if (i % 16 == 15 || i + 1 == got) {
+                out += "  ";
+                for (SIZE_T j = i - i % 16; j <= i; j++) out += (buf[j] >= 32 && buf[j] < 127) ? (char)buf[j] : '.';
+            }
+        }
+        return out;
+    }
+    if (c == "stats") {
+        char b[400];
+        sprintf_s(b, "ok ms %d,%d cursor %ld (last %ld,%ld) async %ld state kb %ld ms %ld (failed %ld) data kb %ld ms %ld devices kb %d ms %d",
+                  *(int*)rva(VA_MSX), *(int*)rva(VA_MSY), g_n_cursor, g_last_cursor.x, g_last_cursor.y, g_n_async, g_n_state_kb, g_n_state_ms, g_n_state_fail,
+                  g_n_data_kb, g_n_data_ms, g_nkb, g_nmice);
+        return b;
+    }
+    if (c == "size") {
+        RECT r{};
+        GetClientRect(w, &r);
+        char b[64];
+        sprintf_s(b, "ok %ld %ld", r.right, r.bottom);
+        return b;
+    }
+    if (c == "key") {
+        char vks[32] = {0}, mode[16] = "press";
+        if (sscanf_s(rest, "%31s %15s", vks, (unsigned)sizeof(vks), mode, (unsigned)sizeof(mode)) < 1) return "err key <vk>";
+        UINT vk = (UINT)strtoul(vks, nullptr, 0);
+        int m = strcmp(mode, "down") == 0 ? 1 : (strcmp(mode, "up") == 0 ? 2 : 0);
+        // both paths: an edit control with the focus takes its own WM_KEYDOWN / UP (Backspace in a field); the game
+        // itself reads DirectInput (Tab between the login fields, Enter through the menus)
+        HWND kw = key_window(w);
+        if (kw != input_window(w)) send_key(kw, vk, m == 0 ? 1 : m);
+        if (m != 2) di_key(vk, true);
+        if (m == 0) Sleep(150);                  // held across a frame or two (the client draws ~10 fps here)
+        if (m != 1) di_key(vk, false);
+        if (m == 0 && kw != input_window(w)) send_key(kw, vk, 2);
+        return "ok";
+    }
+    if (c == "text") {
+        HWND kw = key_window(w);
+        for (const char* p = rest; *p; p++) PostMessageA(kw, WM_CHAR, (unsigned char)*p, 1);
+        return "ok";
+    }
+    int x = 0, y = 0;
+    char btn[16] = "left";
+    if (c == "move" || c == "click" || c == "down" || c == "up" || c == "wheel") {
+        int extra = 0;
+        int got = sscanf_s(rest, "%d %d %15s", &x, &y, btn, (unsigned)sizeof(btn));
+        if (got < 2) return "err " + c + " <x> <y>";
+        if (c == "wheel") extra = atoi(btn);
+        bool right = strcmp(btn, "right") == 0;
+        HWND top = w;
+        w = input_window(top);
+        UINT dn = right ? WM_RBUTTONDOWN : WM_LBUTTONDOWN, upm = right ? WM_RBUTTONUP : WM_LBUTTONUP;
+        WPARAM held = right ? MK_RBUTTON : MK_LBUTTON;
+        POINT sp{x, y};
+        ClientToScreen(top, &sp);
+        int b = right ? 1 : 0;
+        di_cursor(sp);                           // the game's GetCursorPos reads this from now on
+        if (c == "move") {
+            mouse(w, WM_MOUSEMOVE, x, y, 0);
+        } else if (c == "click") {
+            mouse(w, WM_MOUSEMOVE, x, y, 0);
+            Sleep(250);                          // a frame or two at the new place before the press
+            di_button(b, true);
+            mouse(w, dn, x, y, held);
+            Sleep(250);
+            di_button(b, false);
+            mouse(w, upm, x, y, 0);
+        } else if (c == "down") {
+            di_button(b, true);
+            mouse(w, dn, x, y, held);
+        } else if (c == "up") {
+            di_button(b, false);
+            mouse(w, upm, x, y, 0);
+        } else {
+            PostMessageA(w, WM_MOUSEWHEEL, MAKEWPARAM(0, (short)extra), MAKELPARAM(sp.x, sp.y));
+        }
+        return "ok";
+    }
+    if (c == "shot") {
+        if (!*rest) return "err shot <path>";
+        if (d3d_shot(rest)) return "ok";
+        return screenshot(input_window(w), rest) ? "ok (window capture)" : "err capture failed";
+    }
+    return "err unknown command " + c;
+}
+
+DWORD WINAPI serve(LPVOID) {
+    WSADATA wd;
+    if (WSAStartup(MAKEWORD(2, 2), &wd) != 0) {
+        hook::log("WSAStartup failed");
+        return 0;
+    }
+    SOCKET ls = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
+    sockaddr_in a{};
+    a.sin_family = AF_INET;
+    a.sin_port = htons((u_short)g_port);
+    inet_pton(AF_INET, g_bind, &a.sin_addr);
+    if (bind(ls, (sockaddr*)&a, sizeof(a)) != 0 || listen(ls, 1) != 0) {
+        hook::log("cannot listen on %s:%d (%d)", g_bind, g_port, WSAGetLastError());
+        return 0;
+    }
+    hook::log("listening on %s:%d", g_bind, g_port);
+    for (;;) {
+        SOCKET s = accept(ls, nullptr, nullptr);
+        if (s == INVALID_SOCKET) continue;
+        hook::log("controller connected");
+        std::string buf;
+        char tmp[1024];
+        for (;;) {
+            int n = recv(s, tmp, sizeof(tmp), 0);
+            if (n <= 0) break;
+            buf.append(tmp, n);
+            size_t nl;
+            bool quit = false;
+            while ((nl = buf.find('\n')) != std::string::npos) {
+                std::string line = buf.substr(0, nl);
+                buf.erase(0, nl + 1);
+                if (!line.empty() && line.back() == '\r') line.pop_back();
+                if (line == "quit") {
+                    quit = true;
+                    break;
+                }
+                std::string reply = handle(line) + "\n";
+                send(s, reply.data(), (int)reply.size(), 0);
+            }
+            if (quit) break;
+        }
+        closesocket(s);
+        hook::log("controller gone");
+    }
+}
+
+}  // namespace
+
+HOOK_PLUGIN("remote_control") {
+    char ini[MAX_PATH];
+    HMODULE self = nullptr;
+    GetModuleHandleExA(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
+                       (LPCSTR)&serve, &self);
+    GetModuleFileNameA(self, ini, MAX_PATH);
+    char* dot = strrchr(ini, '.');
+    if (dot) strcpy_s(dot, MAX_PATH - (dot - ini), ".ini");
+    g_port = GetPrivateProfileIntA("config", "port", 27015, ini);
+    GetPrivateProfileStringA("config", "bind", "127.0.0.1", g_bind, sizeof(g_bind), ini);
+    InitializeCriticalSection(&g_cap_lock);
+    InitializeCriticalSection(&g_in_lock);
+    hook::hook_function("CharSelectFrameWork::ProcessInput", rva(VA_CS_INPUT), (void*)&my_cs_input, &g_csinput_detour);
+    char remap[128] = {0};
+    GetPrivateProfileStringA("config", "remap", "", remap, sizeof(remap), ini);
+    char* gt = strchr(remap, '>');
+    if (gt) {
+        *gt = 0;
+        if (inet_pton(AF_INET, remap, &g_remap_from) == 1 && inet_pton(AF_INET, gt + 1, &g_remap_to) == 1) {
+            HMODULE ws = LoadLibraryA("ws2_32.dll");
+            g_remap = hook::hook_function("ws2_32!connect", ws ? (void*)GetProcAddress(ws, "connect") : nullptr,
+                                          (void*)&my_connect, &g_connect_detour);
+            hook::log("remap %s -> %s: %s", remap, gt + 1, g_remap ? "on" : "FAILED");
+        }
+    }
+    if (strstr(GetCommandLineA(), "-stdinlogin")) read_stdin_login();
+    g_want_world = arg_int("-world");
+    g_want_char = arg_int("-char");
+    hook_ws_stubs();
+    HMODULE exe = GetModuleHandleA(nullptr);
+    g_di8_create = (DI8CreateFn)hook::iat_hook(exe, "DINPUT8.dll", "DirectInput8Create", (void*)&my_di8_create);
+    g_get_cursor = (GetCursorPosFn)hook::iat_hook(exe, "USER32.dll", "GetCursorPos", (void*)&my_get_cursor);
+    g_get_async = (GetAsyncKeyStateFn)hook::iat_hook(exe, "USER32.dll", "GetAsyncKeyState", (void*)&my_get_async);
+    hook::log("input hooks: DirectInput8Create %s, GetCursorPos %s, GetAsyncKeyState %s", g_di8_create ? "ok" : "MISSING",
+              g_get_cursor ? "ok" : "MISSING", g_get_async ? "ok" : "MISSING");
+    g_cap_done = CreateEventA(nullptr, TRUE, FALSE, nullptr);
+    HMODULE d3d9 = LoadLibraryA("d3d9.dll");
+    void* c9 = d3d9 ? (void*)GetProcAddress(d3d9, "Direct3DCreate9") : nullptr;
+    if (!hook::hook_function("Direct3DCreate9", c9, (void*)&my_create9, &g_create9_detour))
+        hook::log("no Direct3DCreate9 hook: shots fall back to the window capture");
+    CreateThread(nullptr, 0, serve, nullptr, 0, nullptr);
+    if (g_stdin_login) CreateThread(nullptr, 0, auto_login, nullptr, 0, nullptr);
+}
