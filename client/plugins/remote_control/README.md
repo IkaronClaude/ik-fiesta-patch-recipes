@@ -35,7 +35,9 @@ machine may not reach.
 ## Control protocol (one line per command, one line per reply)
 
 `ping`, `size`, `stats`, `key <vk> [press|down|up]`, `text <string>`, `move|click|down|up <x> <y> [left|right]`,
-`wheel <x> <y> <delta>`, `shot <path.bmp>`, `peek <va> [len]` (2026 VA, rebased; `*<addr>` for an absolute one).
+`wheel <x> <y> <delta>`, `shot <path.bmp>`, `peek <va> [len]` (2026 VA, rebased; `*<addr>` for an absolute one),
+`wins [class]` (the window tree: class, x, y, w, h, object pointer), `char <slot>` (pick and enter that character at
+the next character select - e.g. after Esc -> Select Character).
 
 ## How it works
 
