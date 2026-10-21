@@ -1004,6 +1004,11 @@ std::string handle(const std::string& line) {
         return out;
     }
     if (c == "wins") return wins_on_game_thread(rest);
+    if (c == "char") {   // char <slot>: pick (and enter) that character again at the next character select
+        g_want_char = atoi(rest);
+        g_char_step = 0;
+        return "ok";
+    }
     if (c == "stats") {
         char b[400];
         sprintf_s(b, "ok cs %p ms %d,%d cursor %ld (last %ld,%ld) async %ld state kb %ld ms %ld (failed %ld) data kb %ld ms %ld devices kb %d ms %d",
