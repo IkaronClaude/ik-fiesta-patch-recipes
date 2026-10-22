@@ -960,10 +960,17 @@ bool win_rect(void* w, int* x, int* y, int* wd, int* ht) {
     }
 }
 
+// an RTTI name only when it looks like one (".?A", printable, NUL within 120): a non-polymorphic object's "class" is
+// random bytes, and printing those into a fixed buffer tripped sprintf_s's invalid-parameter handler (the probe hang)
 const char* safe_class(void* w) {
     __try {
         const char* c = pgwin::class_of(w);
-        return c ? c : "?";
+        if (!c || c[0] != '.' || c[1] != '?' || c[2] != 'A') return "?";
+        for (int i = 0; i < 120; i++) {
+            if (!c[i]) return c;
+            if ((unsigned char)c[i] < 32 || (unsigned char)c[i] > 126) return "?";
+        }
+        return "?";
     } __except (EXCEPTION_EXECUTE_HANDLER) {
         return "?";
     }
@@ -977,12 +984,79 @@ void* read_ptr(const void* a) {
     }
 }
 
+// A window's / control's name and screen place (operator 2026-10-22: the mouse coordinates of individual controls).
+// PgWin derives from NiNode: SetWinName (vtable +0x8C, 2016 0x401CA0) is NiObjectNET::SetName, so the name is the
+// NiFixedString at +8 (a char*, the NIF sprite's node name - "ClsNor", "Btn01Nor"); GetWinScreenRect (vtable +0xD8,
+// 2016 0x401F00, the slot verified against GetXPos +0xA4 / GetWidth +0x90 in the same vtable) gives the screen RECT -
+// client-area pixels, what a click takes; the parent NiNode at +0x20 (2016 GetParentWin 0x402410).
+typedef void(__fastcall* ScreenRectFn)(void*, void*, RECT*);
+
+bool win_screen_rect(void* w, RECT* r) {
+    __try {
+        ((ScreenRectFn)pgwin::vtable_entry(w, 0xD8 / 4))(w, nullptr, r);
+        return true;
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        return false;
+    }
+}
+
+const char* win_name(void* w) {
+    __try {
+        const char* n = *(const char**)((char*)w + 8);
+        if (!n) return "";
+        for (int i = 0; i < 64; i++) {
+            if (!n[i]) return n;
+            if ((unsigned char)n[i] < 32 || (unsigned char)n[i] > 126) return "";
+        }
+        return "";
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        return "";
+    }
+}
+
+// "ctl <name> [n]": the n-th (default first) visible-or-not control whose name equals <name> (case-insensitive):
+// "<screen x> <screen y> <w> <h> <class> @<ptr>" - its centre is what a click wants
+std::string find_ctl(const char* want, int nth) {
+    char* mgr = (char*)hook::rebase(caddr::va(caddr::kWinMgr));
+    if (!caddr::va(caddr::kWinMgr)) return "err no PgWinMgr address for this build";
+    void* item = read_ptr(mgr + 0x28);
+    char b[200];
+    for (int n = 0; item && n < 50000; n++, item = read_ptr(item)) {
+        void* w = read_ptr((char*)item + 8);
+        if (!w || _stricmp(win_name(w), want) != 0) continue;
+        if (nth-- > 0) continue;
+        RECT r{};
+        if (!win_screen_rect(w, &r)) return "err no screen rect";
+        sprintf_s(b, "ok %ld %ld %ld %ld %s @%p", r.left, r.top, r.right - r.left, r.bottom - r.top, safe_class(w), w);
+        return b;
+    }
+    return "err no such control";
+}
+
+// "probe <ptr>": each dword of an object's first 0x200 bytes that points at something with an NiObjectNET-style name
+// (+8) or an RTTI class - to find where a control keeps the NIF sprites it was built from
+std::string probe(void* o) {
+    std::string out = "ok";
+    char b[320];
+    for (int off = 0; off < 0x200; off += 4) {
+        void* p = read_ptr((char*)o + off);
+        if (!p || (uintptr_t)p < 0x10000) continue;
+        const char* nm = win_name(p);
+        const char* cls = safe_class(p);
+        if ((nm && nm[0]) || (cls && cls[0] != '?')) {
+            sprintf_s(b, " | +%X %p %s \"%s\"", off, p, cls, nm);
+            out += b;
+        }
+    }
+    return out;
+}
+
 std::string dump_wins(const char* filter) {
     std::string out = "ok";
     char* mgr = (char*)hook::rebase(caddr::va(caddr::kWinMgr));
     if (!caddr::va(caddr::kWinMgr)) return "err no PgWinMgr address for this build";
     void* item = read_ptr(mgr + 0x28);
-    char b[200];
+    char b[300];
     int tail = 0;                        // with a filter: a matching window and the 40 entries after it (its controls)
     for (int n = 0; item && n < 50000; n++, item = read_ptr(item)) {
         void* w = read_ptr((char*)item + 8);
@@ -991,11 +1065,14 @@ std::string dump_wins(const char* filter) {
         if (!win_rect(w, &x, &y, &wd, &ht)) continue;
         const char* cls = safe_class(w);
         if (filter[0]) {
-            if (strstr(cls, filter)) tail = 41;
+            if (strstr(cls, filter) || strstr(win_name(w), filter)) tail = 41;
             if (tail <= 0) continue;
             tail--;
         }
-        sprintf_s(b, " | %s %d %d %d %d @%p", cls, x, y, wd, ht, w);
+        RECT sr{};
+        bool has_sr = win_screen_rect(w, &sr);
+        sprintf_s(b, " | %s \"%s\" %d %d %d %d screen %ld %ld @%p parent %p", cls, win_name(w), x, y, wd, ht,
+                  has_sr ? sr.left : -1L, has_sr ? sr.top : -1L, w, read_ptr((char*)w + 0x20));
         out += b;
     }
     return out;
@@ -1006,12 +1083,22 @@ std::string dump_wins(const char* filter) {
 CRITICAL_SECTION g_wins_lock;
 HANDLE g_wins_done = nullptr;
 volatile LONG g_wins_pending = 0;
+volatile LONG g_ctl_pending = 0;      // the request is "ctl", not "wins"
 std::string g_wins_result;
 std::string g_wins_filter;
 
 void wins_tick() {
     if (!g_wins_pending) return;
-    std::string r = dump_wins(g_wins_filter.c_str());
+    std::string r;
+    if (g_ctl_pending) {
+        char name[128] = {0};
+        int nth = 0;
+        sscanf_s(g_wins_filter.c_str(), "%127s %d", name, (unsigned)sizeof(name), &nth);
+        r = find_ctl(name, nth);
+        InterlockedExchange(&g_ctl_pending, 0);
+    } else {
+        r = dump_wins(g_wins_filter.c_str());
+    }
     EnterCriticalSection(&g_wins_lock);
     g_wins_result = r;
     LeaveCriticalSection(&g_wins_lock);
@@ -1031,6 +1118,12 @@ std::string wins_on_game_thread(const char* filter) {
     std::string r = g_wins_result;
     LeaveCriticalSection(&g_wins_lock);
     return r;
+}
+
+// "ctl" rides the "wins" game-thread channel with a flag
+std::string ctl_on_game_thread(const char* arg) {
+    InterlockedExchange(&g_ctl_pending, 1);
+    return wins_on_game_thread(arg);
 }
 
 std::string handle(const std::string& line) {
@@ -1091,6 +1184,8 @@ std::string handle(const std::string& line) {
         return out;
     }
     if (c == "wins") return wins_on_game_thread(rest);
+    if (c == "ctl") return ctl_on_game_thread(rest);
+    if (c == "probe") return probe((void*)strtoul(rest, nullptr, 16));
     if (c == "char") {   // char <slot>: pick (and enter) that character again at the next character select
         g_want_char = atoi(rest);
         g_char_step = 0;
