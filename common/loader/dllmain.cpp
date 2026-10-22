@@ -67,16 +67,39 @@ static void start_plugins() {
 namespace {
 typedef HWND(WINAPI* CreateWindowExA_t)(DWORD, LPCSTR, LPCSTR, DWORD, int, int, int, int, HWND, HMENU, HINSTANCE, LPVOID);
 CreateWindowExA_t g_create_window = 0;
+typedef HMODULE(WINAPI* LoadLibraryA_t)(LPCSTR);
+LoadLibraryA_t g_load_library = 0;
 volatile LONG g_client_started = 0;
 }  // namespace
 
-static HWND WINAPI first_window(DWORD ex, LPCSTR cls, LPCSTR name, DWORD style, int x, int y, int w, int h,
-                                HWND parent, HMENU menu, HINSTANCE inst, LPVOID param) {
+// The client's display-mode check (2026 0x534905 -> 0x5351F0, the "Error" box) runs BEFORE the first window, on the
+// adapter's mode list Gamebryo reads right after the exe loads d3d9.dll itself (no static import). So the plugins are
+// also started at the exe's first LoadLibraryA("d3d9.dll") - the same safe moment (WinMain on the main thread, no loader
+// lock) but early enough for a Direct3DCreate9 hook (remote_control's extra modes) to see the enumeration. Whichever of
+// the two comes first starts them; the other then only passes through.
+static void client_start(const char* why) {
     if (InterlockedExchange(&g_client_started, 1) == 0) {
-        hook::iat_hook(NULL, "USER32.dll", "CreateWindowExA", (void*)g_create_window);
-        hook::log("client: first CreateWindowExA - loading plugins before any window exists");
+        hook::log("client: %s - loading plugins", why);
         start_plugins();
     }
+}
+
+static HMODULE WINAPI first_d3d9(LPCSTR name) {
+    if (name && g_client_started == 0) {
+        const char* p = name;
+        for (const char* c = name; *c; c++) if (*c == '\\' || *c == '/') p = c + 1;
+        if ((p[0] | 32) == 'd' && p[1] == '3' && (p[2] | 32) == 'd' && p[3] == '9') {
+            HMODULE m = g_load_library(name);     // d3d9 mapped first: a plugin's GetProcAddress finds it
+            client_start("the exe's LoadLibraryA(d3d9.dll)");
+            return m;
+        }
+    }
+    return g_load_library(name);
+}
+
+static HWND WINAPI first_window(DWORD ex, LPCSTR cls, LPCSTR name, DWORD style, int x, int y, int w, int h,
+                                HWND parent, HMENU menu, HINSTANCE inst, LPVOID param) {
+    client_start("first CreateWindowExA, before any window exists");
     return g_create_window(ex, cls, name, style, x, y, w, h, parent, menu, inst, param);
 }
 
@@ -104,7 +127,9 @@ BOOL APIENTRY DllMain(HMODULE module, DWORD reason, LPVOID) {
             hook::log("waiting for ServiceMain");
         } else if ((g_create_window = (CreateWindowExA_t)hook::iat_hook(NULL, "USER32.dll", "CreateWindowExA",
                                                                         (void*)first_window)) != 0) {
-            hook::log("not a service - client mode: waiting for the first CreateWindowExA");
+            g_load_library = (LoadLibraryA_t)hook::iat_hook(NULL, "KERNEL32.dll", "LoadLibraryA", (void*)first_d3d9);
+            hook::log("not a service - client mode: waiting for the first CreateWindowExA%s",
+                      g_load_library ? " or LoadLibraryA(d3d9.dll)" : "");
         } else {
             hook::log("NOT A SERVICE and no CreateWindowExA import - nothing will be loaded");
         }

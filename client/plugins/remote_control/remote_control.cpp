@@ -338,11 +338,98 @@ HRESULT STDMETHODCALLTYPE my_create_device(IDirect3D9* d3d, UINT ad, D3DDEVTYPE 
     return hr;
 }
 
+// ---- extra display modes (operator 2026-10-22: test the official at 1600 x 900 windowed) --------------------------------
+// The client builds its resolution list - and checks the saved Option.mco size against it at start (2026 0x5351F0, the
+// "Error" box) - from IDirect3D9::GetAdapterModeCount / EnumAdapterModes. A remote-desktop display offers only its own
+// size, so every other size is refused even windowed. GetAdapterModeCount (vtable 6) gains the sizes below that the
+// adapter lacks, EnumAdapterModes (7) returns them past the real modes, as the first real mode with only width / height
+// changed (same format / refresh). Windowed play never switches the display mode, so a listed size just sizes the window.
+typedef UINT(STDMETHODCALLTYPE* ModeCountFn)(IDirect3D9*, UINT, D3DFORMAT);
+typedef HRESULT(STDMETHODCALLTYPE* EnumModesFn)(IDirect3D9*, UINT, D3DFORMAT, UINT, D3DDISPLAYMODE*);
+ModeCountFn g_mode_count = nullptr;
+EnumModesFn g_enum_modes = nullptr;
+// 16:9 / 16:10 and the 4:3 sizes (operator: 1280 x 960 etc.)
+const UINT kExtraModes[][2] = {{800, 600}, {1024, 768}, {1152, 864}, {1280, 960}, {1400, 1050}, {1600, 1200},
+                               {1280, 720}, {1280, 800}, {1366, 768}, {1440, 900}, {1600, 900}, {1680, 1050},
+                               {1920, 1080}};
+
+// the extra sizes this adapter / format does not already list, in order
+int extra_modes(IDirect3D9* d, UINT adapter, D3DFORMAT fmt, UINT real, UINT out[][2]) {
+    int n = 0;
+    for (auto& m : kExtraModes) {
+        bool have = false;
+        for (UINT i = 0; i < real && !have; i++) {
+            D3DDISPLAYMODE dm{};
+            if (SUCCEEDED(g_enum_modes(d, adapter, fmt, i, &dm)) && dm.Width == m[0] && dm.Height == m[1]) have = true;
+        }
+        if (!have) {
+            out[n][0] = m[0];
+            out[n][1] = m[1];
+            n++;
+        }
+    }
+    return n;
+}
+
+UINT STDMETHODCALLTYPE my_mode_count(IDirect3D9* d, UINT adapter, D3DFORMAT fmt) {
+    UINT real = g_mode_count(d, adapter, fmt);
+    UINT ex[32][2];
+    int n = real ? extra_modes(d, adapter, fmt, real, ex) : 0;
+    static int logged = 0;
+    if (logged++ < 8) hook::log("GetAdapterModeCount(adapter %u, format %d): %u real + %d", adapter, (int)fmt, real, n);
+    return real + n;
+}
+
+HRESULT STDMETHODCALLTYPE my_enum_modes(IDirect3D9* d, UINT adapter, D3DFORMAT fmt, UINT i, D3DDISPLAYMODE* out) {
+    UINT real = g_mode_count(d, adapter, fmt);
+    if (i < real) return g_enum_modes(d, adapter, fmt, i, out);
+    UINT ex[32][2];
+    int n = extra_modes(d, adapter, fmt, real, ex);
+    if (real == 0 || (int)(i - real) >= n) return D3DERR_INVALIDCALL;
+    HRESULT hr = g_enum_modes(d, adapter, fmt, 0, out);
+    if (FAILED(hr)) return hr;
+    out->Width = ex[i - real][0];
+    out->Height = ex[i - real][1];
+    return D3D_OK;
+}
+
+// ---- every MessageBoxA the client shows: its text and the call stack (operator: the "Error" box at start) -----------
+// Return addresses walked off the frame-pointer chain (CaptureStackBackTrace), each as exe+offset when inside Fiesta.exe
+// (its base from GetModuleHandle) so they read straight against the 2026 disassembly.
+typedef int(WINAPI* MessageBoxA_t)(HWND, LPCSTR, LPCSTR, UINT);
+MessageBoxA_t g_message_box = nullptr;
+
+int WINAPI my_message_box(HWND hwnd, LPCSTR text, LPCSTR caption, UINT type) {
+    void* frames[32];
+    USHORT n = CaptureStackBackTrace(1, 32, frames, nullptr);
+    uintptr_t base = (uintptr_t)GetModuleHandleA(nullptr);
+    std::string st;
+    char b[48];
+    for (USHORT i = 0; i < n; i++) {
+        uintptr_t a = (uintptr_t)frames[i];
+        HMODULE m = nullptr;
+        GetModuleHandleExA(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
+                           (LPCSTR)a, &m);
+        if ((uintptr_t)m == base)
+            sprintf_s(b, " exe+%X(=%X)", (unsigned)(a - base), (unsigned)(a - base + 0x400000));
+        else
+            sprintf_s(b, " %p", (void*)a);
+        st += b;
+    }
+    hook::log("MessageBoxA \"%s\" / \"%s\" type %X; stack:%s", caption ? caption : "", text ? text : "", type, st.c_str());
+    return g_message_box(hwnd, text, caption, type);
+}
+
 IDirect3D9* WINAPI my_create9(UINT v) {
     IDirect3D9* d = ((Create9Fn)g_create9_detour.trampoline)(v);
     if (d && !g_create_device) {
         g_create_device = (CreateDeviceFn)hook::vtable_set(hook::vtable_of(d), 16, (void*)&my_create_device);
         hook::log("IDirect3D9 %p: CreateDevice hooked", d);
+    }
+    if (d && !g_mode_count) {
+        g_mode_count = (ModeCountFn)hook::vtable_set(hook::vtable_of(d), 6, (void*)&my_mode_count);
+        g_enum_modes = (EnumModesFn)hook::vtable_set(hook::vtable_of(d), 7, (void*)&my_enum_modes);
+        hook::log("IDirect3D9 %p: display modes extended (GetAdapterModeCount / EnumAdapterModes)", d);
     }
     return d;
 }
@@ -1192,6 +1279,8 @@ HOOK_PLUGIN("remote_control") {
     hook::log("input hooks: DirectInput8Create %s, GetCursorPos %s, GetAsyncKeyState %s", g_di8_create ? "ok" : "MISSING",
               g_get_cursor ? "ok" : "MISSING", g_get_async ? "ok" : "MISSING");
     g_cap_done = CreateEventA(nullptr, TRUE, FALSE, nullptr);
+    g_message_box = (MessageBoxA_t)hook::iat_hook(nullptr, "USER32.dll", "MessageBoxA", (void*)&my_message_box);
+    hook::log(g_message_box ? "MessageBoxA hooked (text + stack logged)" : "no MessageBoxA import to hook");
     HMODULE d3d9 = LoadLibraryA("d3d9.dll");
     void* c9 = d3d9 ? (void*)GetProcAddress(d3d9, "Direct3DCreate9") : nullptr;
     if (!hook::hook_function("Direct3DCreate9", c9, (void*)&my_create9, &g_create9_detour))
