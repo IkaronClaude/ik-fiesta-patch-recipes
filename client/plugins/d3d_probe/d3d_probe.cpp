@@ -23,6 +23,7 @@ typedef HRESULT(__stdcall* SetTransformFn)(IDirect3DDevice9*, D3DTRANSFORMSTATET
 typedef HRESULT(__stdcall* SetTextureFn)(IDirect3DDevice9*, DWORD, IDirect3DBaseTexture9*);
 typedef HRESULT(__stdcall* SetSamplerFn)(IDirect3DDevice9*, DWORD, D3DSAMPLERSTATETYPE, DWORD);
 typedef HRESULT(__stdcall* SetLightFn)(IDirect3DDevice9*, DWORD, const D3DLIGHT9*);
+typedef HRESULT(__stdcall* LightEnableFn)(IDirect3DDevice9*, DWORD, BOOL);
 typedef HRESULT(__stdcall* SetRSFn)(IDirect3DDevice9*, D3DRENDERSTATETYPE, DWORD);
 typedef HRESULT(__stdcall* DrawIdxFn)(IDirect3DDevice9*, D3DPRIMITIVETYPE, INT, UINT, UINT, UINT, UINT);
 
@@ -32,14 +33,15 @@ SetSamplerFn g_set_sampler = nullptr;
 DrawIdxFn g_draw_idx = nullptr;
 SetLightFn g_set_light = nullptr;
 SetRSFn g_set_rs = nullptr;
+
 int g_log_lights = 0, g_light_lines = 0;
-D3DLIGHT9 g_lights[8];
+D3DLIGHT9 g_lights[64];
 DWORD g_ambient = 0xFFFFFFFF, g_fogcol = 0xFFFFFFFF;
 
 // [config] log_lights=1: every light (index < 8) set with new values, the ambient and fog colour render states on
 // change - the scene lighting the official feeds D3D (terrain / object colour parity)
 HRESULT __stdcall my_set_light(IDirect3DDevice9* dev, DWORD i, const D3DLIGHT9* l) {
-    if (g_log_lights && l && i < 8 && std::memcmp(&g_lights[i], l, sizeof *l) != 0 && g_light_lines < 400) {
+    if (g_log_lights && l && i < 64 && std::memcmp(&g_lights[i], l, sizeof *l) != 0 && g_light_lines < 400) {
         g_lights[i] = *l;
         g_light_lines++;
         hook::logf("light %lu type %d diffuse %.3f %.3f %.3f ambient %.3f %.3f %.3f specular %.3f %.3f %.3f dir %.3f %.3f %.3f pos %.1f %.1f %.1f range %g att %g %g %g",
@@ -56,6 +58,25 @@ HRESULT __stdcall my_set_rs(IDirect3DDevice9* dev, D3DRENDERSTATETYPE t, DWORD v
         if (t == D3DRS_FOGCOLOR && v != g_fogcol) g_fogcol = v, g_light_lines++, hook::logf("rs fogcolor %08lx", v);
     }
     return g_set_rs(dev, t, v);
+}
+
+LightEnableFn g_light_enable = nullptr;
+int g_le_lines = 0;
+
+// log_lights: every LightEnable whose index or state changes (any index - Gamebryo may use more than 8)
+HRESULT __stdcall my_light_enable(IDirect3DDevice9* dev, DWORD i, BOOL on) {
+    static BOOL last[64];
+    static bool seen[64];
+    // [config] lights_after=S: LightEnable is logged only S seconds after load (character select toggles 0 / 1 per draw)
+    static int la = hook::config_int("lights_after", 0, "config");
+    static DWORD t0 = GetTickCount();
+    if (g_log_lights && g_le_lines < 400 && GetTickCount() - t0 >= (DWORD)la * 1000 &&
+        (i >= 64 || !seen[i] || last[i] != on)) {
+        if (i < 64) seen[i] = true, last[i] = on;
+        g_le_lines++;
+        hook::logf("light_enable %lu %d", i, (int)on);
+    }
+    return g_light_enable(dev, i, on);
 }
 int g_watch_rot = 0, g_draw_lines = 0;
 
@@ -155,13 +176,48 @@ void dump_draw(IDirect3DDevice9* dev, UINT prims) {
     }
     char le[64];
     int ln = 0;
-    for (DWORD li = 0; li < 8; li++) {
+    for (DWORD li = 0; li < 32; li++) {   // Gamebryo uses indices past 8 (the world's lights are 17 / 18)
         BOOL on = FALSE;
         dev->GetLightEnable(li, &on);
-        le[ln++] = on ? (char)('0' + li) : '.';
+        if (on) ln += std::snprintf(le + ln, sizeof(le) - ln, "%lu,", li);
     }
+    if (!ln) le[ln++] = '-';
     le[ln] = 0;
-    hook::logf("%s | lights %s", line, le);
+    IDirect3DVertexShader9* vs = nullptr;
+    IDirect3DPixelShader9* ps = nullptr;
+    dev->GetVertexShader(&vs), dev->GetPixelShader(&ps);
+    hook::logf("%s | lights %s | vs %p ps %p", line, le, (void*)vs, (void*)ps);
+    // [config] dump_vs_consts=N: the first N float4 vertex-shader constants of a draw with a vertex shader
+    static int vsc = hook::config_int("dump_vs_consts", 0, "config");
+    if (vs && vsc > 0) {
+        float c[4 * 64] = {0};
+        int n = vsc > 64 ? 64 : vsc;
+        dev->GetVertexShaderConstantF(0, c, n);
+        for (int i = 0; i < n; i++)
+            hook::logf("  vsc %d %.4f %.4f %.4f %.4f", i, c[4 * i], c[4 * i + 1], c[4 * i + 2], c[4 * i + 3]);
+    }
+    {   // the fog the draw gets: table / vertex mode, range fog, start / end (floats in the DWORD), density, colour
+        DWORD fe = 0, tm = 0, vm = 0, rf = 0, fc = 0, fs = 0, fend = 0, fd = 0;
+        dev->GetRenderState(D3DRS_FOGENABLE, &fe);
+        if (fe) {
+            dev->GetRenderState(D3DRS_FOGTABLEMODE, &tm), dev->GetRenderState(D3DRS_FOGVERTEXMODE, &vm);
+            dev->GetRenderState(D3DRS_RANGEFOGENABLE, &rf), dev->GetRenderState(D3DRS_FOGCOLOR, &fc);
+            dev->GetRenderState(D3DRS_FOGSTART, &fs), dev->GetRenderState(D3DRS_FOGEND, &fend), dev->GetRenderState(D3DRS_FOGDENSITY, &fd);
+            float f0, f1, f2;
+            std::memcpy(&f0, &fs, 4), std::memcpy(&f1, &fend, 4), std::memcpy(&f2, &fd, 4);
+            hook::logf("  fog table %lu vertex %lu range %lu colour %08lx start %g end %g density %g", tm, vm, rf, fc, f0, f1, f2);
+        }
+    }
+    for (DWORD li = 0; li < 32; li++) {   // each enabled light, read back
+        BOOL on = FALSE;
+        D3DLIGHT9 l{};
+        if (FAILED(dev->GetLightEnable(li, &on)) || !on || FAILED(dev->GetLight(li, &l))) continue;
+        hook::logf("  light %lu type %d diffuse %.3f %.3f %.3f ambient %.3f %.3f %.3f dir %.3f %.3f %.3f", li, (int)l.Type,
+                   l.Diffuse.r, l.Diffuse.g, l.Diffuse.b, l.Ambient.r, l.Ambient.g, l.Ambient.b, l.Direction.x,
+                   l.Direction.y, l.Direction.z);
+    }
+    if (vs) vs->Release();
+    if (ps) ps->Release();
     for (DWORD st = 0; st < 4; st++) {
         DWORD cop = 0, c1 = 0, c2 = 0, aop = 0, a1 = 0, a2 = 0, tci = 0, res = 0;
         dev->GetTextureStageState(st, D3DTSS_COLOROP, &cop);
@@ -241,7 +297,9 @@ void ensure_patched(const char* why) {
     if (!g_dev) return;
     void** vt = *(void***)g_dev;
     if (vt[44] == (void*)my_set_transform && vt[65] == (void*)my_set_texture && vt[69] == (void*)my_set_sampler &&
-        vt[82] == (void*)my_draw_idx && vt[51] == (void*)my_set_light && vt[57] == (void*)my_set_rs) return;
+        vt[82] == (void*)my_draw_idx && vt[51] == (void*)my_set_light && vt[57] == (void*)my_set_rs &&
+        vt[53] == (void*)my_light_enable) return;
+    void* o53 = vt[53] == (void*)my_light_enable ? (void*)g_light_enable : vt[53];
     void* o51 = vt[51] == (void*)my_set_light ? (void*)g_set_light : vt[51];
     void* o57 = vt[57] == (void*)my_set_rs ? (void*)g_set_rs : vt[57];
     void* o82 = vt[82] == (void*)my_draw_idx ? (void*)g_draw_idx : vt[82];
@@ -252,6 +310,7 @@ void ensure_patched(const char* why) {
     if (!VirtualProtect(&vt[44], 40 * sizeof(void*), PAGE_EXECUTE_READWRITE, &old)) return;
     g_set_light = (SetLightFn)o51, vt[51] = (void*)my_set_light;
     g_set_rs = (SetRSFn)o57, vt[57] = (void*)my_set_rs;
+    g_light_enable = (LightEnableFn)o53, vt[53] = (void*)my_light_enable;
     g_draw_idx = (DrawIdxFn)o82, vt[82] = (void*)my_draw_idx;
     g_set_transform = (SetTransformFn)o44, g_set_texture = (SetTextureFn)o65, g_set_sampler = (SetSamplerFn)o69;
     vt[44] = (void*)my_set_transform, vt[65] = (void*)my_set_texture, vt[69] = (void*)my_set_sampler;
