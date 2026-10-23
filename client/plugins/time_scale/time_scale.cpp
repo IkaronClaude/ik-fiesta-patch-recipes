@@ -12,7 +12,12 @@
 // ---- THIS PLUGIN ----------------------------------------------------------------------------------------------------
 //   The time argument becomes t0 + (t - t0) * scale (t0 = the first time seen, so the clock stays continuous).
 //   hooks\time_scale.ini:  [plugin] enabled=1   [config] scale=0.1   (no file / scale 1 = stock).
-//   KNOWN GAP: the game's own Effect lifetimes run on real time - a slowed effect can end before its animation does.
+//   Effects (fiesta's own class over the NIFs) are put on the SAME scaled clock: Effect::Start(fTime) stamps fTime as
+//   the effect's start (+0x64) and starts its controllers with it, Effect::Update(fTime) runs its loop / oscillation /
+//   AE keys from fTime - start, Effect::IsEnd(fTime) ends it at start + lifetime (2016 0x684B90 / 0x688680 / 0x689DB0,
+//   vtable slots 15 / 14 / 19; 10.6.6 0x7BC150 / 0x7BFE20 / 0x7C1C70). Left on real time (as before, 2026-10-23) a
+//   slowed effect started its controllers in the scaled clock's FUTURE - nothing drew (Magic Burst invisible at 0.1)
+//   - and ended on a real-time lifetime.
 #include <hook_core.h>
 #include <client_addrs.h>
 
@@ -20,7 +25,7 @@
 
 namespace {
 
-hook::Detour g_upd, g_sel, g_act;
+hook::Detour g_upd, g_sel, g_act, g_estart, g_eupd, g_eend;
 double g_scale = 1.0;
 bool g_have = false;
 float g_t0 = 0.0f;
@@ -48,10 +53,26 @@ void __fastcall act_impl(void* self, void*, float t) {
     ((Orig)g_act.trampoline)(self, nullptr, virt(t));
 }
 
+void __fastcall estart_impl(void* self, void*, float t) {
+    typedef void(__fastcall * Orig)(void*, void*, float);
+    ((Orig)g_estart.trampoline)(self, nullptr, virt(t));
+}
+
+void __fastcall eupd_impl(void* self, void*, float t) {
+    typedef void(__fastcall * Orig)(void*, void*, float);
+    ((Orig)g_eupd.trampoline)(self, nullptr, virt(t));
+}
+
+bool __fastcall eend_impl(void* self, void*, float t) {
+    typedef bool(__fastcall * Orig)(void*, void*, float);
+    return ((Orig)g_eend.trampoline)(self, nullptr, virt(t));
+}
+
 }  // namespace
 
 HOOK_PLUGIN("time_scale") {
-    if (const char* m = caddr::missing({caddr::kNiAVObjectUpdate, caddr::kNiAVObjectUpdateSelected, caddr::kNiActorManagerUpdate})) {
+    if (const char* m = caddr::missing({caddr::kNiAVObjectUpdate, caddr::kNiAVObjectUpdateSelected, caddr::kNiActorManagerUpdate,
+                                          caddr::kEffectStart, caddr::kEffectUpdate, caddr::kEffectIsEnd})) {
         hook::log("time_scale: %s - not hooked", m);
         return;
     }
@@ -71,6 +92,9 @@ HOOK_PLUGIN("time_scale") {
     hook::log("time_scale: visual time x %s (movement / cooldowns stay real time)", buf);
     bool ok = hook::hook_function("NiAVObject::Update", hook::rebase(caddr::va(caddr::kNiAVObjectUpdate)), (void*)upd_impl, &g_upd)
            && hook::hook_function("NiAVObject::UpdateSelected", hook::rebase(caddr::va(caddr::kNiAVObjectUpdateSelected)), (void*)sel_impl, &g_sel)
-           && hook::hook_function("NiActorManager::Update", hook::rebase(caddr::va(caddr::kNiActorManagerUpdate)), (void*)act_impl, &g_act);
+           && hook::hook_function("NiActorManager::Update", hook::rebase(caddr::va(caddr::kNiActorManagerUpdate)), (void*)act_impl, &g_act)
+           && hook::hook_function("Effect::Start", hook::rebase(caddr::va(caddr::kEffectStart)), (void*)estart_impl, &g_estart)
+           && hook::hook_function("Effect::Update", hook::rebase(caddr::va(caddr::kEffectUpdate)), (void*)eupd_impl, &g_eupd)
+           && hook::hook_function("Effect::IsEnd", hook::rebase(caddr::va(caddr::kEffectIsEnd)), (void*)eend_impl, &g_eend);
     hook::log("time_scale: %s", ok ? "hooked" : "a hook FAILED");
 }

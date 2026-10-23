@@ -101,6 +101,9 @@
   "NetSendNetMsg": "0x00890B00",
   "NiAVObjectUpdate": "0x009838E0",
   "NiAVObjectUpdateSelected": "0x00983BC0",
-  "NiActorManagerUpdate": "0x00926700"
+  "NiActorManagerUpdate": "0x00926700",
+  "EffectStart": "0x007BBA00",
+  "EffectUpdate": "0x007BF6D0",
+  "EffectIsEnd": "0x007C1520"
  }
 }
