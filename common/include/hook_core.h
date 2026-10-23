@@ -194,6 +194,25 @@ inline void log(const char* fmt, ...) {
     if (detail::g_log_ready) LeaveCriticalSection(&detail::g_log_lock);
 }
 
+#ifdef HOOK_CRT
+// logf: the CRT's printf - %f / %g / %e, %p, %lld / %llu, %zu - for plugins (commonuild_plugin.bat defines HOOK_CRT;
+// the no-CRT loader has only log()). Formats into its own buffer, then one log("%s") line (operator 2026-10-23: "add
+// %f support")
+}  // namespace hook
+#include <cstdio>
+namespace hook {
+inline void logf(const char* fmt, ...) {
+    static char buf[2048];
+    if (detail::g_log_ready) EnterCriticalSection(&detail::g_log_lock);
+    va_list ap;
+    va_start(ap, fmt);
+    _vsnprintf_s(buf, sizeof buf, _TRUNCATE, fmt, ap);
+    va_end(ap);
+    if (detail::g_log_ready) LeaveCriticalSection(&detail::g_log_lock);
+    log("%s", buf);
+}
+#endif
+
 // ---- addresses ------------------------------------------------------------------------------------
 
 // The exe's actual base. GetModuleHandle(NULL) is the exe no matter which module asks.

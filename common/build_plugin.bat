@@ -45,9 +45,9 @@ set OBJ=build\obj\%~2
 if not exist %OUT% mkdir %OUT%
 if not exist %OBJ% mkdir %OBJ%
 set INC=/I common\include /I %~1\include
-set FLAGS=/nologo /W4 /EHsc /std:c++17 /O2 /MT %INC% /Fo%OBJ%\ /Fd%OUT%\%~2.pdb
+set FLAGS=/nologo /W4 /EHsc /std:c++17 /O2 /MT /DHOOK_CRT %INC% /Fo%OBJ%\ /Fd%OUT%\%~2.pdb
 if /i "%~3"=="dynamic" set FLAGS=/nologo /W4 /EHsc /std:c++17 /O2 /MD %INC% /Fo%OBJ%\ /Fd%OUT%\%~2.pdb
-if /i "%~3"=="debug" set FLAGS=/nologo /W4 /EHsc /std:c++17 /Od /Zi /MTd %INC% /Fo%OBJ%\ /Fd%OUT%\%~2.pdb
+if /i "%~3"=="debug" set FLAGS=/nologo /W4 /EHsc /std:c++17 /Od /Zi /MTd /DHOOK_CRT %INC% /Fo%OBJ%\ /Fd%OUT%\%~2.pdb
 
 cl %FLAGS% /LD "%SRC%" /link /OUT:%OUT%\%~2.dll /DEBUG /SUBSYSTEM:WINDOWS kernel32.lib user32.lib
 if errorlevel 1 exit /b 1
