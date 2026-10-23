@@ -508,7 +508,7 @@ POINT g_cursor{0, 0};
 // polled first, and the click never reached the NiInputMouse that PgWinMgr::ProcessInput asks (2016 0x8B860F)
 std::vector<DIDEVICEOBJECTDATA> g_kb_q[4], g_ms_q[4];
 DWORD g_seq = 1;
-LONG g_ms_dx[4] = {0}, g_ms_dy[4] = {0};  // relative motion owed to each mouse's next polled state (di_cursor)
+LONG g_ms_dx[4] = {0}, g_ms_dy[4] = {0}, g_ms_dz[4] = {0};  // relative motion owed to each mouse's next polled state (di_cursor)
 // diagnostics ("stats"): how the game polls its input
 volatile LONG g_n_cursor = 0, g_n_async = 0, g_n_state_kb = 0, g_n_state_ms = 0, g_n_data_kb = 0, g_n_data_ms = 0,
               g_n_state_fail = 0, g_n_wndmsg = 0;
@@ -548,8 +548,9 @@ HRESULT STDMETHODCALLTYPE my_get_state(IDirectInputDevice8A* dev, DWORD cb, LPVO
             for (int i = 0; i < g_nmice; i++)
                 if (g_mice[i] == dev) {
                     m->lX += g_ms_dx[i];
+                    m->lZ += g_ms_dz[i];
                     m->lY += g_ms_dy[i];
-                    g_ms_dx[i] = g_ms_dy[i] = 0;
+                    g_ms_dx[i] = g_ms_dy[i] = g_ms_dz[i] = 0;
                 }
         }
     }
@@ -692,6 +693,18 @@ void di_cursor(POINT screen) {
     }
     g_cursor_on = true;
     g_cursor = screen;
+    LeaveCriticalSection(&g_in_lock);
+}
+
+// the wheel: the game reads it from DirectInput's mouse Z axis (the camera zoom), not WM_MOUSEWHEEL - as an axis event and
+// in the next polled state, like the motion (WHEEL_DELTA 120 per notch, positive = away from the user)
+void di_wheel(LONG dz) {
+    g_remote_used = true;
+    EnterCriticalSection(&g_in_lock);
+    for (int i = 0; i < g_nmice; i++) {
+        push_event(g_ms_q[i], DIMOFS_Z, (DWORD)dz);
+        g_ms_dz[i] += dz;
+    }
     LeaveCriticalSection(&g_in_lock);
 }
 
@@ -1302,6 +1315,7 @@ std::string handle(const std::string& line) {
             di_button(b, false);
             mouse(w, upm, x, y, 0);
         } else {
+            di_wheel(extra);
             PostMessageA(w, WM_MOUSEWHEEL, MAKEWPARAM(0, (short)extra), MAKELPARAM(sp.x, sp.y));
         }
         return "ok";
