@@ -318,6 +318,24 @@ inline size_t insn_len(const u8* p) {
     if (op >= 0xB0 && op <= 0xB7) return i + 2;                      // mov r8, imm8
     if (op == 0xE8 || op == 0xE9) return i + 5;                      // call/jmp rel32 (relocated below)
     if (op == 0xEB) return i + 2;                                    // jmp rel8
+    // SSE two-byte ModRM forms MSVC emits in prologues (F3 0F 10 45 08 = movss xmm0,[ebp+8] begins the float-argument
+    // Gamebryo updates - the time_scale plugin). No immediate, nothing relative: copied as they are.
+    if (op == 0x0F) {
+        const u8 op2 = p[i + 1];
+        const bool sse = op2 == 0x10 || op2 == 0x11 || op2 == 0x28 || op2 == 0x29 || op2 == 0x2A || op2 == 0x2C ||
+                         op2 == 0x2D || op2 == 0x2E || op2 == 0x2F || op2 == 0x51 || op2 == 0x54 || op2 == 0x57 ||
+                         op2 == 0x58 || op2 == 0x59 || op2 == 0x5A || op2 == 0x5C || op2 == 0x5E || op2 == 0x6E ||
+                         op2 == 0x7E || op2 == 0xD6;
+        if (!sse) return 0;
+        size_t k = i + 2;
+        const u8 m2 = p[k++];
+        const u8 md2 = m2 >> 6, rm2 = m2 & 7;
+        if (md2 != 3 && rm2 == 4) k++;
+        if (md2 == 1) k += 1;
+        else if (md2 == 2) k += 4;
+        else if (md2 == 0 && rm2 == 5) k += 4;
+        return k;
+    }
 
     const bool has_modrm =
         (op <= 0x3F && (op & 7) <= 3) || op == 0x84 || op == 0x85 || op == 0x63 ||

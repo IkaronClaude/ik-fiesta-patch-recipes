@@ -98,6 +98,9 @@
   "WorldListCount": "0x00C31584",
   "PgWinMouseX": "0x00D1B778",
   "NetAddNetMsg": "0x00890670",
-  "NetSendNetMsg": "0x00890B00"
+  "NetSendNetMsg": "0x00890B00",
+  "NiAVObjectUpdate": "0x009838E0",
+  "NiAVObjectUpdateSelected": "0x00983BC0",
+  "NiActorManagerUpdate": "0x00926700"
  }
 }

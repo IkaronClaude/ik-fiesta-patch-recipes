@@ -650,6 +650,27 @@
       "kind": "code",
       "use": "clienthook.h",
       "note": "PgNet::SendNetMsg(data, len) (2016 0x8C7A40): thiscall, ret 8 - appends the last part and sends; the packet starts with its opcode"
+    },
+    {
+      "name": "NiAVObjectUpdate",
+      "va": "0x009838E0",
+      "kind": "code",
+      "use": "time_scale",
+      "note": "NiAVObject::Update(float fTime, bool bUpdateControllers), thiscall ret 8 (2016 0x821490): vfunc +0x50 UpdateDownwardPass, then the parent's +0x84"
+    },
+    {
+      "name": "NiAVObjectUpdateSelected",
+      "va": "0x00983BC0",
+      "kind": "code",
+      "use": "time_scale",
+      "note": "NiAVObject::UpdateSelected(float fTime), thiscall ret 4 (2016 0x8214D0): vfunc +0x54"
+    },
+    {
+      "name": "NiActorManagerUpdate",
+      "va": "0x00926700",
+      "kind": "code",
+      "use": "time_scale",
+      "note": "NiActorManager::Update(float fTime), thiscall ret 4 (2016 0x7C91F0): stores fTime at +0x20, ProcessCallbacks"
     }
   ]
 }
