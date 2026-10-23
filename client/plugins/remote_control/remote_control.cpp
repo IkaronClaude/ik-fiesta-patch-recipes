@@ -798,11 +798,34 @@ DWORD WINAPI auto_login(LPVOID) {
         HWND top = game_window();
         if (top && key_window(top) != input_window(top)) {
             Sleep(300);                  // let the form finish building around the field
+            HWND name = key_window(top);
             type_into_focus(top, g_login[0]);
             wait_frames(2);              // the characters land before the Tab moves the focus
-            tap(top, VK_TAB);
-            wait_frames(1);              // the password field has the focus from the next frame
-            type_into_focus(top, g_login[1]);
+            // the password goes in only once the focus has really LEFT the name field: typing on a frame count alone
+            // posted it to the name field, or nowhere (operator 2026-10-23: "botgatebotgate", then an empty password)
+            HWND pass = name;
+            int tabs = 0;
+            // the Tab hands the focus to the render window first, the password PgEditWin a frame or more later: wait for
+            // an edit field OTHER than the name (key_window answers the render window while no edit has the focus)
+            auto in_pass = [&] { pass = key_window(top); return pass != name && pass != input_window(top); };
+            for (; tabs < 4 && !in_pass(); tabs++) {   // a Tab can take seconds while the screen still loads
+                tap(top, VK_TAB);
+                for (int w = 0; w < 150 && !in_pass(); w++) Sleep(20);
+            }
+            {
+                char a[64] = {0}, b[64] = {0};
+                RECT ra{}, rb{};
+                GetWindowRect(name, &ra), GetWindowRect(pass, &rb);
+                GetClassNameA(name, a, 63), GetClassNameA(pass, b, 63);
+                hook::log("-stdinlogin: name %p %s (%ld,%ld) -> after %d Tab %p %s (%ld,%ld)", name, a, ra.left,
+                          ra.top, tabs, pass, b, rb.left, rb.top);
+            }
+            if (pass == name || pass == input_window(top)) {
+                hook::log("-stdinlogin: the Tab never moved the focus to the password field - not submitting");
+                SecureZeroMemory(g_login, sizeof(g_login));
+                return 0;
+            }
+            for (const char* p = g_login[1]; *p; p++) PostMessageA(pass, WM_CHAR, (unsigned char)*p, 1);
             wait_frames(2);
             tap(top, VK_RETURN);
             hook::log("-stdinlogin: login form filled and submitted after %d ms", i * 100);

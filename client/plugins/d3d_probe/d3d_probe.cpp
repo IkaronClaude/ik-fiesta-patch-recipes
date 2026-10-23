@@ -198,14 +198,14 @@ HRESULT __stdcall my_draw_idx(IDirect3DDevice9* dev, D3DPRIMITIVETYPE t, INT bas
     static int wa = hook::config_int("watch_after", 0, "config");
     static DWORD t0 = GetTickCount();
     if (wa > 0 && GetTickCount() - t0 < (DWORD)wa * 1000) hit = false;
-    // [config] frame_dump=1: once watch_after has passed, EVERY draw for 50 ms (a frame or few), up to 500 - a whole
-    // frame's state to find a draw by its texture / material
+    // [config] frame_dump=N: once watch_after has passed, the next N draws, every one (a whole frame's state, to find a
+    // draw by its texture / material)
     static int fd = hook::config_int("frame_dump", 0, "config");
     static DWORD fd_start = 0;
     static int fd_lines = 0;
     if (fd && (wa <= 0 || GetTickCount() - t0 >= (DWORD)wa * 1000)) {
         if (!fd_start) fd_start = GetTickCount(), hook::logf("frame_dump: start");
-        if (GetTickCount() - fd_start < 50 && fd_lines < 500) {
+        if (fd_lines < fd) {
             fd_lines++;
             dump_draw(dev, prims);
         }
