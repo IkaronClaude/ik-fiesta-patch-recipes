@@ -153,7 +153,15 @@ void dump_draw(IDirect3DDevice9* dev, UINT prims) {
         dev->GetRenderState((D3DRENDERSTATETYPE)r.id, &v);
         n += wsprintfA(line + n, " %s %lx", r.n, v);
     }
-    hook::logf("%s", line);
+    char le[64];
+    int ln = 0;
+    for (DWORD li = 0; li < 8; li++) {
+        BOOL on = FALSE;
+        dev->GetLightEnable(li, &on);
+        le[ln++] = on ? (char)('0' + li) : '.';
+    }
+    le[ln] = 0;
+    hook::logf("%s | lights %s", line, le);
     for (DWORD st = 0; st < 4; st++) {
         DWORD cop = 0, c1 = 0, c2 = 0, aop = 0, a1 = 0, a2 = 0, tci = 0, res = 0;
         dev->GetTextureStageState(st, D3DTSS_COLOROP, &cop);
@@ -183,6 +191,25 @@ HRESULT __stdcall my_draw_idx(IDirect3DDevice9* dev, D3DPRIMITIVETYPE t, INT bas
     const Stage& s0 = g_st[0];
     bool hit = g_watch_rot && s0.m[0] < -0.5f && (!ww || (int)s0.w == ww) && (!wh || (int)s0.h == wh) &&
                (wtu == -99999 || (int)(s0.m[4] * 1000.0f + 0.5f) == wtu);
+    // [config] watch_minprims=N: any draw of at least N primitives (the terrain chunks, big map objects)
+    static int wmp = hook::config_int("watch_minprims", 0, "config");
+    if (wmp > 0 && (int)prims >= wmp) hit = true;
+    // [config] watch_after=S: no draw dumps for the first S seconds after load (login / character select)
+    static int wa = hook::config_int("watch_after", 0, "config");
+    static DWORD t0 = GetTickCount();
+    if (wa > 0 && GetTickCount() - t0 < (DWORD)wa * 1000) hit = false;
+    // [config] frame_dump=1: once watch_after has passed, EVERY draw for 50 ms (a frame or few), up to 500 - a whole
+    // frame's state to find a draw by its texture / material
+    static int fd = hook::config_int("frame_dump", 0, "config");
+    static DWORD fd_start = 0;
+    static int fd_lines = 0;
+    if (fd && (wa <= 0 || GetTickCount() - t0 >= (DWORD)wa * 1000)) {
+        if (!fd_start) fd_start = GetTickCount(), hook::logf("frame_dump: start");
+        if (GetTickCount() - fd_start < 50 && fd_lines < 500) {
+            fd_lines++;
+            dump_draw(dev, prims);
+        }
+    }
     if (hit && g_draw_lines < 60) {
         g_draw_lines++;
         dump_draw(dev, prims);

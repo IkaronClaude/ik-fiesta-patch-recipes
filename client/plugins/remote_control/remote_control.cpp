@@ -775,13 +775,17 @@ void read_stdin_login() {
     hook::log("-stdinlogin: %s", g_stdin_login ? "account read" : "stdin had no user/password lines");
 }
 
+// held across two PRESENTED frames, then one more frame for its effect, as the `key` command: a fixed 150 ms missed
+// the Tab whenever the client stalled loading the login screen - the password went into the name field
+// ("botgatebotgate", operator 2026-10-23)
 void tap(HWND top, UINT vk) {
     HWND kw = key_window(top);
     if (kw != input_window(top)) send_key(kw, vk, 1);
     di_key(vk, true);
-    Sleep(150);
+    wait_frames(2);
     di_key(vk, false);
     if (kw != input_window(top)) send_key(kw, vk, 2);
+    wait_frames(1);
 }
 
 void type_into_focus(HWND top, const char* t) {
@@ -795,11 +799,11 @@ DWORD WINAPI auto_login(LPVOID) {
         if (top && key_window(top) != input_window(top)) {
             Sleep(300);                  // let the form finish building around the field
             type_into_focus(top, g_login[0]);
-            Sleep(100);
+            wait_frames(2);              // the characters land before the Tab moves the focus
             tap(top, VK_TAB);
-            Sleep(100);
+            wait_frames(1);              // the password field has the focus from the next frame
             type_into_focus(top, g_login[1]);
-            Sleep(100);
+            wait_frames(2);
             tap(top, VK_RETURN);
             hook::log("-stdinlogin: login form filled and submitted after %d ms", i * 100);
             SecureZeroMemory(g_login, sizeof(g_login));
