@@ -11,6 +11,7 @@
 //     size                          -> ok <w> <h>            the client area
 //     key <vk> [press|down|up]      a virtual key (decimal or 0x..), default press = down + up
 //     text <string...>              WM_CHAR per character (a chat line, a login name)
+//     say <line...>                 a chat line sent: Enter, wait for the chat input, type, Enter (GM commands)
 //     move <x> <y>                  WM_MOUSEMOVE at client (x, y)
 //     click <x> <y> [left|right]    move + button down + up
 //     down <x> <y> [left|right] / up <x> <y> [left|right]   (drags, held camera turns)
@@ -451,6 +452,19 @@ bool d3d_shot(const char* path) {
     return g_cap_ok;
 }
 
+// wait until the game has presented `n` more frames (input is read once per frame: a key must stay down across a frame
+// the game polls, and a window opened by a key - the chat input after Enter - exists only a frame later). Falls back
+// to time when Present is not hooked; gives up after `timeout_ms`
+void wait_frames(int n, DWORD timeout_ms = 3000) {
+    if (!g_present) {
+        Sleep(150 * n);
+        return;
+    }
+    LONG target = g_presents + n;
+    DWORD t0 = GetTickCount();
+    while (g_presents < target && GetTickCount() - t0 < timeout_ms) Sleep(5);
+}
+
 // ---- input: DirectInput 8 -----------------------------------------------------------------------------------------------
 // The client reads keyboard and mouse through DirectInput 8 (DINPUT8 DirectInput8Create import), the cursor through
 // GetCursorPos and buttons partly through GetAsyncKeyState - posted window messages reach only its edit controls
@@ -486,6 +500,7 @@ bool is_mouse(IDirectInputDevice8A* d) {
 }
 CRITICAL_SECTION g_in_lock;
 unsigned char g_keys[256] = {0};             // DIK -> 0x80 held
+volatile bool g_remote_used = false;         // set by the first injected key / click: from then on keep the devices "healthy"
 unsigned char g_buttons[8] = {0};            // mouse buttons held
 bool g_cursor_on = false;                    // GetCursorPos answers g_cursor
 POINT g_cursor{0, 0};
@@ -517,7 +532,10 @@ HRESULT STDMETHODCALLTYPE my_get_state(IDirectInputDevice8A* dev, DWORD cb, LPVO
     EnterCriticalSection(&g_in_lock);
     bool any = g_cursor_on;
     for (int i = 0; i < 256 && !any; i++) any = g_keys[i] != 0;
-    if (FAILED(hr) && any && data) {
+    // an unacquired device (the client window not foreground - the operator watching another window) fails EVERY read;
+    // between two injected keys the game then saw a lost keyboard and missed the next press edge (2026-10-23: Enter did
+    // not open the chat, "state kb N (failed N)"). Once remote input has been used, a failed read is a healthy, empty one
+    if (FAILED(hr) && (any || g_remote_used) && data && (hr == DIERR_NOTACQUIRED || hr == DIERR_INPUTLOST || any)) {
         memset(data, 0, cb);
         hr = DI_OK;
     }
@@ -643,6 +661,7 @@ UINT dik_of(UINT vk) {
 void di_key(UINT vk, bool down) {
     UINT dik = dik_of(vk);
     if (!dik) return;
+    g_remote_used = true;
     EnterCriticalSection(&g_in_lock);
     g_keys[dik] = down ? 0x80 : 0;
     for (int i = 0; i < g_nkb; i++) push_event(g_kb_q[i], dik, down ? 0x80 : 0);
@@ -1215,14 +1234,39 @@ std::string handle(const std::string& line) {
         HWND kw = key_window(w);
         if (kw != input_window(w)) send_key(kw, vk, m == 0 ? 1 : m);
         if (m != 2) di_key(vk, true);
-        if (m == 0) Sleep(150);                  // held across a frame or two (the client draws ~10 fps here)
+        if (m == 0) wait_frames(2);              // held across two presented frames (one the game surely polled)
         if (m != 1) di_key(vk, false);
         if (m == 0 && kw != input_window(w)) send_key(kw, vk, 2);
+        if (m == 0) wait_frames(1);              // its effect (a window opening) is there before the next command
         return "ok";
     }
     if (c == "text") {
+        wait_frames(1);                          // a field focused by the previous command takes it from the next frame
         HWND kw = key_window(w);
         for (const char* p = rest; *p; p++) PostMessageA(kw, WM_CHAR, (unsigned char)*p, 1);
+        wait_frames(1);
+        return "ok";
+    }
+    // say <line>: a chat line (GM commands too) as a player types it - Enter opens the chat input a frame later, the
+    // text goes into that edit once it is open, Enter sends
+    if (c == "say") {
+        auto press = [&](UINT vk) {
+            HWND k = key_window(w);
+            if (k != input_window(w)) send_key(k, vk, 1);
+            di_key(vk, true);
+            wait_frames(2);
+            di_key(vk, false);
+            if (k != input_window(w)) send_key(k, vk, 2);
+            wait_frames(1);
+        };
+        // the 2026 chat input is the game's own edit (no Win32 focus to watch): characters posted to the render window
+        // land in it once it is open - Enter, then three presented frames for it to open
+        press(VK_RETURN);
+        wait_frames(3);
+        HWND kw = key_window(w);
+        for (const char* p = rest; *p; p++) PostMessageA(kw, WM_CHAR, (unsigned char)*p, 1);
+        wait_frames(2);
+        press(VK_RETURN);
         return "ok";
     }
     int x = 0, y = 0;

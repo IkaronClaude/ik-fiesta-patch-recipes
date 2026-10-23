@@ -34,7 +34,7 @@ machine may not reach.
 
 ## Control protocol (one line per command, one line per reply)
 
-`ping`, `size`, `stats`, `key <vk> [press|down|up]`, `text <string>`, `move|click|down|up <x> <y> [left|right]`,
+`ping`, `size`, `stats`, `key <vk> [press|down|up]`, `text <string>`, `say <chat line>`, `move|click|down|up <x> <y> [left|right]`,
 `wheel <x> <y> <delta>`, `shot <path.bmp>`, `peek <va> [len]` (2026 VA, rebased; `*<addr>` for an absolute one),
 `wins [class]` (the window tree: class, x, y, w, h, object pointer), `char <slot>` (pick and enter that character at
 the next character select - e.g. after Esc -> Select Character).
@@ -45,6 +45,12 @@ the next character select - e.g. after Esc -> Select Character).
   (code-detoured: a vtable swap only caught a handful of calls); the back buffer is saved on the next present.
   Works with the window behind others. Fallbacks: PrintWindow on a worker thread, then a screen BitBlt.
 - **Input:** the game reads DirectInput8, not window messages (only its PgEditWin edit controls take `WM_CHAR`).
+- **Timing is in presented frames:** `key` holds a key across two frames and waits one more (a window it opens exists
+  then); `text` waits a frame first. `say` = Enter, three frames for the chat input to open, the text, Enter - one
+  command for a chat line / GM command (2026-10-23: Enter + `text` sent back to back lost the text).
+- **Unfocused window:** DirectInput reads of an unacquired device fail (`stats`: `state kb N (failed N)`); once remote
+  input is used, failed keyboard and mouse reads report a healthy, empty device, so injected keys work while the
+  operator has another window in front.
   `DirectInput8Create` (IAT) -> `CreateDevice` (vtable) -> `GetDeviceState` / `GetDeviceData` (code detours) merge the
   injected keys / buttons and queue per-device events; `GetCursorPos` / `GetAsyncKeyState` (IAT) answer the injected
   cursor. Each injected move also reports its relative motion.
