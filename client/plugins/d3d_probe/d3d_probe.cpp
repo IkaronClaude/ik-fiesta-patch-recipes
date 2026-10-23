@@ -222,6 +222,14 @@ void dump_draw(IDirect3DDevice9* dev, UINT prims) {
                    l.Diffuse.r, l.Diffuse.g, l.Diffuse.b, l.Ambient.r, l.Ambient.g, l.Ambient.b, l.Direction.x,
                    l.Direction.y, l.Direction.z);
     }
+    {   // the material the fixed-function lighting multiplies (with the colour sources above deciding which vertex colour
+        // replaces which term)
+        D3DMATERIAL9 m{};
+        if (SUCCEEDED(dev->GetMaterial(&m)))
+            hook::logf("  material diffuse %.3f %.3f %.3f %.3f ambient %.3f %.3f %.3f emissive %.3f %.3f %.3f", m.Diffuse.r,
+                       m.Diffuse.g, m.Diffuse.b, m.Diffuse.a, m.Ambient.r, m.Ambient.g, m.Ambient.b, m.Emissive.r,
+                       m.Emissive.g, m.Emissive.b);
+    }
     if (vs) vs->Release();
     if (ps) ps->Release();
     for (DWORD st = 0; st < 4; st++) {
