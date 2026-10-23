@@ -22,12 +22,41 @@ namespace {
 typedef HRESULT(__stdcall* SetTransformFn)(IDirect3DDevice9*, D3DTRANSFORMSTATETYPE, const D3DMATRIX*);
 typedef HRESULT(__stdcall* SetTextureFn)(IDirect3DDevice9*, DWORD, IDirect3DBaseTexture9*);
 typedef HRESULT(__stdcall* SetSamplerFn)(IDirect3DDevice9*, DWORD, D3DSAMPLERSTATETYPE, DWORD);
+typedef HRESULT(__stdcall* SetLightFn)(IDirect3DDevice9*, DWORD, const D3DLIGHT9*);
+typedef HRESULT(__stdcall* SetRSFn)(IDirect3DDevice9*, D3DRENDERSTATETYPE, DWORD);
 typedef HRESULT(__stdcall* DrawIdxFn)(IDirect3DDevice9*, D3DPRIMITIVETYPE, INT, UINT, UINT, UINT, UINT);
 
 SetTransformFn g_set_transform = nullptr;
 SetTextureFn g_set_texture = nullptr;
 SetSamplerFn g_set_sampler = nullptr;
 DrawIdxFn g_draw_idx = nullptr;
+SetLightFn g_set_light = nullptr;
+SetRSFn g_set_rs = nullptr;
+int g_log_lights = 0, g_light_lines = 0;
+D3DLIGHT9 g_lights[8];
+DWORD g_ambient = 0xFFFFFFFF, g_fogcol = 0xFFFFFFFF;
+
+// [config] log_lights=1: every light (index < 8) set with new values, the ambient and fog colour render states on
+// change - the scene lighting the official feeds D3D (terrain / object colour parity)
+HRESULT __stdcall my_set_light(IDirect3DDevice9* dev, DWORD i, const D3DLIGHT9* l) {
+    if (g_log_lights && l && i < 8 && std::memcmp(&g_lights[i], l, sizeof *l) != 0 && g_light_lines < 400) {
+        g_lights[i] = *l;
+        g_light_lines++;
+        hook::logf("light %lu type %d diffuse %.3f %.3f %.3f ambient %.3f %.3f %.3f specular %.3f %.3f %.3f dir %.3f %.3f %.3f pos %.1f %.1f %.1f range %g att %g %g %g",
+                   i, (int)l->Type, l->Diffuse.r, l->Diffuse.g, l->Diffuse.b, l->Ambient.r, l->Ambient.g, l->Ambient.b,
+                   l->Specular.r, l->Specular.g, l->Specular.b, l->Direction.x, l->Direction.y, l->Direction.z,
+                   l->Position.x, l->Position.y, l->Position.z, l->Range, l->Attenuation0, l->Attenuation1, l->Attenuation2);
+    }
+    return g_set_light(dev, i, l);
+}
+
+HRESULT __stdcall my_set_rs(IDirect3DDevice9* dev, D3DRENDERSTATETYPE t, DWORD v) {
+    if (g_log_lights && g_light_lines < 400) {
+        if (t == D3DRS_AMBIENT && v != g_ambient) g_ambient = v, g_light_lines++, hook::logf("rs ambient %08lx", v);
+        if (t == D3DRS_FOGCOLOR && v != g_fogcol) g_fogcol = v, g_light_lines++, hook::logf("rs fogcolor %08lx", v);
+    }
+    return g_set_rs(dev, t, v);
+}
 int g_watch_rot = 0, g_draw_lines = 0;
 
 struct Stage {
@@ -185,13 +214,17 @@ void ensure_patched(const char* why) {
     if (!g_dev) return;
     void** vt = *(void***)g_dev;
     if (vt[44] == (void*)my_set_transform && vt[65] == (void*)my_set_texture && vt[69] == (void*)my_set_sampler &&
-        vt[82] == (void*)my_draw_idx) return;
+        vt[82] == (void*)my_draw_idx && vt[51] == (void*)my_set_light && vt[57] == (void*)my_set_rs) return;
+    void* o51 = vt[51] == (void*)my_set_light ? (void*)g_set_light : vt[51];
+    void* o57 = vt[57] == (void*)my_set_rs ? (void*)g_set_rs : vt[57];
     void* o82 = vt[82] == (void*)my_draw_idx ? (void*)g_draw_idx : vt[82];
     void* o44 = vt[44] == (void*)my_set_transform ? (void*)g_set_transform : vt[44];
     void* o65 = vt[65] == (void*)my_set_texture ? (void*)g_set_texture : vt[65];
     void* o69 = vt[69] == (void*)my_set_sampler ? (void*)g_set_sampler : vt[69];
     DWORD old;
     if (!VirtualProtect(&vt[44], 40 * sizeof(void*), PAGE_EXECUTE_READWRITE, &old)) return;
+    g_set_light = (SetLightFn)o51, vt[51] = (void*)my_set_light;
+    g_set_rs = (SetRSFn)o57, vt[57] = (void*)my_set_rs;
     g_draw_idx = (DrawIdxFn)o82, vt[82] = (void*)my_draw_idx;
     g_set_transform = (SetTransformFn)o44, g_set_texture = (SetTextureFn)o65, g_set_sampler = (SetSamplerFn)o69;
     vt[44] = (void*)my_set_transform, vt[65] = (void*)my_set_texture, vt[69] = (void*)my_set_sampler;
@@ -230,6 +263,7 @@ DWORD WINAPI stats(LPVOID) {
 void setup_dump() {
     g_dump = hook::config_int("dump_textures", 0, "config");
     g_watch_rot = hook::config_int("watch_rot", 0, "config");
+    g_log_lights = hook::config_int("log_lights", 0, "config");
     g_dump_max = hook::config_int("dump_max", 3000, "config");
     if (!g_dump) return;
     HMODULE x = LoadLibraryA("d3dx9_43.dll");
