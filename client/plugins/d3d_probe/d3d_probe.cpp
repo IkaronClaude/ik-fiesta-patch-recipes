@@ -22,10 +22,13 @@ namespace {
 typedef HRESULT(__stdcall* SetTransformFn)(IDirect3DDevice9*, D3DTRANSFORMSTATETYPE, const D3DMATRIX*);
 typedef HRESULT(__stdcall* SetTextureFn)(IDirect3DDevice9*, DWORD, IDirect3DBaseTexture9*);
 typedef HRESULT(__stdcall* SetSamplerFn)(IDirect3DDevice9*, DWORD, D3DSAMPLERSTATETYPE, DWORD);
+typedef HRESULT(__stdcall* DrawIdxFn)(IDirect3DDevice9*, D3DPRIMITIVETYPE, INT, UINT, UINT, UINT, UINT);
 
 SetTransformFn g_set_transform = nullptr;
 SetTextureFn g_set_texture = nullptr;
 SetSamplerFn g_set_sampler = nullptr;
+DrawIdxFn g_draw_idx = nullptr;
+int g_watch_rot = 0, g_draw_lines = 0;
 
 struct Stage {
     IDirect3DBaseTexture9* tex = nullptr;
@@ -88,11 +91,11 @@ HRESULT __stdcall my_set_transform(IDirect3DDevice9* dev, D3DTRANSFORMSTATETYPE 
     InterlockedIncrement(&g_n_xf);
     int stage = (int)state - (int)D3DTS_TEXTURE0;
     if (stage >= 0 && stage < 8) InterlockedIncrement(&g_n_xf_tex);
-    if (m && stage >= 0 && stage < 8 && g_lines < g_limit) {
+    if (m && stage >= 0 && stage < 8) {          // the stage's matrix is always kept (watch_rot reads it); logged up to limit
         Stage& s = g_st[stage];
         float v[6] = {m->_11, m->_12, m->_21, m->_22, m->_31, m->_32};
         bool moved = std::memcmp(v, s.m, sizeof v) != 0;
-        if (moved && (v[4] != 0.0f || v[5] != 0.0f)) {
+        if (moved && (v[4] != 0.0f || v[5] != 0.0f) && g_lines < g_limit) {
             g_lines++;
             hook::logf("tt stage %d tick %lu tex %p %ux%u fmt %lu addr %lu/%lu | %.4f %.4f %.4f %.4f | 31 %.4f 32 %.4f | 41 %.4f 42 %.4f",
                        stage, GetTickCount(), (void*)s.tex, s.w, s.h, s.fmt, s.addr_u, s.addr_v, m->_11, m->_12, m->_21,
@@ -101,6 +104,61 @@ HRESULT __stdcall my_set_transform(IDirect3DDevice9* dev, D3DTRANSFORMSTATETYPE 
         std::memcpy(s.m, v, sizeof v);
     }
     return g_set_transform(dev, state, m);
+}
+
+// [config] watch_rot=1: every draw whose stage-0 texture matrix is rotated (_11 < 0 - Frost Nova's crystals) logs
+// its whole fixed-function state: blend / alpha test / lighting / texture factor / material, stages 0..3 ops,
+// arguments, texture sizes - what our material must reproduce
+void dump_draw(IDirect3DDevice9* dev, UINT prims) {
+    static const struct { DWORD id; const char* n; } rs[] = {
+        {D3DRS_ALPHABLENDENABLE, "blend"}, {D3DRS_SRCBLEND, "src"}, {D3DRS_DESTBLEND, "dst"}, {D3DRS_BLENDOP, "op"},
+        {D3DRS_ALPHATESTENABLE, "atest"}, {D3DRS_ALPHAREF, "aref"}, {D3DRS_ALPHAFUNC, "afunc"}, {D3DRS_ZENABLE, "z"},
+        {D3DRS_ZWRITEENABLE, "zw"}, {D3DRS_LIGHTING, "light"}, {D3DRS_TEXTUREFACTOR, "tfactor"},
+        {D3DRS_DIFFUSEMATERIALSOURCE, "dsrc"}, {D3DRS_EMISSIVEMATERIALSOURCE, "esrc"},
+        {D3DRS_AMBIENTMATERIALSOURCE, "asrc"}, {D3DRS_COLORVERTEX, "colvtx"}, {D3DRS_AMBIENT, "ambient"},
+        {D3DRS_CULLMODE, "cull"}, {D3DRS_FOGENABLE, "fog"}, {D3DRS_SPECULARENABLE, "spec"}};
+    char line[1024];
+    int n = wsprintfA(line, "draw prims %u |", prims);
+    for (const auto& r : rs) {
+        DWORD v = 0;
+        dev->GetRenderState((D3DRENDERSTATETYPE)r.id, &v);
+        n += wsprintfA(line + n, " %s %lx", r.n, v);
+    }
+    hook::logf("%s", line);
+    for (DWORD st = 0; st < 4; st++) {
+        DWORD cop = 0, c1 = 0, c2 = 0, aop = 0, a1 = 0, a2 = 0, tci = 0, res = 0;
+        dev->GetTextureStageState(st, D3DTSS_COLOROP, &cop);
+        if (cop == D3DTOP_DISABLE && st > 0) break;
+        dev->GetTextureStageState(st, D3DTSS_COLORARG1, &c1);
+        dev->GetTextureStageState(st, D3DTSS_COLORARG2, &c2);
+        dev->GetTextureStageState(st, D3DTSS_ALPHAOP, &aop);
+        dev->GetTextureStageState(st, D3DTSS_ALPHAARG1, &a1);
+        dev->GetTextureStageState(st, D3DTSS_ALPHAARG2, &a2);
+        dev->GetTextureStageState(st, D3DTSS_TEXCOORDINDEX, &tci);
+        dev->GetTextureStageState(st, D3DTSS_RESULTARG, &res);
+        Stage& s = g_st[st];
+        hook::logf("  stage %lu tex %p %ux%u | colorop %lu (%lx, %lx) alphaop %lu (%lx, %lx) tci %lx res %lx | m %.3f %.3f %.3f %.3f t %.3f %.3f",
+                   st, (void*)s.tex, s.w, s.h, cop, c1, c2, aop, a1, a2, tci, res, s.m[0], s.m[1], s.m[2], s.m[3], s.m[4], s.m[5]);
+    }
+    D3DMATERIAL9 mt;
+    if (SUCCEEDED(dev->GetMaterial(&mt)))
+        hook::logf("  material diffuse %.3f %.3f %.3f %.3f ambient %.3f %.3f %.3f emissive %.3f %.3f %.3f", mt.Diffuse.r,
+                   mt.Diffuse.g, mt.Diffuse.b, mt.Diffuse.a, mt.Ambient.r, mt.Ambient.g, mt.Ambient.b, mt.Emissive.r,
+                   mt.Emissive.g, mt.Emissive.b);
+}
+
+HRESULT __stdcall my_draw_idx(IDirect3DDevice9* dev, D3DPRIMITIVETYPE t, INT base, UINT minv, UINT nv, UINT start, UINT prims) {
+    // [config] watch_w / watch_h narrow it to a stage-0 texture size; watch_tu to a U translation (x 1000)
+    static int ww = hook::config_int("watch_w", 0, "config"), wh = hook::config_int("watch_h", 0, "config");
+    static int wtu = hook::config_int("watch_tu", -99999, "config");
+    const Stage& s0 = g_st[0];
+    bool hit = g_watch_rot && s0.m[0] < -0.5f && (!ww || (int)s0.w == ww) && (!wh || (int)s0.h == wh) &&
+               (wtu == -99999 || (int)(s0.m[4] * 1000.0f + 0.5f) == wtu);
+    if (hit && g_draw_lines < 60) {
+        g_draw_lines++;
+        dump_draw(dev, prims);
+    }
+    return g_draw_idx(dev, t, base, minv, nv, start, prims);
 }
 
 bool patch(void** vt, int idx, void* fn, void** orig) {
@@ -126,17 +184,22 @@ IDirect3DDevice9* g_dev = nullptr;
 void ensure_patched(const char* why) {
     if (!g_dev) return;
     void** vt = *(void***)g_dev;
-    if (vt[44] == (void*)my_set_transform && vt[65] == (void*)my_set_texture && vt[69] == (void*)my_set_sampler) return;
+    if (vt[44] == (void*)my_set_transform && vt[65] == (void*)my_set_texture && vt[69] == (void*)my_set_sampler &&
+        vt[82] == (void*)my_draw_idx) return;
+    void* o82 = vt[82] == (void*)my_draw_idx ? (void*)g_draw_idx : vt[82];
     void* o44 = vt[44] == (void*)my_set_transform ? (void*)g_set_transform : vt[44];
     void* o65 = vt[65] == (void*)my_set_texture ? (void*)g_set_texture : vt[65];
     void* o69 = vt[69] == (void*)my_set_sampler ? (void*)g_set_sampler : vt[69];
     DWORD old;
-    if (!VirtualProtect(&vt[44], 26 * sizeof(void*), PAGE_EXECUTE_READWRITE, &old)) return;
+    if (!VirtualProtect(&vt[44], 40 * sizeof(void*), PAGE_EXECUTE_READWRITE, &old)) return;
+    g_draw_idx = (DrawIdxFn)o82, vt[82] = (void*)my_draw_idx;
     g_set_transform = (SetTransformFn)o44, g_set_texture = (SetTextureFn)o65, g_set_sampler = (SetSamplerFn)o69;
     vt[44] = (void*)my_set_transform, vt[65] = (void*)my_set_texture, vt[69] = (void*)my_set_sampler;
-    VirtualProtect(&vt[44], 26 * sizeof(void*), old, &old);
-    hook::logf("d3d_probe: (re)patched vtable %p (%s): SetTransform %p SetTexture %p SetSamplerState %p", (void*)vt, why,
-               o44, o65, o69);
+    VirtualProtect(&vt[44], 40 * sizeof(void*), old, &old);
+    static int told = 0;
+    if (++told <= 3 || told % 500 == 0)
+        hook::logf("d3d_probe: (re)patched vtable %p (%s, #%d): SetTransform %p SetTexture %p SetSamplerState %p", (void*)vt, why,
+               told, o44, o65, o69);
 }
 
 HRESULT __stdcall my_create_device(IDirect3D9* d, UINT a, D3DDEVTYPE t, HWND w, DWORD f, D3DPRESENT_PARAMETERS* pp,
@@ -155,8 +218,10 @@ HRESULT __stdcall my_create_device(IDirect3D9* d, UINT a, D3DDEVTYPE t, HWND w, 
 
 DWORD WINAPI stats(LPVOID) {
     for (;;) {
-        Sleep(5000);
-        ensure_patched("check");
+        for (int i = 0; i < 100; i++) {          // 5 s of 50 ms checks: the other layer restores the entries often
+            Sleep(50);
+            ensure_patched("check");
+        }
         hook::logf("d3d_probe: calls SetTexture %ld SetSamplerState %ld SetTransform %ld (texture stages %ld)", g_n_tex,
                    g_n_samp, g_n_xf, g_n_xf_tex);
     }
@@ -164,6 +229,7 @@ DWORD WINAPI stats(LPVOID) {
 
 void setup_dump() {
     g_dump = hook::config_int("dump_textures", 0, "config");
+    g_watch_rot = hook::config_int("watch_rot", 0, "config");
     g_dump_max = hook::config_int("dump_max", 3000, "config");
     if (!g_dump) return;
     HMODULE x = LoadLibraryA("d3dx9_43.dll");
