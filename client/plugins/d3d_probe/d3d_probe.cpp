@@ -14,6 +14,9 @@
 
 #include <windows.h>
 #include <d3d9.h>
+#include <cmath>
+#include <map>
+#include <cstdlib>
 
 #include <cstring>
 
@@ -25,6 +28,9 @@ typedef HRESULT(__stdcall* SetSamplerFn)(IDirect3DDevice9*, DWORD, D3DSAMPLERSTA
 typedef HRESULT(__stdcall* SetLightFn)(IDirect3DDevice9*, DWORD, const D3DLIGHT9*);
 typedef HRESULT(__stdcall* LightEnableFn)(IDirect3DDevice9*, DWORD, BOOL);
 typedef HRESULT(__stdcall* SetRSFn)(IDirect3DDevice9*, D3DRENDERSTATETYPE, DWORD);
+typedef HRESULT(__stdcall* DrawPrimFn)(IDirect3DDevice9*, D3DPRIMITIVETYPE, UINT, UINT);
+typedef HRESULT(__stdcall* DrawPrimUPFn)(IDirect3DDevice9*, D3DPRIMITIVETYPE, UINT, const void*, UINT);
+typedef HRESULT(__stdcall* DrawIdxUPFn)(IDirect3DDevice9*, D3DPRIMITIVETYPE, UINT, UINT, UINT, const void*, D3DFORMAT, const void*, UINT);
 typedef HRESULT(__stdcall* DrawIdxFn)(IDirect3DDevice9*, D3DPRIMITIVETYPE, INT, UINT, UINT, UINT, UINT);
 
 SetTransformFn g_set_transform = nullptr;
@@ -240,7 +246,106 @@ void dump_draw(IDirect3DDevice9* dev, UINT prims) {
                    mt.Emissive.g, mt.Emissive.b);
 }
 
+// at most 3 readbacks a texture (walls drawn every frame filled the budget before a particle came by), 2000 in all
+bool vb_first_few(const void* tex) {
+    static std::map<const void*, int> seen;
+    static int total = 0;
+    if (total >= 2000 || ++seen[tex] > 3) return false;
+    total++;
+    return true;
+}
+
+// [config] vb_w / vb_h: for draws whose stage-0 texture is that size (up to 40), the world / view matrices and the first
+// vertices' positions read back from stream 0 - where the official puts a particle / sprite (char select confetti)
+void dump_vb(IDirect3DDevice9* dev, INT base, UINT minv, UINT nv, UINT prims) {
+    D3DMATRIX w{}, v{};
+    dev->GetTransform(D3DTS_WORLD, &w), dev->GetTransform(D3DTS_VIEW, &v);
+    hook::logf("vb draw tex %p prims %u nv %u | world t %.2f %.2f %.2f s %.3f | view t %.2f %.2f %.2f", (void*)g_st[0].tex, prims, nv, w._41, w._42, w._43,
+               std::sqrt(w._11 * w._11 + w._12 * w._12 + w._13 * w._13), v._41, v._42, v._43);
+    IDirect3DVertexBuffer9* vb = nullptr;
+    UINT off = 0, stride = 0;
+    if (FAILED(dev->GetStreamSource(0, &vb, &off, &stride)) || !vb || stride < 12) {
+        if (vb) vb->Release();
+        return;
+    }
+    UINT first = (UINT)(base + (INT)minv);
+    void* p = nullptr;
+    UINT n = nv < 8 ? nv : 8;
+    if (SUCCEEDED(vb->Lock(off + first * stride, n * stride, &p, D3DLOCK_READONLY)) && p) {
+        for (UINT i = 0; i < n; i++) {
+            const float* f = (const float*)((const char*)p + (size_t)i * stride);
+            hook::logf("  v%u %.2f %.2f %.2f", i, f[0], f[1], f[2]);
+        }
+        vb->Unlock();
+    }
+    vb->Release();
+}
+
+DrawPrimFn g_draw_prim = nullptr;
+DrawPrimUPFn g_draw_prim_up = nullptr;
+DrawIdxUPFn g_draw_idx_up = nullptr;
+
+// the vb_w / vb_h / vb_tex watch for the other three draw calls (particles may come through any of them): the
+// positions from the stream (DrawPrimitive) or from the caller's own vertex data (the UP calls)
+bool vb_watch() {
+    static int vw = hook::config_int("vb_w", 0, "config"), vh = hook::config_int("vb_h", 0, "config");
+    static unsigned long long vt = [] {
+        char buf[32];
+        hook::config_str("vb_tex", "0", buf, sizeof buf);
+        return std::strtoull(buf, nullptr, 16);
+    }();
+    bool tex_ok = !vt || (unsigned long long)(uintptr_t)g_st[0].tex == vt;
+    return vw && tex_ok && (int)g_st[0].w == vw && (int)g_st[0].h == vh && vb_first_few(g_st[0].tex);
+}
+void dump_up(IDirect3DDevice9* dev, const char* what, UINT prims, const void* data, UINT stride, UINT nv) {
+    D3DMATRIX w{}, v{};
+    dev->GetTransform(D3DTS_WORLD, &w), dev->GetTransform(D3DTS_VIEW, &v);
+    hook::logf("vb %s tex %p prims %u | world t %.2f %.2f %.2f s %.3f | view t %.2f %.2f %.2f", what, (void*)g_st[0].tex, prims,
+               w._41, w._42, w._43, std::sqrt(w._11 * w._11 + w._12 * w._12 + w._13 * w._13), v._41, v._42, v._43);
+    if (!data || stride < 12) return;
+    for (UINT i = 0; i < nv && i < 8; i++) {
+        const float* f = (const float*)((const char*)data + (size_t)i * stride);
+        hook::logf("  v%u %.2f %.2f %.2f", i, f[0], f[1], f[2]);
+    }
+}
+HRESULT __stdcall my_draw_prim(IDirect3DDevice9* dev, D3DPRIMITIVETYPE t, UINT start, UINT prims) {
+    if (vb_watch()) {
+        IDirect3DVertexBuffer9* vb = nullptr;
+        UINT off = 0, stride = 0;
+        if (SUCCEEDED(dev->GetStreamSource(0, &vb, &off, &stride)) && vb && stride >= 12) {
+            void* p = nullptr;
+            if (SUCCEEDED(vb->Lock(off + start * stride, 8 * stride, &p, D3DLOCK_READONLY)) && p) {
+                dump_up(dev, "prim", prims, p, stride, 8);
+                vb->Unlock();
+            }
+        }
+        if (vb) vb->Release();
+    }
+    return g_draw_prim(dev, t, start, prims);
+}
+HRESULT __stdcall my_draw_prim_up(IDirect3DDevice9* dev, D3DPRIMITIVETYPE t, UINT prims, const void* data, UINT stride) {
+    if (vb_watch()) dump_up(dev, "primUP", prims, data, stride, 8);
+    return g_draw_prim_up(dev, t, prims, data, stride);
+}
+HRESULT __stdcall my_draw_idx_up(IDirect3DDevice9* dev, D3DPRIMITIVETYPE t, UINT minv, UINT nv, UINT prims, const void* idx,
+                                  D3DFORMAT ifmt, const void* data, UINT stride) {
+    if (vb_watch()) dump_up(dev, "idxUP", prims, (const char*)data + (size_t)minv * stride, stride, nv);
+    return g_draw_idx_up(dev, t, minv, nv, prims, idx, ifmt, data, stride);
+}
+
 HRESULT __stdcall my_draw_idx(IDirect3DDevice9* dev, D3DPRIMITIVETYPE t, INT base, UINT minv, UINT nv, UINT start, UINT prims) {
+    {
+        static int vw = hook::config_int("vb_w", 0, "config"), vh = hook::config_int("vb_h", 0, "config");
+        static int vb_lines = 0;
+        // [config] vb_tex=<hex pointer>: only the draws with that stage-0 texture (from a texdump file name)
+        static unsigned long long vt = [] {
+            char buf[32];
+            hook::config_str("vb_tex", "0", buf, sizeof buf);
+            return std::strtoull(buf, nullptr, 16);
+        }();
+        bool tex_ok = !vt || (unsigned long long)(uintptr_t)g_st[0].tex == vt;
+        if (vw && tex_ok && (int)g_st[0].w == vw && (int)g_st[0].h == vh && vb_first_few(g_st[0].tex)) vb_lines++, dump_vb(dev, base, minv, nv, prims);
+    }
     // [config] watch_w / watch_h narrow it to a stage-0 texture size; watch_tu to a U translation (x 1000)
     static int ww = hook::config_int("watch_w", 0, "config"), wh = hook::config_int("watch_h", 0, "config");
     static int wtu = hook::config_int("watch_tu", -99999, "config");
@@ -298,7 +403,11 @@ void ensure_patched(const char* why) {
     void** vt = *(void***)g_dev;
     if (vt[44] == (void*)my_set_transform && vt[65] == (void*)my_set_texture && vt[69] == (void*)my_set_sampler &&
         vt[82] == (void*)my_draw_idx && vt[51] == (void*)my_set_light && vt[57] == (void*)my_set_rs &&
-        vt[53] == (void*)my_light_enable) return;
+        vt[53] == (void*)my_light_enable && vt[81] == (void*)my_draw_prim && vt[83] == (void*)my_draw_prim_up &&
+        vt[84] == (void*)my_draw_idx_up) return;
+    void* o81 = vt[81] == (void*)my_draw_prim ? (void*)g_draw_prim : vt[81];
+    void* o83 = vt[83] == (void*)my_draw_prim_up ? (void*)g_draw_prim_up : vt[83];
+    void* o84 = vt[84] == (void*)my_draw_idx_up ? (void*)g_draw_idx_up : vt[84];
     void* o53 = vt[53] == (void*)my_light_enable ? (void*)g_light_enable : vt[53];
     void* o51 = vt[51] == (void*)my_set_light ? (void*)g_set_light : vt[51];
     void* o57 = vt[57] == (void*)my_set_rs ? (void*)g_set_rs : vt[57];
@@ -307,14 +416,17 @@ void ensure_patched(const char* why) {
     void* o65 = vt[65] == (void*)my_set_texture ? (void*)g_set_texture : vt[65];
     void* o69 = vt[69] == (void*)my_set_sampler ? (void*)g_set_sampler : vt[69];
     DWORD old;
-    if (!VirtualProtect(&vt[44], 40 * sizeof(void*), PAGE_EXECUTE_READWRITE, &old)) return;
+    if (!VirtualProtect(&vt[44], 41 * sizeof(void*), PAGE_EXECUTE_READWRITE, &old)) return;
+    g_draw_prim = (DrawPrimFn)o81, vt[81] = (void*)my_draw_prim;
+    g_draw_prim_up = (DrawPrimUPFn)o83, vt[83] = (void*)my_draw_prim_up;
+    g_draw_idx_up = (DrawIdxUPFn)o84, vt[84] = (void*)my_draw_idx_up;
     g_set_light = (SetLightFn)o51, vt[51] = (void*)my_set_light;
     g_set_rs = (SetRSFn)o57, vt[57] = (void*)my_set_rs;
     g_light_enable = (LightEnableFn)o53, vt[53] = (void*)my_light_enable;
     g_draw_idx = (DrawIdxFn)o82, vt[82] = (void*)my_draw_idx;
     g_set_transform = (SetTransformFn)o44, g_set_texture = (SetTextureFn)o65, g_set_sampler = (SetSamplerFn)o69;
     vt[44] = (void*)my_set_transform, vt[65] = (void*)my_set_texture, vt[69] = (void*)my_set_sampler;
-    VirtualProtect(&vt[44], 40 * sizeof(void*), old, &old);
+    VirtualProtect(&vt[44], 41 * sizeof(void*), old, &old);
     static int told = 0;
     if (++told <= 3 || told % 500 == 0)
         hook::logf("d3d_probe: (re)patched vtable %p (%s, #%d): SetTransform %p SetTexture %p SetSamplerState %p", (void*)vt, why,
