@@ -195,6 +195,30 @@ void save_shader(const char* kind, void* ptr, IUnknown* sh) {
     std::free(buf);
 }
 
+// one pixel of render target 0 (StretchRect into a 1 x 1 target, then GetRenderTargetData into system memory)
+DWORD read_pixel(IDirect3DDevice9* dev, int x, int y) {
+    static IDirect3DSurface9* one = nullptr;
+    static IDirect3DSurface9* sys = nullptr;
+    IDirect3DSurface9* rt = nullptr;
+    DWORD v = 0xdeadbeef;
+    if (FAILED(dev->GetRenderTarget(0, &rt)) || !rt) return v;
+    D3DSURFACE_DESC d{};
+    rt->GetDesc(&d);
+    if (!one) dev->CreateRenderTarget(1, 1, d.Format, D3DMULTISAMPLE_NONE, 0, FALSE, &one, nullptr);
+    if (!sys) dev->CreateOffscreenPlainSurface(1, 1, d.Format, D3DPOOL_SYSTEMMEM, &sys, nullptr);
+    RECT src{x, y, x + 1, y + 1};
+    if (one && sys && x < (int)d.Width && y < (int)d.Height && SUCCEEDED(dev->StretchRect(rt, &src, one, nullptr, D3DTEXF_NONE)) &&
+        SUCCEEDED(dev->GetRenderTargetData(one, sys))) {
+        D3DLOCKED_RECT lr{};
+        if (SUCCEEDED(sys->LockRect(&lr, nullptr, D3DLOCK_READONLY))) {
+            v = *(const DWORD*)lr.pBits;
+            sys->UnlockRect();
+        }
+    }
+    rt->Release();
+    return v;
+}
+
 void dump_draw(IDirect3DDevice9* dev, UINT prims) {
     static const struct { DWORD id; const char* n; } rs[] = {
         {D3DRS_ALPHABLENDENABLE, "blend"}, {D3DRS_SRCBLEND, "src"}, {D3DRS_DESTBLEND, "dst"}, {D3DRS_BLENDOP, "op"},
@@ -284,9 +308,11 @@ void dump_draw(IDirect3DDevice9* dev, UINT prims) {
         dev->GetTextureStageState(st, D3DTSS_ALPHAARG2, &a2);
         dev->GetTextureStageState(st, D3DTSS_TEXCOORDINDEX, &tci);
         dev->GetTextureStageState(st, D3DTSS_RESULTARG, &res);
+        DWORD ttf = 0;
+        dev->GetTextureStageState(st, D3DTSS_TEXTURETRANSFORMFLAGS, &ttf);
         Stage& s = g_st[st];
-        hook::logf("  stage %lu tex %p %ux%u | colorop %lu (%lx, %lx) alphaop %lu (%lx, %lx) tci %lx res %lx | m %.3f %.3f %.3f %.3f t %.3f %.3f",
-                   st, (void*)s.tex, s.w, s.h, cop, c1, c2, aop, a1, a2, tci, res, s.m[0], s.m[1], s.m[2], s.m[3], s.m[4], s.m[5]);
+        hook::logf("  stage %lu tex %p %ux%u | colorop %lu (%lx, %lx) alphaop %lu (%lx, %lx) tci %lx res %lx | ttf %lu m %.3f %.3f %.3f %.3f t %.3f %.3f",
+                   st, (void*)s.tex, s.w, s.h, cop, c1, c2, aop, a1, a2, tci, res, ttf, s.m[0], s.m[1], s.m[2], s.m[3], s.m[4], s.m[5]);
     }
     D3DMATERIAL9 mt;
     if (SUCCEEDED(dev->GetMaterial(&mt)))
@@ -324,6 +350,39 @@ void dump_vb(IDirect3DDevice9* dev, INT base, UINT minv, UINT nv, UINT prims) {
         DWORD fvf = 0;
         dev->GetFVF(&fvf);
         hook::logf("  fvf %08lx stride %u", fvf, stride);
+        IDirect3DVertexDeclaration9* decl = nullptr;
+        if (SUCCEEDED(dev->GetVertexDeclaration(&decl)) && decl) {   // the real layout (Gamebryo draws by declaration)
+            D3DVERTEXELEMENT9 el[MAXD3DDECLLENGTH + 1];
+            UINT ne = 0;
+            if (SUCCEEDED(decl->GetDeclaration(el, &ne)))
+                for (UINT k = 0; k < ne && el[k].Stream != 0xFF; k++)
+                    hook::logf("  decl stream %u offset %u type %u usage %u index %u", el[k].Stream, el[k].Offset,
+                               el[k].Type, el[k].Usage, el[k].UsageIndex);
+            decl->Release();
+        }
+        // [config] vb_near_x / vb_near_y / vb_near_r: instead of the first vertices, those whose WORLD x / y lie within r of
+        // that point (the mesh's world translation added) - read over the whole buffer
+        static int nx = hook::config_int("vb_near_x", 0, "config"), ny = hook::config_int("vb_near_y", 0, "config"),
+                   nr = hook::config_int("vb_near_r", 0, "config");
+        if (nr > 0) {
+            vb->Unlock();
+            p = nullptr;
+            if (SUCCEEDED(vb->Lock(off + first * stride, nv * stride, &p, D3DLOCK_READONLY)) && p) {
+                int shown = 0;
+                for (UINT i = 0; i < nv && shown < 24; i++) {
+                    const float* f = (const float*)((const char*)p + (size_t)i * stride);
+                    float wx = f[0] + w._41, wy = f[1] + w._42;
+                    if ((wx - nx) * (wx - nx) + (wy - ny) * (wy - ny) > (float)nr * nr) continue;
+                    const DWORD* dw = (const DWORD*)f;
+                    char hex[400];
+                    int hn = 0;
+                    for (UINT k = 0; k < stride / 4 && k < 24; k++) hn += wsprintfA(hex + hn, " %08lx", dw[k]);
+                    hook::logf("  near v%u world %.1f %.1f %.1f |%s", i, wx, wy, f[2] + w._43, hex);
+                    shown++;
+                }
+            }
+            n = 0;
+        }
         for (UINT i = 0; i < n; i++) {
             const float* f = (const float*)((const char*)p + (size_t)i * stride);
             const DWORD* dw = (const DWORD*)f;
@@ -425,6 +484,14 @@ HRESULT __stdcall my_draw_idx(IDirect3DDevice9* dev, D3DPRIMITIVETYPE t, INT bas
         if (fd_lines < fd) {
             fd_lines++;
             dump_draw(dev, prims);
+            // [config] px_x / px_y: the render target's pixel there read back after the draw - the draw that paints it
+            // is the one after which it changes
+            static int px = hook::config_int("px_x", -1, "config"), py = hook::config_int("px_y", -1, "config");
+            if (px >= 0 && py >= 0) {
+                HRESULT r = g_draw_idx(dev, t, base, minv, nv, start, prims);
+                hook::logf("  pixel %d,%d after: %08lx", px, py, read_pixel(dev, px, py));
+                return r;
+            }
         }
     }
     if (hit && g_draw_lines < 60) {
