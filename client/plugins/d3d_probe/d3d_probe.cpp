@@ -321,9 +321,16 @@ void dump_vb(IDirect3DDevice9* dev, INT base, UINT minv, UINT nv, UINT prims) {
     void* p = nullptr;
     UINT n = nv < 8 ? nv : 8;
     if (SUCCEEDED(vb->Lock(off + first * stride, n * stride, &p, D3DLOCK_READONLY)) && p) {
+        DWORD fvf = 0;
+        dev->GetFVF(&fvf);
+        hook::logf("  fvf %08lx stride %u", fvf, stride);
         for (UINT i = 0; i < n; i++) {
             const float* f = (const float*)((const char*)p + (size_t)i * stride);
-            hook::logf("  v%u %.2f %.2f %.2f", i, f[0], f[1], f[2]);
+            const DWORD* dw = (const DWORD*)f;
+            char hex[400];
+            int hn = 0;
+            for (UINT k = 0; k < stride / 4 && k < 24; k++) hn += wsprintfA(hex + hn, " %08lx", dw[k]);
+            hook::logf("  v%u %.2f %.2f %.2f |%s", i, f[0], f[1], f[2], hex);
         }
         vb->Unlock();
     }
