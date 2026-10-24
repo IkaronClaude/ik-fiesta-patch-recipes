@@ -1110,6 +1110,18 @@ std::string probe(void* o) {
     return out;
 }
 
+// PgWinFrame::GetMovable (10.6.6 vtable +0x21C = 0x459150: mov al, [ecx + 0x134]; SetMovable +0x218; 2016 the same
+// byte, GetMovable 0x402390): 1 / 0 for a window whose slot is that getter, -1 for anything else (not a frame, or an
+// override) - which official windows a player can drag (operator 2026-10-24)
+int win_movable(void* w) {
+    __try {
+        if ((uintptr_t)pgwin::vtable_entry(w, 0x21C / 4) != (uintptr_t)hook::rebase(0x459150)) return -1;
+        return *((unsigned char*)w + 0x134) ? 1 : 0;
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        return -1;
+    }
+}
+
 std::string dump_wins(const char* filter) {
     std::string out = "ok";
     char* mgr = (char*)hook::rebase(caddr::va(caddr::kWinMgr));
@@ -1130,8 +1142,8 @@ std::string dump_wins(const char* filter) {
         }
         RECT sr{};
         bool has_sr = win_screen_rect(w, &sr);
-        sprintf_s(b, " | %s \"%s\" %d %d %d %d screen %ld %ld @%p parent %p", cls, win_name(w), x, y, wd, ht,
-                  has_sr ? sr.left : -1L, has_sr ? sr.top : -1L, w, read_ptr((char*)w + 0x20));
+        sprintf_s(b, " | %s \"%s\" %d %d %d %d screen %ld %ld @%p parent %p mov %d", cls, win_name(w), x, y, wd, ht,
+                  has_sr ? sr.left : -1L, has_sr ? sr.top : -1L, w, read_ptr((char*)w + 0x20), win_movable(w));
         out += b;
     }
     return out;
