@@ -165,6 +165,36 @@ HRESULT __stdcall my_set_transform(IDirect3DDevice9* dev, D3DTRANSFORMSTATETYPE 
 // [config] watch_rot=1: every draw whose stage-0 texture matrix is rotated (_11 < 0 - Frost Nova's crystals) logs
 // its whole fixed-function state: blend / alpha test / lighting / texture factor / material, stages 0..3 ops,
 // arguments, texture sizes - what our material must reproduce
+// [config] dump_shaders=1: each vertex / pixel shader a dumped draw uses, its bytecode saved once (GetFunction) as
+// hooks/shaders/<ptr>.vso / .pso - `fxc /dumpbin` disassembles them
+void save_shader(const char* kind, void* ptr, IUnknown* sh) {
+    static int on = hook::config_int("dump_shaders", 0, "config");
+    static std::map<void*, int> seen;
+    if (!on || !sh || seen.count(ptr) || seen.size() > 64) return;
+    seen[ptr] = 1;
+    UINT n = 0;
+    bool vs = kind[0] == 'v';
+    HRESULT hr = vs ? ((IDirect3DVertexShader9*)sh)->GetFunction(nullptr, &n) : ((IDirect3DPixelShader9*)sh)->GetFunction(nullptr, &n);
+    if (FAILED(hr) || !n) return;
+    void* buf = std::malloc(n);
+    hr = vs ? ((IDirect3DVertexShader9*)sh)->GetFunction(buf, &n) : ((IDirect3DPixelShader9*)sh)->GetFunction(buf, &n);
+    char dir[MAX_PATH], path[MAX_PATH];
+    DWORD k = GetModuleFileNameA(nullptr, dir, MAX_PATH);
+    while (k > 0 && dir[k - 1] != 0x5C) k--;
+    dir[k] = 0;
+    lstrcatA(dir, "hooks/shaders");
+    CreateDirectoryA(dir, nullptr);
+    wsprintfA(path, "%s/%p.%s", dir, ptr, vs ? "vso" : "pso");
+    HANDLE f = CreateFileA(path, GENERIC_WRITE, 0, nullptr, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, nullptr);
+    if (SUCCEEDED(hr) && f != INVALID_HANDLE_VALUE) {
+        DWORD w = 0;
+        WriteFile(f, buf, n, &w, nullptr);
+        hook::logf("  saved %s %p (%u bytes)", vs ? "vs" : "ps", ptr, n);
+    }
+    if (f != INVALID_HANDLE_VALUE) CloseHandle(f);
+    std::free(buf);
+}
+
 void dump_draw(IDirect3DDevice9* dev, UINT prims) {
     static const struct { DWORD id; const char* n; } rs[] = {
         {D3DRS_ALPHABLENDENABLE, "blend"}, {D3DRS_SRCBLEND, "src"}, {D3DRS_DESTBLEND, "dst"}, {D3DRS_BLENDOP, "op"},
@@ -202,6 +232,17 @@ void dump_draw(IDirect3DDevice9* dev, UINT prims) {
         for (int i = 0; i < n; i++)
             hook::logf("  vsc %d %.4f %.4f %.4f %.4f", i, c[4 * i], c[4 * i + 1], c[4 * i + 2], c[4 * i + 3]);
     }
+    // [config] dump_ps_consts=N: the same for the pixel shader
+    static int psc = hook::config_int("dump_ps_consts", 0, "config");
+    if (ps && psc > 0) {
+        float c[4 * 32] = {0};
+        int n = psc > 32 ? 32 : psc;
+        dev->GetPixelShaderConstantF(0, c, n);
+        for (int i = 0; i < n; i++)
+            hook::logf("  psc %d %.4f %.4f %.4f %.4f", i, c[4 * i], c[4 * i + 1], c[4 * i + 2], c[4 * i + 3]);
+    }
+    save_shader("vs", vs, vs);
+    save_shader("ps", ps, ps);
     {   // the fog the draw gets: table / vertex mode, range fog, start / end (floats in the DWORD), density, colour
         DWORD fe = 0, tm = 0, vm = 0, rf = 0, fc = 0, fs = 0, fend = 0, fd = 0;
         dev->GetRenderState(D3DRS_FOGENABLE, &fe);
