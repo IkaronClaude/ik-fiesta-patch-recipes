@@ -1122,8 +1122,13 @@ int win_movable(void* w) {
     }
 }
 
-std::string dump_wins(const char* filter) {
+std::string dump_wins(const char* filter_arg) {
     std::string out = "ok";
+    // "wins <filter> [n]": n entries after a match (default 40)
+    char filter[128] = {0};
+    int count = 40;
+    sscanf_s(filter_arg, "%127s %d", filter, (unsigned)sizeof(filter), &count);
+    if (count < 1) count = 40;
     char* mgr = (char*)hook::rebase(caddr::va(caddr::kWinMgr));
     if (!caddr::va(caddr::kWinMgr)) return "err no PgWinMgr address for this build";
     void* item = read_ptr(mgr + 0x28);
@@ -1136,7 +1141,7 @@ std::string dump_wins(const char* filter) {
         if (!win_rect(w, &x, &y, &wd, &ht)) continue;
         const char* cls = safe_class(w);
         if (filter[0]) {
-            if (strstr(cls, filter) || strstr(win_name(w), filter)) tail = 41;
+            if (strstr(cls, filter) || strstr(win_name(w), filter)) tail = count + 1;
             if (tail <= 0) continue;
             tail--;
         }
