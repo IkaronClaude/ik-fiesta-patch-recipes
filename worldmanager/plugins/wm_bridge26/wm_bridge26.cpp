@@ -314,6 +314,37 @@ int __fastcall on_send(void* sock, void*, unsigned char* f, int len) {
     return real(sock, nullptr, f, len);
 }
 
+// ---- whispers from the ZONE (bridge26) ---------------------------------------------------------------------------------
+// The 2026 client sends NC_ACT_WHISPER_REQ 0x200C to the zone, not here; the zone half (bridge26) sends it on over its WM
+// link as 0x200C {wldmanhandle u16, the client's payload}. This registers that opcode in the ZONE protocol table
+// (CParserZone at gServer + 0xC1E94: its ctor 0x42F540 is called on [esi + 0xC1E94] in WorldManagerServer's ctor 0x406B40;
+// its Register(dept, cmd, fn) rows have no 8/0x0C) and runs the stock client handler for the sender's session:
+// CWMClientSessionManager::GetSession(handle) 0x437860 on 0x556BB0 (as fc_NC_CHAR_ZONE_AUTO_PICK_CMD 0x429C30 finds its
+// client), then CParserClient::fc_NC_ACT_WHISPER_REQ (the client table's 0x200C) with the client's packet - so the answers
+// (SUCCESS / FAIL to the sender, SOMEONEWHISPER to the receiver) go out exactly as for a 2016 client.
+const unsigned kZoneParserInServer = 0xC1E94u;
+const unsigned kVaClientSessions = 0x00556BB0u, kVaGetSession = 0x00437860u;
+const unsigned short kWhisperReq = 0x200C;
+void* g_h_whisper = 0;
+hook::u32 __fastcall zone_whisper(void* zparser, void*, hook::u32 zsession, hook::u32 pkt, hook::u32 len) {
+    const unsigned char* p = (const unsigned char*)pkt + 2;
+    int n = (int)len - 2;
+    if (n < 2 + 22 || !g_h_whisper) return 1;
+    unsigned short h = (unsigned short)(p[0] | (p[1] << 8));
+    typedef void*(__fastcall * GetSession)(void*, void*, unsigned short);
+    void* cs = ((GetSession)hook::rebase(kVaGetSession))(hook::rebase(kVaClientSessions), 0, h);
+    if (!cs) {
+        hook::log("wm_bridge26: whisper from the zone for client handle %u: no such session", h);
+        return 1;
+    }
+    unsigned char* t = t_cmd[t_cmd_next++ & 7];
+    if (n - 2 + 2 > (int)sizeof t_cmd[0]) return 1;
+    t[0] = (unsigned char)(kWhisperReq & 0xFF); t[1] = (unsigned char)(kWhisperReq >> 8);
+    memcpy(t + 2, p + 2, n - 2);
+    ((Handler)g_h_whisper)(g_table, 0, (hook::u32)cs, (hook::u32)t, (hook::u32)n);
+    return 1;                                         // the ZONE session stays (0 would close the zone link)
+}
+
 }  // namespace
 
 HOOK_PLUGIN("wm_bridge26") {
@@ -335,6 +366,14 @@ HOOK_PLUGIN("wm_bridge26") {
     for (unsigned short op : kHooked)
         ok += hook::proto::hook_opcode<0>(g_table, op, on_client, hook::proto::kPacketArg2) ? 1 : 0;
     int covered = hook::proto::cover_unregistered(g_table, (void*)&cover);
+    // whispers relayed by the zone (see zone_whisper): only into a free zone-table slot
+    void* ztable = hook::rebase(kVaGServer + kZoneParserInServer);
+    g_h_whisper = hook::proto::is_registered(g_table, kWhisperReq) ? hook::proto::get(g_table, kWhisperReq) : 0;
+    bool zw = false;
+    if (g_h_whisper && !hook::proto::is_registered(ztable, kWhisperReq))
+        zw = hook::proto::set(ztable, kWhisperReq, (void*)zone_whisper) != 0;
+    hook::log("wm_bridge26: zone-relayed whispers %s", zw ? "on" : (g_h_whisper ? "NOT installed (zone table slot taken)" :
+                                                                   "NOT installed (no client 0x200C handler)"));
     bool a = hook::detour(hook::rebase(kVaParser), (void*)on_parser, &g_parser);
     bool b = hook::detour(hook::rebase(kVaSocketSend), (void*)on_send, &g_send);
     hook::log("wm_bridge26: parser %s, send %s, %d of %d request hook(s), %d unregistered slot(s) covered; handlers "
