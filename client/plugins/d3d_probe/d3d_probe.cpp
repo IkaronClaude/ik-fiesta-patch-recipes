@@ -423,7 +423,30 @@ void dump_up(IDirect3DDevice9* dev, const char* what, UINT prims, const void* da
         hook::logf("  v%u %.2f %.2f %.2f", i, f[0], f[1], f[2]);
     }
 }
+// frame_dump for every draw call kind (indexed, plain, UP, indexed UP - the UI goes through the UP ones): dumps the
+// draw's state; true = read the px_x / px_y pixel back after it
+bool fd_before(IDirect3DDevice9* dev, UINT prims, const char* kind) {
+    static int wa = hook::config_int("watch_after", 0, "config");
+    static DWORD t0 = GetTickCount();
+    static int fd = hook::config_int("frame_dump", 0, "config");
+    static DWORD fd_start = 0;
+    static int fd_lines = 0;
+    if (!fd || (wa > 0 && GetTickCount() - t0 < (DWORD)wa * 1000)) return false;
+    if (!fd_start) fd_start = GetTickCount(), hook::logf("frame_dump: start");
+    if (fd_lines >= fd) return false;
+    fd_lines++;
+    hook::logf("[%s]", kind);
+    dump_draw(dev, prims);
+    static int px = hook::config_int("px_x", -1, "config");
+    return px >= 0;
+}
+void fd_after(IDirect3DDevice9* dev) {
+    static int px = hook::config_int("px_x", -1, "config"), py = hook::config_int("px_y", -1, "config");
+    hook::logf("  pixel %d,%d after: %08lx", px, py, read_pixel(dev, px, py));
+}
+
 HRESULT __stdcall my_draw_prim(IDirect3DDevice9* dev, D3DPRIMITIVETYPE t, UINT start, UINT prims) {
+    if (fd_before(dev, prims, "prim")) { HRESULT r = g_draw_prim(dev, t, start, prims); fd_after(dev); return r; }
     if (vb_watch()) {
         IDirect3DVertexBuffer9* vb = nullptr;
         UINT off = 0, stride = 0;
@@ -440,11 +463,21 @@ HRESULT __stdcall my_draw_prim(IDirect3DDevice9* dev, D3DPRIMITIVETYPE t, UINT s
 }
 HRESULT __stdcall my_draw_prim_up(IDirect3DDevice9* dev, D3DPRIMITIVETYPE t, UINT prims, const void* data, UINT stride) {
     if (vb_watch()) dump_up(dev, "primUP", prims, data, stride, 8);
+    if (fd_before(dev, prims, "primUP")) {
+        static int vl = 0;
+        if (vl++ < 400) dump_up(dev, "primUP-v", prims, data, stride, prims * 3 < 8 ? prims * 3 : 8);
+        HRESULT r = g_draw_prim_up(dev, t, prims, data, stride); fd_after(dev); return r;
+    }
     return g_draw_prim_up(dev, t, prims, data, stride);
 }
 HRESULT __stdcall my_draw_idx_up(IDirect3DDevice9* dev, D3DPRIMITIVETYPE t, UINT minv, UINT nv, UINT prims, const void* idx,
                                   D3DFORMAT ifmt, const void* data, UINT stride) {
     if (vb_watch()) dump_up(dev, "idxUP", prims, (const char*)data + (size_t)minv * stride, stride, nv);
+    if (fd_before(dev, prims, "idxUP")) {
+        static int vl = 0;
+        if (vl++ < 400) dump_up(dev, "idxUP-v", prims, (const char*)data + (size_t)minv * stride, stride, nv < 8 ? nv : 8);
+        HRESULT r = g_draw_idx_up(dev, t, minv, nv, prims, idx, ifmt, data, stride); fd_after(dev); return r;
+    }
     return g_draw_idx_up(dev, t, minv, nv, prims, idx, ifmt, data, stride);
 }
 
