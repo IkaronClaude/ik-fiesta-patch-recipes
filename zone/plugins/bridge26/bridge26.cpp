@@ -810,6 +810,10 @@ bool on_item_packet(void* self, void* edx, void* object, ProtocolPacket* pkt) {
     case 0x305C: m = bridge26::leading_item(p, n, 2, t_out + 2); if (m == n && !memcmp(t_out + 2, p, n)) m = 0; break;
     case 0x4C10: m = bridge26::leading_item(p, n, 1, t_out + 2); if (m == n && !memcmp(t_out + 2, p, n)) m = 0; break;
     case 0xC407: m = bridge26::leading_item(p, n, 3, t_out + 2); if (m == n && !memcmp(t_out + 2, p, n)) m = 0; break;
+    case 0x5422:                                     // FRIEND_UES_FRIEND_POINT_ACK: 2016 {err, points u16, item, n}
+        if (n != 7) break;                           // -> 2026 {err, points u32, item, n} (2026 reader 0x594BCF)
+        memcpy(t_out + 2, p, 4); t_out[6] = 0; t_out[7] = 0; memcpy(t_out + 8, p + 4, 3); m = 9;
+        break;
     default: return false;
     }
     if (g_verify) verify_log_op(op, p, n, t_out + 2, m);
