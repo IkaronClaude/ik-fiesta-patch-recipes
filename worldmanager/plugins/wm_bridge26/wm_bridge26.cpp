@@ -288,6 +288,11 @@ int __fastcall on_send(void* sock, void*, unsigned char* f, int len) {
             memcpy(body + m, a + upgrade, kAvatar2016 - upgrade); m += kAvatar2016 - upgrade;
         }
         return real(sock, nullptr, t_out, frame(t_out, (unsigned short)op, body, m));
+    case 0x5407:                                          // NC_FRIEND_LIST_CMD: 2016 {n, info x n (72 B)}, 2026 {n, flags
+        if (n < 1 || n != 1 + p[0] * 72 || n + 1 > (int)sizeof body) break;   // (bit 0: clear first), info x n} - the 2026
+        body[0] = p[0]; body[1] = 1;                      // client read the 2016 list a byte late ("ot8655" for Bot8655)
+        memcpy(body + 2, p + 1, n - 1);
+        return real(sock, nullptr, t_out, frame(t_out, (unsigned short)op, body, n + 1));
     case 0x541E:                                          // NC_FRIEND_POINT_ACK: 2016 {u16}, 2026 {u32} (the 2026
         if (n != 2) break;                                // client read 4 B: "Friend Points: 4587522" for 2)
         body[0] = p[0]; body[1] = p[1]; body[2] = 0; body[3] = 0;
