@@ -481,7 +481,49 @@ HRESULT __stdcall my_draw_idx_up(IDirect3DDevice9* dev, D3DPRIMITIVETYPE t, UINT
     return g_draw_idx_up(dev, t, minv, nv, prims, idx, ifmt, data, stride);
 }
 
+// [config] vb_all_minprims=N: once watch_after has passed, EVERY vertex (hex) of the first indexed draw of at least N
+// primitives - a batched UI draw's quads, to find one by its UVs
+void dump_all_vertices(IDirect3DDevice9* dev, INT base, UINT minv, UINT nv, UINT prims) {
+    IDirect3DVertexBuffer9* vb = nullptr;
+    UINT off = 0, stride = 0;
+    if (FAILED(dev->GetStreamSource(0, &vb, &off, &stride)) || !vb || stride < 12) { if (vb) vb->Release(); return; }
+    hook::logf("allv: tex %p prims %u nv %u stride %u", (void*)g_st[0].tex, prims, nv, stride);
+    IDirect3DVertexDeclaration9* decl = nullptr;
+    if (SUCCEEDED(dev->GetVertexDeclaration(&decl)) && decl) {
+        D3DVERTEXELEMENT9 el[MAXD3DDECLLENGTH + 1]; UINT ne = 0;
+        if (SUCCEEDED(decl->GetDeclaration(el, &ne)))
+            for (UINT k = 0; k < ne && el[k].Stream != 0xFF; k++)
+                hook::logf("allv decl offset %u type %u usage %u index %u", el[k].Offset, el[k].Type, el[k].Usage, el[k].UsageIndex);
+        decl->Release();
+    }
+    void* p = nullptr;
+    UINT first = (UINT)(base + (INT)minv);
+    if (SUCCEEDED(vb->Lock(off + first * stride, nv * stride, &p, D3DLOCK_READONLY)) && p) {
+        for (UINT i = 0; i < nv; i++) {
+            const float* f = (const float*)((const char*)p + (size_t)i * stride);
+            const DWORD* dw = (const DWORD*)f;
+            char hex[400]; int hn = 0;
+            for (UINT k = 0; k < stride / 4 && k < 24; k++) hn += wsprintfA(hex + hn, " %08lx", dw[k]);
+            hook::logf("allv v%u %.2f %.2f %.2f |%s", i, f[0], f[1], f[2], hex);
+        }
+        vb->Unlock();
+    }
+    vb->Release();
+}
+
 HRESULT __stdcall my_draw_idx(IDirect3DDevice9* dev, D3DPRIMITIVETYPE t, INT base, UINT minv, UINT nv, UINT start, UINT prims) {
+    {
+        static int amp = hook::config_int("vb_all_minprims", 0, "config");
+        static int wa2 = hook::config_int("watch_after", 0, "config");
+        static DWORD t2 = GetTickCount();
+        static bool done = false;
+        static int aw = hook::config_int("vb_all_w", 0, "config");
+        if (amp > 0 && !done && (int)prims >= amp && (!aw || (int)g_st[0].w == aw) && GetTickCount() - t2 >= (DWORD)wa2 * 1000) {
+            done = true;
+            dump_draw(dev, prims);
+            dump_all_vertices(dev, base, minv, nv, prims);
+        }
+    }
     {
         static int vw = hook::config_int("vb_w", 0, "config"), vh = hook::config_int("vb_h", 0, "config");
         static int vb_lines = 0;
