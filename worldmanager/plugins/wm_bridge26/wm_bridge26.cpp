@@ -288,6 +288,10 @@ int __fastcall on_send(void* sock, void*, unsigned char* f, int len) {
             memcpy(body + m, a + upgrade, kAvatar2016 - upgrade); m += kAvatar2016 - upgrade;
         }
         return real(sock, nullptr, t_out, frame(t_out, (unsigned short)op, body, m));
+    case 0x541E:                                          // NC_FRIEND_POINT_ACK: 2016 {u16}, 2026 {u32} (the 2026
+        if (n != 2) break;                                // client read 4 B: "Friend Points: 4587522" for 2)
+        body[0] = p[0]; body[1] = p[1]; body[2] = 0; body[3] = 0;
+        return real(sock, nullptr, t_out, frame(t_out, (unsigned short)op, body, 4));
     case kGuildMembers: {
         if (n < 6) break;
         int total = p[0] | (p[1] << 8), start = p[2] | (p[3] << 8), count = p[4] | (p[5] << 8);
