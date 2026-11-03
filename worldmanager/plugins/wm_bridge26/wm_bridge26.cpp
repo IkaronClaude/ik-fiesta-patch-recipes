@@ -77,7 +77,10 @@ const int kAvatar2016 = 130, kAvatar2026 = 161, kAvatarSlotAt = 26;
 const int kEquipAt = 48, kOldSlots = 20, kNewSlots = 35;    // u16 item ids in the avatar record; 0xFFFF = none
 const int kGuildMember = 110, kAcademy2016 = 741, kAcademyNewAt = 5 + 36;
 const unsigned char kCreateOpenHead[2] = { 0x39, 0x8E };
-const unsigned char kAvatarSlots = 0x0C;       // character slots the 2026 head says this account may use
+const unsigned char kAvatarSlots = 6;          // character slots the 2026 head says this account may use: the 2016
+                                                // server's own count (CREATE refuses slot >= 6 with err 133 "Max Slot
+                                                // Number", TutorialLoginProcess 0x4371BE stops at 6, the WM session holds
+                                                // 6 x 0x82 avatar records at +0x23C) - 12 offered slots the server refuses
 const int kCreateReq2026 = 26;
 
 struct Sess { bool is2026 = false; std::set<unsigned char> used; };
