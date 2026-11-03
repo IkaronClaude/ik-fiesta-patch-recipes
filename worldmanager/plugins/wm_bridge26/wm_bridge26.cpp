@@ -30,7 +30,10 @@
 //         chunk after the last) | 0x1097 academy info 741 -> 745 B (4 zero bytes at 41: THE guild login crash)
 //         | 0x0C34 will-world-select ack (34 B) -> 0x0C25 | 0x980E academy member list head {total, index, count} ->
 //         {flag (index 0 = clear first), count} (2026 store 0x908BA0 reads u8 + u16 + 109-byte members from 3; the
-//         2016 head read as "clear, 0 members" left the official's academy member tab empty).
+//         2016 head read as "clear, 0 members" left the official's academy member tab empty) | 0x9808 MY_GUILD_ACADEMY_
+//         INFO_ACK 738 -> 742 B (GUILD_ACADEMY_CLIENT's dAcademyBuffUntilTime widened: 4 zero bytes at 2 + 36, as
+//         0x1097's; the 2026 handler 0x83E161 reads an i64 at data 32 - the 2016 4 bytes + sIntro's first showed
+//         "Guild Buff Remaining Time: -1:44").
 // ini [config]: advertise = the ip[16] of the 2026 avatar list head. Official sends ITS public address there plus a port
 // (OfficialUS2.pcapng: "192.99.126.72", port 9350 - a service of unknown purpose; the u16 stays 0 here, as the proxy
 // sent it, which worked). The proxy put its own address in; default empty.
@@ -65,6 +68,8 @@ const unsigned short kCreateOpen2026 = 0x0C32, kCreateOpenAck2026 = 0x0C34, kPos
 const unsigned short kCreateReq = 0x1401, kCreateSucc = 0x1406, kCharLoginReq = 0x1001;
 const unsigned short kGuildMembers = 0x741B, kAcademyInfo = 0x1097, kAcademyMembers = 0x980E;
 const int kAcademyMember = 109;                           // GUILD_ACADEMY_MEMBER_CLIENT
+const unsigned short kAcademyInfoAck = 0x9808;
+const int kAcademyInfoAck2016 = 2 + 736, kAcademyInfoAckNewAt = 2 + 36;
 const unsigned short kWillSelectAck2016 = 0x0C34, kBackAck2026 = 0x0C25;   // 0x0C34 is ALSO 2026's create-open ack
 const int kWillSelectAck = 34;                                              // {nError, sOTP[32]}: told apart by size
 const int kWmLoginPayloadUs = 320;
@@ -328,6 +333,12 @@ int __fastcall on_send(void* sock, void*, unsigned char* f, int len) {
     case kWillSelectAck2016:                              // our own 6-byte create-open ack passes here too
         if (n != kWillSelectAck) break;
         return real(sock, nullptr, t_out, frame(t_out, kBackAck2026, p, n));
+    case kAcademyInfoAck:
+        if (n != kAcademyInfoAck2016) break;
+        memcpy(body, p, kAcademyInfoAckNewAt);
+        memset(body + kAcademyInfoAckNewAt, 0, 4);
+        memcpy(body + kAcademyInfoAckNewAt + 4, p + kAcademyInfoAckNewAt, n - kAcademyInfoAckNewAt);
+        return real(sock, nullptr, t_out, frame(t_out, (unsigned short)op, body, n + 4));
     case kAcademyInfo:
         if (n != kAcademy2016) break;
         memcpy(body, p, kAcademyNewAt);
