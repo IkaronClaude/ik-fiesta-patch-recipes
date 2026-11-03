@@ -235,6 +235,20 @@ const unsigned short kHooked[] = { kLogout2026, kWrapped2026, kAvatarList2026, k
 // ---- S->C ---------------------------------------------------------------------------------------------------------------
 thread_local unsigned char t_out[0x4000];
 
+// one 130 B 2016 avatar record -> the 161 B 2026 one, as the official server lays it out (docs/EQUIP-SLOTS-2026.md, read
+// from Official1.pcapng 0x0C0F): the 2016 bytes up to and with PROTO_EQUIPMENT's upgrade[3] (record 0..90) unchanged,
+// then the 15 new u16 slots (all 0xFFFF: the 2016 server has none) and one byte (0x00, as official), then the rest of
+// the 2016 record. (Was: the new slots inserted BEFORE upgrade[3] - the client read the + levels from 2016's slots.)
+int avatar_record(const unsigned char* a, unsigned char* o) {
+    const int upgrade_end = kEquipAt + kOldSlots * 2 + 3, added = (kNewSlots - kOldSlots) * 2;
+    int m = 0;
+    memcpy(o + m, a, upgrade_end); m += upgrade_end;
+    memset(o + m, 0xFF, added); m += added;
+    o[m++] = 0;
+    memcpy(o + m, a + upgrade_end, kAvatar2016 - upgrade_end); m += kAvatar2016 - upgrade_end;
+    return m;
+}
+
 int avatars(const unsigned char* p, int n, unsigned char* o, std::set<unsigned char>* used) {
     if (n < 3) return 0;
     int count = p[2], m = 0;
@@ -242,14 +256,11 @@ int avatars(const unsigned char* p, int n, unsigned char* o, std::set<unsigned c
     o[m++] = kAvatarSlots;
     memcpy(o + m, g_advertise, 16); m += 16;
     o[m++] = 0; o[m++] = 0;
-    const int upgrade = kEquipAt + kOldSlots * 2, added = (kNewSlots - kOldSlots) * 2;
     for (int i = 0; i < count; i++) {
         const unsigned char* a = p + 3 + kAvatar2016 * i;
         if (3 + kAvatar2016 * (i + 1) > n || m + kAvatar2026 > (int)sizeof t_out - 8) break;
         used->insert(a[kAvatarSlotAt]);
-        memcpy(o + m, a, upgrade); m += upgrade;
-        memset(o + m, 0xFF, added + 1); m += added + 1;          // the new slots, plus the upgrade field's extra byte
-        memcpy(o + m, a + upgrade, kAvatar2016 - upgrade); m += kAvatar2016 - upgrade;
+        m += avatar_record(a, o + m);
     }
     return m;
 }
@@ -279,14 +290,7 @@ int __fastcall on_send(void* sock, void*, unsigned char* f, int len) {
     case kCreateSucc:
         if (n != 1 + kAvatar2016) break;
         body[0] = p[0];
-        {
-            const int upgrade = kEquipAt + kOldSlots * 2, added = (kNewSlots - kOldSlots) * 2;
-            const unsigned char* a = p + 1;
-            m = 1;
-            memcpy(body + m, a, upgrade); m += upgrade;
-            memset(body + m, 0xFF, added + 1); m += added + 1;
-            memcpy(body + m, a + upgrade, kAvatar2016 - upgrade); m += kAvatar2016 - upgrade;
-        }
+        m = 1 + avatar_record(p + 1, body + 1);
         return real(sock, nullptr, t_out, frame(t_out, (unsigned short)op, body, m));
     case 0x5407:                                          // NC_FRIEND_LIST_CMD: 2016 {n, info x n (72 B)}, 2026 {n, flags
         if (n < 1 || n != 1 + p[0] * 72 || n + 1 > (int)sizeof body) break;   // (bit 0: clear first), info x n} - the 2026
