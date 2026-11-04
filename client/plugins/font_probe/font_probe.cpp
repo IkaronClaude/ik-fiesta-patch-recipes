@@ -169,6 +169,28 @@ BOOL WINAPI my_extent(HDC dc, LPCSTR s, int n, LPSIZE sz) {
     return r;
 }
 
+// [config] fit_trace=1: the 2026 text-fit routine (PgWinAbbreviateText 0x891E10, thiscall) logged on entry - the
+// control's width / height fields (+0xF4 / +0xF8) and its source text (+0x124 std::string) when it holds g_needle
+hook::Detour g_fit;
+typedef void(__fastcall* FitFn)(void*, void*);
+int g_fit_logs = 0;
+void __fastcall my_fit(void* self, void* edx) {
+    const unsigned char* o = (const unsigned char*)self;
+    const char* txt = nullptr;
+    unsigned cap = *(const unsigned*)(o + 0x124 + 0x14);
+    txt = cap >= 16 ? *(const char* const*)(o + 0x124) : (const char*)(o + 0x124);
+    static int any = 0;
+    if (any < 40) {
+        any++;
+        hook::log("fit#%d cap %u w=%u h=%u '%.40s'", any, cap, *(const unsigned*)(o + 0xF4), *(const unsigned*)(o + 0xF8), txt ? txt : "");
+    }
+    if (g_fit_logs < 300 && txt && g_needle[0] && strstr(txt, g_needle)) {
+        g_fit_logs++;
+        hook::log("fit '%s' w=%u h=%u", txt, *(const unsigned*)(o + 0xF4), *(const unsigned*)(o + 0xF8));
+    }
+    ((FitFn)g_fit.trampoline)(self, edx);
+}
+
 }  // namespace
 
 HOOK_PLUGIN("font_probe") {
@@ -186,7 +208,8 @@ HOOK_PLUGIN("font_probe") {
     g_create = (CreateFontAFn)hook::iat_hook(exe, "gdi32.dll", "CreateFontA", (void*)&my_create);
     g_create_ind = (CreateFontIndirectAFn)hook::iat_hook(exe, "gdi32.dll", "CreateFontIndirectA", (void*)&my_create_ind);
     hook::config_str("extent_needle", "", g_needle, sizeof g_needle);
-    if (g_needle[0])
+    if (hook::config_int("fit_trace", 0)) hook::hook_function("PgWinAbbreviateText fit 0x891E10", hook::rebase(0x891E10), (void*)&my_fit, &g_fit);
+    if (g_needle[0] && !hook::config_int("fit_trace", 0))
         g_extent = (ExtentFn)hook::iat_hook(exe, "gdi32.dll", "GetTextExtentPoint32A", (void*)&my_extent);
     hook::log("font_probe: extent_needle '%s' -> GetTextExtentPoint32A %s", g_needle, g_extent ? "hooked" : "not hooked");
     hook::log("font_probe: CreateFontA %s, CreateFontIndirectA %s", g_create ? "hooked" : "NOT in the exe's imports",
