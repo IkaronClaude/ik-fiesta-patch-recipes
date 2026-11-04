@@ -285,6 +285,9 @@ int __fastcall on_send(void* sock, void*, unsigned char* f, int len) {
     unsigned op = f[h] | (f[h + 1] << 8);
     const unsigned char* p = f + h + 2;
     int n = size - 2, m = 0;
+    // [config] trace_out=1: every S->C opcode to a 2026 client logged (debugging what the official is sent)
+    static int trace_out = hook::config_int("trace_out", 0, "config");
+    if (trace_out) hook::log("wm_bridge26: S->C 0x%04x (%d B)", op, size - 2);
     unsigned char body[0x2000];
     switch (op) {
     case kAvatars2016: {
