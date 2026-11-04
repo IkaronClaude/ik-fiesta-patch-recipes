@@ -142,6 +142,33 @@ HFONT WINAPI my_create_ind(const LOGFONTA* lf) {
     return f;
 }
 
+// [config] extent_needle=<text>: every GetTextExtentPoint32A of a string containing it logged with the result and the
+// DC's selected font (GetCurrentObject + GetObject) - which font the text-fit measure (PgWinAbbreviateText) really uses
+typedef BOOL(WINAPI* ExtentFn)(HDC, LPCSTR, int, LPSIZE);
+ExtentFn g_extent = nullptr;
+char g_needle[64] = "";
+int g_extent_logs = 0;
+
+BOOL WINAPI my_extent(HDC dc, LPCSTR s, int n, LPSIZE sz) {
+    BOOL r = g_extent(dc, s, n, sz);
+    if (g_needle[0] && s && n > 0 && n < 200 && g_extent_logs < 400) {
+        char buf[256];
+        memcpy(buf, s, n); buf[n] = 0;
+        if (strstr(buf, g_needle)) {
+            g_extent_logs++;
+            LOGFONTA lf = {};
+            HGDIOBJ f = GetCurrentObject(dc, OBJ_FONT);
+            GetObjectA(f, sizeof lf, &lf);
+            char face[64] = "";
+            GetTextFaceA(dc, sizeof face, face);
+            hook::log("extent '%s' -> %ld x %ld  font face='%s' (resolved '%s') h=%ld w=%ld weight=%ld quality=%u caller=exe+0x%X",
+                      buf, sz ? sz->cx : -1, sz ? sz->cy : -1, lf.lfFaceName, face, lf.lfHeight, lf.lfWidth, lf.lfWeight,
+                      lf.lfQuality, (unsigned)((uintptr_t)_ReturnAddress() - hook::module_base()));
+        }
+    }
+    return r;
+}
+
 }  // namespace
 
 HOOK_PLUGIN("font_probe") {
@@ -158,6 +185,10 @@ HOOK_PLUGIN("font_probe") {
     HMODULE exe = GetModuleHandleA(nullptr);
     g_create = (CreateFontAFn)hook::iat_hook(exe, "gdi32.dll", "CreateFontA", (void*)&my_create);
     g_create_ind = (CreateFontIndirectAFn)hook::iat_hook(exe, "gdi32.dll", "CreateFontIndirectA", (void*)&my_create_ind);
+    hook::config_str("extent_needle", "", g_needle, sizeof g_needle);
+    if (g_needle[0])
+        g_extent = (ExtentFn)hook::iat_hook(exe, "gdi32.dll", "GetTextExtentPoint32A", (void*)&my_extent);
+    hook::log("font_probe: extent_needle '%s' -> GetTextExtentPoint32A %s", g_needle, g_extent ? "hooked" : "not hooked");
     hook::log("font_probe: CreateFontA %s, CreateFontIndirectA %s", g_create ? "hooked" : "NOT in the exe's imports",
               g_create_ind ? "hooked" : "NOT in the exe's imports");
 }
