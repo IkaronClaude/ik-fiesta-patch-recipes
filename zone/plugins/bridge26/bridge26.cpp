@@ -461,35 +461,41 @@ void logout_as_2016(hook::proto::Call& c, unsigned char type) {
 // ([builder] = the buffer: opcode, payload; builder.SetSize(total) 0x4C8CE0, builder.Send(bundle.GetSession()) 0x4C89C0,
 // SocketBundle<WorldManagerSession>::sb_GetSocket 0x4199B0). The builder / bundle addresses are read from that function's
 // code (mov eax, [builder] / mov ecx, bundle), not baked: the exe is ASLR and cap recipes move globals.
+// The same holds for the party / guild / academy chat (2026 Fiesta.exe 0x599FE0 / 0x59A1A0 / 0x59A4F0 send them on the
+// zone socket +0x984; the 2016 client sent them to the WM, whose CParserClient has fc_NC_ACT_PARTYCHAT_REQ /
+// fc_NC_GUILD_CHAT_REQ / fc_NC_GUILD_ACADEMY_CHAT_REQ; found 2026-11-04: all three dropped here): relayed the same way.
 const unsigned short kWhisperReq = 0x200C;
+const unsigned short kRelayedToWm[] = {kWhisperReq, 0x2014, 0x7473, 0x9868};
 const unsigned kVaSellInfoWorld = 0x00537C30u, kVaBuilderSize = 0x004C8CE0u, kVaBuilderSend = 0x004C89C0u,
                kVaBundleSession = 0x004199B0u;
 const int kVtWmHandle = 0x340;
-bool relay_whisper(void* player, const unsigned char* p, int n) {
+bool relay_to_wm(void* player, unsigned short op, const unsigned char* p, int n) {
     const unsigned char* f = (const unsigned char*)zone::rebase(kVaSellInfoWorld);
     if (f[0] != 0xA1 || f[0x4F] != 0xB9) {
-        zone::log("[bridge26] whisper: sp_SendSellItemInfo_World is not the expected code - not relayed");
+        zone::log("[bridge26] relay to the WM: sp_SendSellItemInfo_World is not the expected code - not relayed");
         return false;
     }
     void* builder = (void*)*(const unsigned*)(f + 1);
     void* bundle = (void*)*(const unsigned*)(f + 0x50);
-    if (n < 22 || n > 22 + 0x80) return false;
+    // whisper {count u8, receiver Name5, len u8, content}: 22 B + text; the chats {count u8, len u8, content}: 2 B + text
+    int head = op == kWhisperReq ? 22 : 2;
+    if (n < head || n > head + 0x80 + 0x67 * 8) return false;
     typedef unsigned short(__fastcall * GetU16)(void*, void*);
     unsigned short wm = ((GetU16)(*(void***)player)[kVtWmHandle / 4])(player, 0);
     typedef void*(__fastcall * GetSession)(void*, void*);
     void* wms = ((GetSession)zone::rebase(kVaBundleSession))(bundle, 0);
     if (!wms) {
-        zone::log("[bridge26] whisper: no WorldManager session - not relayed");
+        zone::log("[bridge26] relay 0x%04x to the WM: no WorldManager session - not relayed", op);
         return false;
     }
     unsigned char* b = *(unsigned char**)builder;
-    b[0] = (unsigned char)(kWhisperReq & 0xFF); b[1] = (unsigned char)(kWhisperReq >> 8);
+    b[0] = (unsigned char)(op & 0xFF); b[1] = (unsigned char)(op >> 8);
     b[2] = (unsigned char)(wm & 0xFF); b[3] = (unsigned char)(wm >> 8);
     memcpy(b + 4, p, n);
     typedef unsigned char(__fastcall * SetSize)(void*, void*, int);
     typedef void(__fastcall * Send)(void*, void*, void*);
     if (!((SetSize)zone::rebase(kVaBuilderSize))(builder, 0, 4 + n)) {
-        zone::log("[bridge26] whisper: %d B too long for the builder - not relayed", 4 + n);
+        zone::log("[bridge26] relay to the WM: %d B too long for the builder - not relayed", 4 + n);
         return false;
     }
     ((Send)zone::rebase(kVaBuilderSend))(builder, 0, wms);
@@ -508,7 +514,8 @@ hook::u32 __fastcall drop_unregistered(void* player, void*, hook::u32 cmd, hook:
     }
     const unsigned char* c = (const unsigned char*)cmd;
     unsigned op = c ? (unsigned)(c[0] | (c[1] << 8)) : 0xFFFF;
-    if (op == kWhisperReq && len >= 2 && relay_whisper(player, c + 2, (int)len - 2)) return 0;
+    for (unsigned short r : kRelayedToWm)
+        if (op == r && len >= 2 && relay_to_wm(player, (unsigned short)op, c + 2, (int)len - 2)) return 0;
     EnterCriticalSection(&g_ulock);
     int k = ++g_unknown_seen[op];
     LeaveCriticalSection(&g_ulock);

@@ -365,24 +365,32 @@ int __fastcall on_send(void* sock, void*, unsigned char* f, int len) {
 // (SUCCESS / FAIL to the sender, SOMEONEWHISPER to the receiver) go out exactly as for a 2016 client.
 const unsigned kZoneParserInServer = 0xC1E94u;
 const unsigned kVaClientSessions = 0x00556BB0u, kVaGetSession = 0x00437860u;
+// The party / guild / academy chat come the same way (NC_ACT_PARTYCHAT_REQ 0x2014, NC_GUILD_CHAT_REQ 0x7473,
+// NC_GUILD_ACADEMY_CHAT_REQ 0x9868 - the 2026 client sends them to the zone too) and go to their own client handlers
+// (fc_NC_ACT_PARTYCHAT_REQ / fc_NC_GUILD_CHAT_REQ / fc_NC_GUILD_ACADEMY_CHAT_REQ, the client table's rows).
 const unsigned short kWhisperReq = 0x200C;
-void* g_h_whisper = 0;
+const unsigned short kRelayed[] = {kWhisperReq, 0x2014, 0x7473, 0x9868};
+void* g_h_relayed[4] = {};
 hook::u32 __fastcall zone_whisper(void* zparser, void*, hook::u32 zsession, hook::u32 pkt, hook::u32 len) {
     const unsigned char* p = (const unsigned char*)pkt + 2;
     int n = (int)len - 2;
-    if (n < 2 + 22 || !g_h_whisper) return 1;
+    unsigned short op = (unsigned short)(((const unsigned char*)pkt)[0] | (((const unsigned char*)pkt)[1] << 8));
+    void* h_client = 0;
+    for (int i = 0; i < 4; i++)
+        if (kRelayed[i] == op) h_client = g_h_relayed[i];
+    if (n < 2 + 2 || !h_client) return 1;
     unsigned short h = (unsigned short)(p[0] | (p[1] << 8));
     typedef void*(__fastcall * GetSession)(void*, void*, unsigned short);
     void* cs = ((GetSession)hook::rebase(kVaGetSession))(hook::rebase(kVaClientSessions), 0, h);
     if (!cs) {
-        hook::log("wm_bridge26: whisper from the zone for client handle %u: no such session", h);
+        hook::log("wm_bridge26: 0x%04x from the zone for client handle %u: no such session", op, h);
         return 1;
     }
     unsigned char* t = t_cmd[t_cmd_next++ & 7];
     if (n - 2 + 2 > (int)sizeof t_cmd[0]) return 1;
-    t[0] = (unsigned char)(kWhisperReq & 0xFF); t[1] = (unsigned char)(kWhisperReq >> 8);
+    t[0] = (unsigned char)(op & 0xFF); t[1] = (unsigned char)(op >> 8);
     memcpy(t + 2, p + 2, n - 2);
-    ((Handler)g_h_whisper)(g_table, 0, (hook::u32)cs, (hook::u32)t, (hook::u32)n);
+    ((Handler)h_client)(g_table, 0, (hook::u32)cs, (hook::u32)t, (hook::u32)n);
     return 1;                                         // the ZONE session stays (0 would close the zone link)
 }
 
@@ -409,12 +417,15 @@ HOOK_PLUGIN("wm_bridge26") {
     int covered = hook::proto::cover_unregistered(g_table, (void*)&cover);
     // whispers relayed by the zone (see zone_whisper): only into a free zone-table slot
     void* ztable = hook::rebase(kVaGServer + kZoneParserInServer);
-    g_h_whisper = hook::proto::is_registered(g_table, kWhisperReq) ? hook::proto::get(g_table, kWhisperReq) : 0;
-    bool zw = false;
-    if (g_h_whisper && !hook::proto::is_registered(ztable, kWhisperReq))
-        zw = hook::proto::set(ztable, kWhisperReq, (void*)zone_whisper) != 0;
-    hook::log("wm_bridge26: zone-relayed whispers %s", zw ? "on" : (g_h_whisper ? "NOT installed (zone table slot taken)" :
-                                                                   "NOT installed (no client 0x200C handler)"));
+    for (int i = 0; i < 4; i++) {
+        unsigned short op = kRelayed[i];
+        g_h_relayed[i] = hook::proto::is_registered(g_table, op) ? hook::proto::get(g_table, op) : 0;
+        bool zw = false;
+        if (g_h_relayed[i] && !hook::proto::is_registered(ztable, op))
+            zw = hook::proto::set(ztable, op, (void*)zone_whisper) != 0;
+        hook::log("wm_bridge26: zone-relayed 0x%04x %s", op, zw ? "on" : (g_h_relayed[i] ? "NOT installed (zone table slot taken)" :
+                                                                         "NOT installed (no client handler)"));
+    }
     bool a = hook::detour(hook::rebase(kVaParser), (void*)on_parser, &g_parser);
     bool b = hook::detour(hook::rebase(kVaSocketSend), (void*)on_send, &g_send);
     hook::log("wm_bridge26: parser %s, send %s, %d of %d request hook(s), %d unregistered slot(s) covered; handlers "
