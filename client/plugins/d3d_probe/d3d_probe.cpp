@@ -563,8 +563,13 @@ HRESULT __stdcall my_draw_idx(IDirect3DDevice9* dev, D3DPRIMITIVETYPE t, INT bas
             // is the one after which it changes
             static int px = hook::config_int("px_x", -1, "config"), py = hook::config_int("px_y", -1, "config");
             if (px >= 0 && py >= 0) {
+                // [config] px_vb=1: a draw that changes that pixel also gets all its vertices dumped (allv lines)
+                static int pvb = hook::config_int("px_vb", 0, "config");
+                DWORD before = pvb ? read_pixel(dev, px, py) : 0;
                 HRESULT r = g_draw_idx(dev, t, base, minv, nv, start, prims);
-                hook::logf("  pixel %d,%d after: %08lx", px, py, read_pixel(dev, px, py));
+                DWORD after = read_pixel(dev, px, py);
+                hook::logf("  pixel %d,%d after: %08lx", px, py, after);
+                if (pvb && after != before && prims <= 64) dump_all_vertices(dev, base, minv, nv, prims);
                 return r;
             }
         }
