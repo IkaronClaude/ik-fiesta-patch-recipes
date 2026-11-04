@@ -821,6 +821,18 @@ bool on_item_packet(void* self, void* edx, void* object, ProtocolPacket* pkt) {
         if (n != 7) break;                           // -> 2026 {err, points u32, item, n} (2026 reader 0x594BCF)
         memcpy(t_out + 2, p, 4); t_out[6] = 0; t_out[7] = 0; memcpy(t_out + 8, p + 4, 3); m = 9;
         break;
+    case 0x583C:                                     // KQ_SCORE_BOARD_INFO_CMD: 2016 {useRound, round, Red {win u8, score u8}, Blue}
+        if (n != 6) break;                           // -> 2026 {useRound, round, Red {win u32, score u32}, Blue, kind u16}
+        memset(t_out + 2, 0, 20);                    // (2026 case 0x59526C); kind 0x23 = SetRound(round), what 2016 always does
+        t_out[2] = p[0]; t_out[3] = p[1];
+        t_out[4] = p[2]; t_out[8] = p[3]; t_out[12] = p[4]; t_out[16] = p[5];
+        t_out[20] = 0x23; m = 20;
+        break;
+    case 0x583D:                                     // KQ_WINTER_EVENT_2014_SCORE_CMD: 2016 {Red {win u8, score u8}, Blue}
+        if (n != 4) break;                           // -> 2026 {Red {win u32, score u32}, Blue} (2026 0x5B0240)
+        memset(t_out + 2, 0, 16);
+        t_out[2] = p[0]; t_out[6] = p[1]; t_out[10] = p[2]; t_out[14] = p[3]; m = 16;
+        break;
     default: return false;
     }
     if (g_verify) verify_log_op(op, p, n, t_out + 2, m);
