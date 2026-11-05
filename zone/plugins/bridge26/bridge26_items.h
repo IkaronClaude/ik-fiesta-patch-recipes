@@ -115,6 +115,15 @@ inline int client_item_head(const unsigned char* p, int n, unsigned char* o) {
     return n + 3;
 }
 
+// header | count u8 | fixed records  ->  header | count u32 | the same records (only the count widened); 0 = refuse
+inline int widen_count(const unsigned char* p, int n, int countAt, unsigned char* o) {
+    if (n < countAt + 1 || n + 3 > 0x1FF0) return 0;
+    memcpy(o, p, countAt);
+    o[countAt] = p[countAt]; o[countAt + 1] = o[countAt + 2] = o[countAt + 3] = 0;
+    memcpy(o + countAt + 4, p + countAt + 1, n - countAt - 1);
+    return n + 3;
+}
+
 // header | count u8 | records | <=1 byte  ->  header | count u32 | records (2026 widths) | 4 zero bytes; 0 = refuse
 inline int record_list(const unsigned char* p, int n, int countAt, int itemAt, unsigned char* o) {
     if (n < countAt + 1) return 0;
