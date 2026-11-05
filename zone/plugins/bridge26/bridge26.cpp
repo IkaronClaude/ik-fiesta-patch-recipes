@@ -812,6 +812,7 @@ bool on_item_packet(void* self, void* edx, void* object, ProtocolPacket* pkt) {
     case 0x7492: if (us) m = bridge26::record_list(p, n, 18, 3, t_out + 2); break;    // guild storage
     case 0x6814: if (us) m = bridge26::record_list(p, n, 2, 15, t_out + 2); break;    // booth search
     case 0x6808: if (us) m = bridge26::record_list(p, n, 4, 10, t_out + 2); break;    // booth sell list (2016 client 0x4A8A60 / 2026 0x59E230)
+    case 0x680B: if (us) m = bridge26::record_list(p, n, 4, 10, t_out + 2); break;    // booth sell list refreshed (2026 0x59EE40: count u32 @4, records @8; the 2016 body read off the stack 2026-11-05: 41 0A | booth | 01 | 4C 00 <price u64> FA 00 ..)
     case 0x986E: if (us) m = bridge26::record_list(p, n, 10, 3, t_out + 2); break;    // academy reward storage
     case 0x302D: if (us) m = bridge26::record_list(p, n, 0, 3, t_out + 2); break;     // reward inventory
     case 0x3C08: if (us) m = bridge26::record_list(p, n, 11, 3, t_out + 2); break;    // storage
