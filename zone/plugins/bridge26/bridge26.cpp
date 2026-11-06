@@ -802,6 +802,7 @@ bool on_item_packet(void* self, void* edx, void* object, ProtocolPacket* pkt) {
     case 0x3001: m = bridge26::trailing_item(p, n, 4, t_out + 2); if (m == n) m = 0; break;      // ITEM_CELLCHANGE
     case 0x3002: m = bridge26::trailing_item(p, n, 3, t_out + 2); if (m == n) m = 0; break;      // ITEM_EQUIPCHANGE
     case 0x1047:                                                                                  // CHAR_CLIENT_ITEM
+    case 0x8C08:    // MINIHOUSE_FUNICHERINVEN: the same CHAR_CLIENT_ITEM body (2016 client 0x49B510 / 2026 0x5B5B40)
         m = bridge26::client_item(p, n, t_out + 2);
         if (!m) {
             zone::log("[bridge26] inventory box %d not translated record by record: header only", n > 1 ? p[1] : -1);
