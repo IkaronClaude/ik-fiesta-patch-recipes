@@ -51,4 +51,11 @@ then please write it as a WM plugin instead").
 | E82C | 0x4AD876 | | 0x4AEF10 |
 | E82E | 0x4AD88B | ? @0, part u8 @2, count u32 @3, records 16 B @7 | list +0x6C |
 
-The record layouts (93 / 16 / 12 / 13 / 16 / 78 / 21 B) are still to be read from the window functions.
+The record layouts (93 / 16 / 12 / 13 / 16 / 78 / 21 B) are still to be read from the window functions. Known: the 93-byte
+catalogue record has a type at +8 (0 / 1: 0x495580 splits the list into two by it).
+
+## The client's own catalogue data (ressystem, 10.6.6)
+- ItemShop.shn (9737 rows): goodsNo u32, InxName[32] (the ItemInfo item), Lot u32, PremiumReturn u8, Visibility u32.
+- ItemShopView.shn (307 rows): goodNo u32, Name[256], IconIndex / IconFile, SubIconIndex / SubIconFile, PeriodIconIndex /
+  PeriodIconFile, Undefined0..2 u32, Descript[256].
+So the server sends WHICH goods are on sale (and prices / categories) by goodsNo; names, icons and items are client data.
