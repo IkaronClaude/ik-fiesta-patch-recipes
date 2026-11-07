@@ -100,4 +100,17 @@ So the server sends WHICH goods are on sale (and prices / categories) by goodsNo
   | 0x39 | u32 | price - "Item Cost: %d" (text 0x26142475) (verified: 500 / 300 / 700 shown) |
   | 0x4F | u32 | sale price, used when @0x5C == 1 and the caller has a discount ("-%d%%") |
   | 0x5C | u8 | sale flag |
+  | 0x53 | u8 | clickable: the Featured slot click (0x4935AA) opens the goods page only when non-zero (verified) |
+  The goods page (0x495D40, the record copied to window +0x459): "Purchase Item" / "Send Gift", name, "Item Cost: N",
+  "Tradable", the sub-category line ("Item of the Day" with @0x2C = @0x30 = 1 - which field = GUESS), "Total Use Time".
+- C-> **E823** buy, live: `B8192E3A84E6 1227` - goods u16 @6 = 0x2712 = 10002 (the selected record's goodsNo low word);
+  bytes 0..5 are the stack's (not set by 0x4981B9). The client waits for E824 ([0xC329E5] pending).
+- **The Catalogue tabs** are "Featured" / "Style Overlay" (ItemShopCategoryNames 0 / 1) = goods lists +8 == 0 / 1;
+  goods with +8 = 2 / 3 got no tab, and E811 (3 records) changed nothing visible. E811 / E815 / E80F meaning: open.
+- **E813 = banners** (verified): {BannerID u32 (ItemShopBanner.shn), slot u32, shown u32 == 1}; banner 0 showed the
+  "Trouble is coming" art in Featured Promotion.
+- **E806** (0x579526) = {u32 [0xC32550] (a login-stage byte, the world no?), u16 [0xC32564] (= the avatar list head u16)}:
+  the ONLY identity on the purchase connection. Official: the head u16 matched E806's (OfficialUS2 `dc 20`).
+- The 2016 Account DB already has the web shop's tables: tItem {goodsNo, price, discount, isSell, sell dates, category},
+  tItemCategory, tOrder, tCash, tChargeItem (+ usp_Cash_*, usp_Charge_*) - the purchase server uses those.
   Icons came out as the placeholder swirl for goods 10002 / 10003 / 10004 (ItemShopView / ItemShopArt - not traced).
