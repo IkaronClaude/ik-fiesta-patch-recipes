@@ -38,6 +38,8 @@
 // (OfficialUS2.pcapng: "192.99.126.72", port 9350 - a service of unknown purpose; the u16 stays 0 here, as the proxy
 // sent it, which worked). The proxy put its own address in; default empty. advertise_port = the port beside it: the 2026
 // client's item shop (PurchaseNetFrameWork 0x4ACF10) connects THERE - the official's purchase server (9350); 0 = none.
+#include <winsock2.h>
+#pragma comment(lib, "ws2_32.lib")
 #include <hook_core.h>
 
 #include <cstdio>
@@ -84,11 +86,14 @@ const unsigned char kAvatarSlots = 6;          // character slots the 2026 head 
                                                 // 6 x 0x82 avatar records at +0x23C) - 12 offered slots the server refuses
 const int kCreateReq2026 = 26;
 
-struct Sess { bool is2026 = false; std::set<unsigned char> used; };
+struct Sess { bool is2026 = false; std::set<unsigned char> used; char user[33] = {}; };
 std::map<void*, Sess> g_sess;
 CRITICAL_SECTION g_lock;
 char g_advertise[16] = {};
 unsigned short g_advertise_port = 0;      // ini [config] advertise_port: the purchase (item shop) server's port
+char g_shop_host[64] = {};                // ini [config] itemshop_notify=host:port - where the key registrations go
+unsigned short g_shop_port = 0;
+char g_shop_secret[64] = {};              // ini [config] itemshop_secret - proves a registration came from this WM
 void* g_table = 0;
 void* g_unknown = 0;
 void* g_h_logout = 0;
@@ -146,6 +151,15 @@ int __fastcall on_parser(void* parser, void*, void* session) {
             LeaveCriticalSection(&g_lock);
             if (new26) {
                 if (size - 2 == kWmLoginPayloadUs) {
+                    // PROTO_NC_USER_LOGINWORLD_REQ.user (Name256Byte @0) - kept for the item shop key registration
+                    char user[33] = {};
+                    for (int i = 0; i < 32; i++) {
+                        user[i] = (char)(f[h + 2 + i] ^ key_at(pos, 2 + i));
+                        if (!user[i]) break;
+                    }
+                    EnterCriticalSection(&g_lock);
+                    memcpy(g_sess[session].user, user, sizeof user);
+                    LeaveCriticalSection(&g_lock);
                     // same length, so the stream stays in step: only the two opcode bytes change, encrypted at pos
                     f[h] = (unsigned char)((kWmLogin2016 & 0xFF) ^ key_at(pos, 0));
                     f[h + 1] = (unsigned char)((kWmLogin2016 >> 8) ^ key_at(pos, 1));
@@ -278,6 +292,29 @@ int avatars(const unsigned char* p, int n, unsigned char* o, std::set<unsigned c
     return m;
 }
 
+// ---- the item shop: register the 2026 avatar list head key (PROTO_NC_USER_LOGINWORLD_ACK.worldmanager) ---------------------
+// The 2026 client's purchase connection names its account ONLY by this u16 (E806 {u32 [0xC32550], u16 [0xC32564]}, Fiesta.exe
+// 0x579507), so the WM tells the item shop server (ik-fiesta-itemshop) which account and client address own it: one UDP
+// datagram "REG <secret> <key> <client ip> <user>". The shop accepts an E806 only from that address.
+void register_shop_key(void* sock, unsigned short key, const char* user) {
+    if (!g_shop_port || !user[0]) return;
+    sockaddr_in peer = {};
+    int pl = sizeof peer;
+    SOCKET cs = *(SOCKET*)sock;                           // CSocket_IOCP +0 (0x466807: [edi] == -1 = closed)
+    if (getpeername(cs, (sockaddr*)&peer, &pl) != 0) { hook::log("wm_bridge26: item shop key %u - no peer address", key); return; }
+    char msg[256];
+    int n = sprintf_s(msg, "REG %s %u %s %s", g_shop_secret, key, inet_ntoa(peer.sin_addr), user);
+    static SOCKET u = socket(AF_INET, SOCK_DGRAM, IPPROTO_UDP);
+    hostent* he = gethostbyname(g_shop_host);
+    if (!he || u == INVALID_SOCKET) { hook::log("wm_bridge26: item shop host '%s' not resolved", g_shop_host); return; }
+    sockaddr_in to = {};
+    to.sin_family = AF_INET;
+    to.sin_port = htons(g_shop_port);
+    memcpy(&to.sin_addr, he->h_addr_list[0], 4);
+    sendto(u, msg, n, 0, (sockaddr*)&to, sizeof to);
+    hook::log("wm_bridge26: item shop key %u registered for '%s' (%s)", key, user, inet_ntoa(peer.sin_addr));
+}
+
 int __fastcall on_send(void* sock, void*, unsigned char* f, int len) {
     SockSendFn real = (SockSendFn)g_send.trampoline;
     void* session = f ? (char*)sock - kSessionSocket : 0;
@@ -297,7 +334,10 @@ int __fastcall on_send(void* sock, void*, unsigned char* f, int len) {
         std::set<unsigned char> used;
         m = avatars(p, n, body, &used);
         g_sess[session].used = used;
+        char user[33];
+        memcpy(user, g_sess[session].user, sizeof user);
         LeaveCriticalSection(&g_lock);
+        if (m && n >= 2) register_shop_key(sock, (unsigned short)(p[0] | (p[1] << 8)), user);
         if (!m) break;
         int k = frame(t_out, kAvatars2026, body, m);
         hook::log("wm_bridge26: avatar list -> 2026 (%d character(s))", n >= 3 ? p[2] : 0);
@@ -404,6 +444,16 @@ HOOK_PLUGIN("wm_bridge26") {
     hook::config_str("advertise", "", ip, sizeof ip);
     strncpy_s(g_advertise, ip, 15);
     g_advertise_port = (unsigned short)hook::config_int("advertise_port", 0);
+    char notify[96] = "";
+    hook::config_str("itemshop_notify", "", notify, sizeof notify);
+    if (char* colon = strrchr(notify, ':')) {
+        *colon = 0;
+        strncpy_s(g_shop_host, notify, _TRUNCATE);
+        g_shop_port = (unsigned short)atoi(colon + 1);
+    }
+    hook::config_str("itemshop_secret", "", g_shop_secret, sizeof g_shop_secret);
+    WSADATA wd;
+    if (g_shop_port) WSAStartup(MAKEWORD(2, 2), &wd);
     g_table = hook::rebase(kVaGServer + kParserInServer);
     g_unknown = hook::proto::unknown_handler(g_table);
     bool ready = hook::proto::is_registered(g_table, kWmLogin2016);
