@@ -60,3 +60,16 @@ catalogue record has a type at +8 (0 / 1: 0x495580 splits the list into two by i
 - ItemShopView.shn (307 rows): goodNo u32, Name[256], IconIndex / IconFile, SubIconIndex / SubIconFile, PeriodIconIndex /
   PeriodIconFile, Undefined0..2 u32, Descript[256].
 So the server sends WHICH goods are on sale (and prices / categories) by goodsNo; names, icons and items are client data.
+
+## The stack's backend (2016 item mall, Account DB) - what the plugin will use
+- `tCash` {userNo int, cashtype tinyint, cash int, status bit} + `usp_Cash_getCash` / `usp_Cash_useCash` / `usp_Cash_setCash`:
+  the coin balance (E801 @0x203, the balances in E819 / E820 / E826 / E82C).
+- `tChargeItem` {rowNo, userNo, orderNo, goodsNo, amount, registerDate, isDraw, drawDate} + `usp_Charge_ItemInsert` /
+  `usp_Charge_ItemSelectList` / `usp_Charge_ItemDraw` / `usp_Charge_ItemDel`: the PREMIUM inventory by goodsNo - the
+  2016 zone's charged-item window already delivers from it. A buy = useCash + ItemInsert ("Your item was added to your
+  premium inventory.").
+- No price / category table anywhere (server data has ItemShop / ItemShopView only = the client's own catalogue): the
+  official prices came with the 93-byte E805 records. GUESS until a capture: a new table (e.g. Account.tItemShopGoods
+  {goodsNo, price, category, ...}) feeding E805.
+- OPEN: the record layouts (93 / 16 / 12 / 13 / 16 / 78 / 21 B) - static reading goes through STL containers in the window
+  code; ONE capture of the official US client opening the item shop (and a buy) would give them all.
