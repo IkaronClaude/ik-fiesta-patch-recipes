@@ -116,3 +116,17 @@ HOOK_PLUGIN("x") { client::on_packet(on_packet); }
 ```
 
 First user: `plugins/remote_control` (`-charname`: the slot from NC_USER_LOGINWORLD_ACK).
+
+## `login_address` (plugin) - the login server from an ini, not only `-i` / `-p`
+
+`client/plugins/login_address`: the 2026 client takes the login server only from its command line (`-i <ip> -p <port>`,
+parsed by 0x538AE0 into `LoginIp` / `LoginIpCopy` / `LoginPort`; nothing reads it from a file). With
+`hooks\login_address.ini` `[login] ip=` / `port=` set, the plugin overwrites those globals at load (the loader loads
+plugins at the first `CreateWindowExA`, after the parser ran) and again after the parser, should a build parse later.
+Empty keys / no .ini = the command line (stock). Live 2026-11-07: launched with `-p 1`, the .ini's 19010 logged in.
+
+The item shop's purchase connection needs no such hook: `PurchaseNetFrameWork` connects to the WM's own address from
+the world-select answer, so its server is a WorldManager plugin.
+
+Address tool: rebased on 10.6.6 (`Z:/ClientOfficial_10_6_6/FiestaOnline/US/Fiesta.exe`, stamp 6AB41A55) on 2026-11-07 -
+the 10.6.4 reference exe is no longer at hand; `symbols.json` now holds 10.6.6 addresses.

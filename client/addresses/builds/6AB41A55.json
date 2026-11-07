@@ -104,6 +104,10 @@
   "NiActorManagerUpdate": "0x00926E90",
   "EffectStart": "0x007BC150",
   "EffectUpdate": "0x007BFE20",
-  "EffectIsEnd": "0x007C1C70"
+  "EffectIsEnd": "0x007C1C70",
+  "CmdLineParseCall": "0x0052E5FD",
+  "LoginIp": "0x00C32514",
+  "LoginIpCopy": "0x00C228BA",
+  "LoginPort": "0x00C32524"
  }
 }

@@ -1,477 +1,477 @@
 {
-  "_doc": "Every address the 2026 client plugins use, by name. va = the address in the REFERENCE exe (official US 10.6.4, Fiesta.exe TimeDateStamp 2026-09-08). kind code = a function or a patch site (found by a signature taken at the address); kind data = a global / string (found through an instruction that references it). Run client_sigs.py (README.md) after an official client update.",
+  "_doc": "Every address the 2026 client plugins use, by name. va = the address in the REFERENCE exe (official US 10.6.6, Fiesta.exe TimeDateStamp 6AB41A55 2026-09-23 - rebased from 10.6.4 on 2026-11-07, its exe no longer at hand). kind code = a function or a patch site (found by a signature taken at the address); kind data = a global / string (found through an instruction that references it). Run client_sigs.py (README.md) after an official client update.",
   "reference": {
-    "version": "10.6.4",
-    "exe": "Z:/ClientOfficialUS/Fiesta.exe"
+    "version": "10.6.6",
+    "exe": "Z:/ClientOfficial_10_6_6/FiestaOnline/US/Fiesta.exe"
   },
   "symbols": [
     {
       "name": "NpcDialogHandler",
-      "va": "0x007275C0",
+      "va": "0x00727BF0",
       "kind": "code",
       "use": "dialog_advance",
       "note": "NpcDialogWin input handler, thiscall(this, arg), ret 4"
     },
     {
       "name": "QuestRecordLookup",
-      "va": "0x005C5550",
+      "va": "0x005C5A50",
       "kind": "code",
       "use": "dialog_advance",
       "note": "cdecl quest record lookup (u16 quest id) -> record*"
     },
     {
       "name": "ControlAttribute",
-      "va": "0x0097FAD0",
+      "va": "0x00980260",
       "kind": "code",
       "use": "dialog_advance",
       "note": "thiscall control->attribute(const char* name) -> attr*"
     },
     {
       "name": "EnhanceWarnJump",
-      "va": "0x00646A41",
+      "va": "0x00646F91",
       "kind": "code",
       "use": "enhance_no_warning",
       "note": "the jump into the enhance warning popup"
     },
     {
       "name": "ExpGainCtor",
-      "va": "0x0073F050",
+      "va": "0x0073F6A0",
       "kind": "code",
       "use": "exp64",
       "note": "EXPGAIN object ctor, thiscall(this, a1, payload), ret 8"
     },
     {
       "name": "ExpGainHandler",
-      "va": "0x0073F0E0",
+      "va": "0x0073F730",
       "kind": "code",
       "use": "exp64",
       "note": "its handler, thiscall(this), ret"
     },
     {
       "name": "FormatExp64",
-      "va": "0x00796200",
+      "va": "0x00796810",
       "kind": "code",
       "use": "exp64",
       "note": "cdecl (std::string* out, u32 low, u32 high)"
     },
     {
       "name": "ExpTotalObject",
-      "va": "0x00C1BB08",
+      "va": "0x00C1CB08",
       "kind": "data",
       "use": "exp64",
       "note": "the object 0x7949E0 adds into: u64 total at +0x192"
     },
     {
       "name": "FullMapAddQuestHelper",
-      "va": "0x00610610",
+      "va": "0x00610B90",
       "kind": "code",
       "use": "map_legend_focus, map_mark_dedupe",
       "note": "FullMapWin::AddQuestHelper(), thiscall"
     },
     {
       "name": "SlideListGetItemData",
-      "va": "0x005255C0",
+      "va": "0x00525760",
       "kind": "code",
       "use": "map_legend_focus",
       "note": "SlideListWin item data (index, unsigned* out) -> bool, thiscall"
     },
     {
       "name": "MobAreaMarkQuest",
-      "va": "0x00663EA0",
+      "va": "0x006643D0",
       "kind": "code",
       "use": "map_legend_focus",
       "note": "MobAreaMarkWin, thiscall -> u16"
     },
     {
       "name": "MobAreaMarkMob",
-      "va": "0x00663EB0",
+      "va": "0x006643E0",
       "kind": "code",
       "use": "map_legend_focus",
       "note": "MobAreaMarkWin, thiscall -> u16"
     },
     {
       "name": "QuestHelperMarkQuest",
-      "va": "0x00664190",
+      "va": "0x006646C0",
       "kind": "code",
       "use": "map_legend_focus",
       "note": "QuestHelperMarkWin, thiscall -> u16"
     },
     {
       "name": "QuestHelperMarkMob",
-      "va": "0x006641A0",
+      "va": "0x006646D0",
       "kind": "code",
       "use": "map_legend_focus",
       "note": "QuestHelperMarkWin, thiscall -> u16"
     },
     {
       "name": "MapLegendHeading",
-      "va": "0x0061180C",
+      "va": "0x00611D8C",
       "kind": "code",
       "use": "map_legend_focus",
       "note": "the legend builder (FullMapWin quest list) numbering a quest heading: mov ecx,[ebp-0xD4] (6 bytes, replaced); the quest pointer is [ebp-0xAC], the heading's row value 0xFFFF + [ebp-0xD4]"
     },
     {
       "name": "MapMarkLabelNumber",
-      "va": "0x0061089A",
+      "va": "0x00610E1A",
       "kind": "code",
       "use": "map_legend_focus",
       "note": "AddQuestHelper: push [eax+ecx*4+0x354] (7 bytes, replaced) - the quest label's number sprite, ecx = its own quest counter; edi -> the quest pointer"
     },
     {
       "name": "MapMarkSite",
-      "va": "0x0061076E",
+      "va": "0x00610CEE",
       "kind": "code",
       "use": "map_mark_dedupe",
       "note": "the stock skip test before the label path"
     },
     {
       "name": "MapMarkLabelPath",
-      "va": "0x00610782",
+      "va": "0x00610D02",
       "kind": "code",
       "use": "map_mark_dedupe",
       "note": "mov eax,[ebp-0x2C]; mov [ebp-0x30],esi (6 bytes, replaced)"
     },
     {
       "name": "MapMarkLabelCont",
-      "va": "0x00610788",
+      "va": "0x00610D08",
       "kind": "code",
       "use": "map_mark_dedupe",
       "note": "push [eax+0x310] ... QuestHelperMarkWin::CreateWin"
     },
     {
       "name": "MapMarkAreasOnly",
-      "va": "0x00610959",
+      "va": "0x00610ED9",
       "kind": "code",
       "use": "map_mark_dedupe",
       "note": "the stock skip target: the area circle only"
     },
     {
       "name": "MasteryRead",
-      "va": "0x00690D16",
+      "va": "0x006912E6",
       "kind": "code",
       "use": "mastery_top_tier",
       "note": "mov eax,[eax+edi*4+0x86]; mov [ebp-8],eax (10 bytes)"
     },
     {
       "name": "MasteryReadBack",
-      "va": "0x00690D20",
+      "va": "0x006912F0",
       "kind": "code",
       "use": "mastery_top_tier",
       "note": "return point after MasteryRead"
     },
     {
       "name": "MasteryFormat",
-      "va": "0x00690D5A",
+      "va": "0x0069132A",
       "kind": "code",
       "use": "mastery_top_tier",
       "note": "push <MasteryFormatString> (5 bytes)"
     },
     {
       "name": "MasteryFormatBack",
-      "va": "0x00690D5F",
+      "va": "0x0069132F",
       "kind": "code",
       "use": "mastery_top_tier",
       "note": "return point after MasteryFormat"
     },
     {
       "name": "MasteryFormatString",
-      "va": "0x00B31E68",
+      "va": "0x00B32F54",
       "kind": "data",
       "use": "mastery_top_tier",
       "note": "\"( %d/%d )\""
     },
     {
       "name": "MinimonPickupSite",
-      "va": "0x00586678",
+      "va": "0x00586AA8",
       "kind": "code",
       "use": "minimon_pickup_keep",
       "note": "test bl,bl; je; push 0; push 1; push 0xFD; mov ecx,esi; call; jmp"
     },
     {
       "name": "WindowPostMessage",
-      "va": "0x00874AE0",
+      "va": "0x00875230",
       "kind": "code",
       "use": "minimon_pickup_keep",
       "note": "the window's post-message call (thiscall, 3 args)"
     },
     {
       "name": "MinimonPickupAfter",
-      "va": "0x005866A7",
+      "va": "0x00586AD7",
       "kind": "code",
       "use": "minimon_pickup_keep",
       "note": "mov eax,[esi+0x304] - where the stock post path continues"
     },
     {
       "name": "WinRegisterPos",
-      "va": "0x007D8A60",
+      "va": "0x007D91C0",
       "kind": "code",
       "use": "popup_windows"
     },
     {
       "name": "WinSetPos",
-      "va": "0x007D8C30",
+      "va": "0x007D9390",
       "kind": "code",
       "use": "popup_windows"
     },
     {
       "name": "FwRegister",
-      "va": "0x00569F70",
+      "va": "0x0056A390",
       "kind": "code",
       "use": "popup_windows"
     },
     {
       "name": "FwRestore",
-      "va": "0x0056A2D0",
+      "va": "0x0056A6F0",
       "kind": "code",
       "use": "popup_windows"
     },
     {
       "name": "FwTerminate",
-      "va": "0x0056F4F0",
+      "va": "0x0056F910",
       "kind": "code",
       "use": "popup_windows"
     },
     {
       "name": "ScreenW",
-      "va": "0x00C321C0",
+      "va": "0x00C331C0",
       "kind": "data",
       "use": "popup_windows"
     },
     {
       "name": "ScreenH",
-      "va": "0x00C321C4",
+      "va": "0x00C331C4",
       "kind": "data",
       "use": "popup_windows"
     },
     {
       "name": "QuestFinishUpdate",
-      "va": "0x00730250",
+      "va": "0x00730890",
       "kind": "code",
       "use": "popup_windows, quest_finish_rearm",
       "note": "QuestFinishWin::UpdateQuest"
     },
     {
       "name": "GetQuestMgr",
-      "va": "0x007EB840",
+      "va": "0x007EBFC0",
       "kind": "code",
       "use": "popup_windows, quest_finish_rearm"
     },
     {
       "name": "QuestGetStatus",
-      "va": "0x008FF590",
+      "va": "0x008FFD20",
       "kind": "code",
       "use": "popup_windows, quest_finish_rearm"
     },
     {
       "name": "SaveWinPos",
-      "va": "0x00571B70",
+      "va": "0x00571F90",
       "kind": "code",
       "use": "popup_windows"
     },
     {
       "name": "SendNetMsg",
-      "va": "0x00890B00",
+      "va": "0x00891250",
       "kind": "code",
       "use": "popup_windows"
     },
     {
       "name": "WinPosLoadA",
-      "va": "0x0055E330",
+      "va": "0x0055E750",
       "kind": "code",
       "use": "popup_windows",
       "note": "(a, ack), ret 8"
     },
     {
       "name": "WinPosLoadB",
-      "va": "0x0055FCC0",
+      "va": "0x005600E0",
       "kind": "code",
       "use": "popup_windows",
       "note": "(ack), ret 4"
     },
     {
       "name": "SkillLearnHandler",
-      "va": "0x005AD110",
+      "va": "0x005AD630",
       "kind": "code",
       "use": "skillbar_keep",
       "note": "LEARNSUC handler, thiscall(this, a1, payload), ret 8"
     },
     {
       "name": "ActiveSkillTable",
-      "va": "0x00CE4F30",
+      "va": "0x00CE5F30",
       "kind": "data",
       "use": "skillbar_keep",
       "note": "ActiveSkill table object*"
     },
     {
       "name": "QuickSlots",
-      "va": "0x00C1750C",
+      "va": "0x00C1850C",
       "kind": "data",
       "use": "skillbar_keep",
       "note": "void* slot[100]"
     },
     {
       "name": "QuickBarRedraw",
-      "va": "0x0057E2D0",
+      "va": "0x0057E6F0",
       "kind": "code",
       "use": "skillbar_keep"
     },
     {
       "name": "QuestListSkipA",
-      "va": "0x007363AD",
+      "va": "0x007369ED",
       "kind": "code",
       "use": "start_item_quests",
       "note": "jne skip (75 74) in quest list builder 0x736320"
     },
     {
       "name": "QuestListSkipB",
-      "va": "0x0073927C",
+      "va": "0x007398BC",
       "kind": "code",
       "use": "start_item_quests",
       "note": "jne skip (75 25) in quest list builder 0x738FA0"
     },
     {
       "name": "NiShutdown",
-      "va": "0x009D71B0",
+      "va": "0x009D7910",
       "kind": "code",
       "use": "exit_scene_order"
     },
     {
       "name": "MapSingleton",
-      "va": "0x00C54E00",
+      "va": "0x00C55E00",
       "kind": "data",
       "use": "exit_scene_order"
     },
     {
       "name": "MapSingletonGuard",
-      "va": "0x00CE1E40",
+      "va": "0x00CE2E40",
       "kind": "data",
       "use": "exit_scene_order",
       "note": "MSVC thread-safe static guard, -1 = constructed"
     },
     {
       "name": "MapSingletonDtor",
-      "va": "0x007A51F0",
+      "va": "0x007A5850",
       "kind": "code",
       "use": "exit_scene_order"
     },
     {
       "name": "MapSingletonAtexit",
-      "va": "0x00AEAF90",
+      "va": "0x00AEB700",
       "kind": "code",
       "use": "exit_scene_order",
       "note": "mov ecx,MapSingleton / jmp MapSingletonDtor"
     },
     {
       "name": "PgWinPostMsg",
-      "va": "0x00877A40",
+      "va": "0x00878190",
       "kind": "code",
       "use": "pgwin_msg.h"
     },
     {
       "name": "PgWinProcessMsg",
-      "va": "0x008784C0",
+      "va": "0x00878C10",
       "kind": "code",
       "use": "pgwin_msg.h"
     },
     {
       "name": "WinMgrIsIn",
-      "va": "0x00881DA0",
+      "va": "0x008824F0",
       "kind": "code",
       "use": "pgwin_msg.h"
     },
     {
       "name": "WinMgr",
-      "va": "0x00D1B810",
+      "va": "0x00D1C810",
       "kind": "data",
       "use": "pgwin_msg.h"
     },
     {
       "name": "RewardWinExpHighStore",
-      "va": "0x00697E0D",
+      "va": "0x006983DD",
       "kind": "code",
       "use": "recipe client-2026-quest-exp-u64",
       "note": "RewardWin (0x697D20): mov dword [ecx+0x1C], 0 - the EXP line's high dword"
     },
     {
       "name": "QuestHelperAddProgress",
-      "va": "0x007EC640",
+      "va": "0x007ECDC0",
       "kind": "code",
       "use": "quest_hover_refresh",
       "note": "QuestHelperMgr::AddProgressQuest(u16 quest), thiscall, ret 4 - only from the quest-script ACCEPT branch"
     },
     {
       "name": "QuestHelperRemoveProgress",
-      "va": "0x007EC800",
+      "va": "0x007ECF80",
       "kind": "code",
       "use": "quest_hover_refresh",
       "note": "QuestHelperMgr::RemoveProgressQuest(u16 quest), thiscall, ret 4 - give-up / script DONE"
     },
     {
       "name": "BuffDurationText",
-      "va": "0x005DC0B0",
+      "va": "0x005DC5E0",
       "kind": "code",
       "use": "buff_duration_hide",
       "note": "buff tooltip: remaining-time text builder, thiscall(char* buf, entry*), ret 8; end time = BuffEndTime(entry+0xA) - mktime(server tm)"
     },
     {
       "name": "BuffEndTime",
-      "va": "0x005DE580",
+      "va": "0x005DEAC0",
       "kind": "code",
       "use": "buff_duration_hide",
       "note": "buff entry +0xA -> end time as __int64 (thiscall, no args)"
     },
     {
       "name": "BuffTipFormat1",
-      "va": "0x005DBACB",
+      "va": "0x005DBFFB",
       "kind": "code",
       "use": "buff_duration_hide",
       "note": "call <va-format helper> building '%s\n\n%s: %s' (name, 'Duration Time', remaining) - buff icon tooltip site 1"
     },
     {
       "name": "BuffTipFormat2",
-      "va": "0x005DBC54",
+      "va": "0x005DC184",
       "kind": "code",
       "use": "buff_duration_hide",
       "note": "same, site 2"
     },
     {
       "name": "BuffTipFormat3",
-      "va": "0x005DE0AE",
+      "va": "0x005DE5EE",
       "kind": "code",
       "use": "buff_duration_hide",
       "note": "same, site 3"
     },
     {
       "name": "OpenQuestWin",
-      "va": "0x005845C0",
+      "va": "0x005849F0",
       "kind": "code",
       "use": "quest_scroll_keep",
       "note": "GameFrameWork::OpenQuestWin(int quest, int tab), thiscall ret 8: questwin = this+0x358 -> SelectTab(tab) 0x7362C0 (rebuilds the list) + SetSelectedID(quest) 0x7362A0; the quest-finished popup's click"
     },
     {
       "name": "SlideBarSetSplitCnt",
-      "va": "0x00522C50",
+      "va": "0x00522DE0",
       "kind": "code",
       "use": "quest_scroll_keep",
       "note": "SlideBar::SetSplitCnt(int n), thiscall ret 4: split +0x130 = n, clamps position +0x134 to [0, n-1], redraws"
     },
     {
       "name": "SlideListUpdateView",
-      "va": "0x005259F0",
+      "va": "0x00525B90",
       "kind": "code",
       "use": "quest_scroll_keep",
       "note": "SlideListWin::UpdateViewList(), thiscall: redraw from top row +0x150"
     },
     {
       "name": "QuestLocationLabelMobCmp",
-      "va": "0x00610E1F",
+      "va": "0x0061139F",
       "kind": "code",
       "use": "quest_location_all",
       "note": "FullMapWin::LocationInfo(quest) 0x610CE0 (the quest window's location button): label-mark loop, cmp ax,[ebp-4] (mark mob vs the quest's FIRST MobCoordinate mob); jne 0x11 hides the mark"
     },
     {
       "name": "QuestLocationAreaMobCmp",
-      "va": "0x00610E66",
+      "va": "0x006113E6",
       "kind": "code",
       "use": "quest_location_all",
       "note": "same, area-mark loop (+0x334)"
@@ -485,126 +485,126 @@
     },
     {
       "name": "DismantleCountA",
-      "va": "0x00655182",
+      "va": "0x006556B2",
       "kind": "code",
       "use": "instance_dismantle_text",
       "note": "MakeKarisWin preview 1: mov edi,[ebp-0xc]; push ebx (count); push 0x952059C5 - esi = the item"
     },
     {
       "name": "DismantleCountB",
-      "va": "0x006557DD",
+      "va": "0x00655D0D",
       "kind": "code",
       "use": "instance_dismantle_text",
       "note": "MakeKarisWin preview 2: same 9 bytes as DismantleCountA"
     },
     {
       "name": "DismantleCountC",
-      "va": "0x0065596A",
+      "va": "0x00655E9A",
       "kind": "code",
       "use": "instance_dismantle_text",
       "note": "MakeKarisWin Dismantle click: test eax,eax (count); jle refuse - esi = the item"
     },
     {
       "name": "DismantleRefuseC",
-      "va": "0x00655A75",
+      "va": "0x00655FA5",
       "kind": "code",
       "use": "instance_dismantle_text",
       "note": "the 'This item cannot be dismantled.' branch DismantleCountC jumps to"
     },
     {
       "name": "KillLineWindow",
-      "va": "0x007ED8F4",
+      "va": "0x007EE074",
       "kind": "code",
       "use": "quest_name_probe",
       "note": "quest window kill line: cmp byte [esi+5],0 ; jne (esi = QuestEndNpc row, eax = MobInfo row)"
     },
     {
       "name": "KillLinePopup",
-      "va": "0x00734063",
+      "va": "0x007346A3",
       "kind": "code",
       "use": "quest_name_probe",
       "note": "objective popup kill line: cmp byte [edi+5],0 ; jne (edi = QuestEndNpc row, eax = MobInfo row)"
     },
     {
       "name": "MobLocaName",
-      "va": "0x008FAF20",
+      "va": "0x008FB6B0",
       "kind": "code",
       "use": "quest_name_probe",
       "note": "cdecl MobLoca lookup (u32 name id) -> const char*"
     },
     {
       "name": "ServerMenuOnBut2",
-      "va": "0x0069D9F0",
+      "va": "0x0069DFC0",
       "kind": "code",
       "use": "menu_escape",
       "note": "ServerMenuWin::OnBut2 (2016 PDB): sends reply byte [this+0x182], closes; 2016 CancelServerMenuWin = jmp here"
     },
     {
       "name": "ServerMenuEscCall",
-      "va": "0x00581F88",
+      "va": "0x005823A8",
       "kind": "code",
       "use": "menu_escape",
       "note": "call OnBut2 in the frame's window-close (Escape) path: E8 rel32, ecx = the ServerMenuWin"
     },
     {
       "name": "ServerMenuPriorityCall",
-      "va": "0x0078FFFE",
+      "va": "0x0079060E",
       "kind": "code",
       "use": "menu_escape",
       "note": "call OnBut2 when a higher-priority window replaces the menu: E8 rel32, ecx = the ServerMenuWin"
     },
     {
       "name": "NetProcessNetMsg",
-      "va": "0x008178A0",
+      "va": "0x00818000",
       "kind": "code",
       "use": "clienthook.h",
       "note": "Net::ProcessNetMsg (PgNet vtable +0x18, 2016 PgNet::ProcessNetMsg 0x8C7D60): thiscall(dept, cmd, len, data) -> bool, ret 0x10 - every server packet, before the framework's own ProcessNetMsg"
     },
     {
       "name": "WorldSelectBtnState",
-      "va": "0x0055DB10",
+      "va": "0x0055DF30",
       "kind": "code",
       "use": "remote_control",
       "note": "WorldSelectWin::UpdateServerBtnState(btn) (2016 0x474650): thiscall, ret 4; page +0x158, selected world number +0x15C"
     },
     {
       "name": "WorldSelectCmdOk",
-      "va": "0x0055DD00",
+      "va": "0x0055E120",
       "kind": "code",
       "use": "remote_control",
       "note": "WorldSelectWin::OnCmdOk(bool) (2016 0x474610): thiscall, ret 4 -> AccountFrameWork::WorldSelectOk -> NC_USER_WORLDSELECT_REQ"
     },
     {
       "name": "WorldSelectVirtual0",
-      "va": "0x0055BF20",
+      "va": "0x0055C340",
       "kind": "code",
       "use": "remote_control",
       "note": "a WorldSelectWin virtual (captures the window object)"
     },
     {
       "name": "WorldSelectVirtual1",
-      "va": "0x0055E090",
+      "va": "0x0055E4B0",
       "kind": "code",
       "use": "remote_control",
       "note": "a WorldSelectWin virtual (captures the window object)"
     },
     {
       "name": "WorldSelectVirtual2",
-      "va": "0x0055C660",
+      "va": "0x0055CA80",
       "kind": "code",
       "use": "remote_control",
       "note": "a WorldSelectWin virtual (captures the window object)"
     },
     {
       "name": "WorldSelectVirtual3",
-      "va": "0x0055C7E0",
+      "va": "0x0055CC00",
       "kind": "code",
       "use": "remote_control",
       "note": "a WorldSelectWin virtual (captures the window object)"
     },
     {
       "name": "WorldSelectVirtual4",
-      "va": "0x0055DC00",
+      "va": "0x0055E020",
       "kind": "code",
       "use": "remote_control",
       "note": "a WorldSelectWin virtual (captures the window object)"
@@ -625,73 +625,101 @@
     },
     {
       "name": "WorldListCount",
-      "va": "0x00C31584",
+      "va": "0x00C32584",
       "kind": "data",
       "use": "remote_control",
       "note": "the server list's world count (2016 0xB300C4); the list follows: 18-byte entries, world number at +0x10"
     },
     {
       "name": "PgWinMouseX",
-      "va": "0x00D1B778",
+      "va": "0x00D1C778",
       "kind": "data",
       "use": "remote_control",
       "note": "PgWin::ms_iMsX (2016 0xB59688); ms_iMsY follows (+4)"
     },
     {
       "name": "NetAddNetMsg",
-      "va": "0x00890670",
+      "va": "0x00890DC0",
       "kind": "code",
       "use": "clienthook.h",
       "note": "PgNet::AddNetMsg(data, len) (2016 0x8C79D0): thiscall, ret 8 - appends to the packet being built"
     },
     {
       "name": "NetSendNetMsg",
-      "va": "0x00890B00",
+      "va": "0x00891250",
       "kind": "code",
       "use": "clienthook.h",
       "note": "PgNet::SendNetMsg(data, len) (2016 0x8C7A40): thiscall, ret 8 - appends the last part and sends; the packet starts with its opcode"
     },
     {
       "name": "NiAVObjectUpdate",
-      "va": "0x009838E0",
+      "va": "0x00984070",
       "kind": "code",
       "use": "time_scale",
       "note": "NiAVObject::Update(float fTime, bool bUpdateControllers), thiscall ret 8 (2016 0x821490): vfunc +0x50 UpdateDownwardPass, then the parent's +0x84"
     },
     {
       "name": "NiAVObjectUpdateSelected",
-      "va": "0x00983BC0",
+      "va": "0x00984350",
       "kind": "code",
       "use": "time_scale",
       "note": "NiAVObject::UpdateSelected(float fTime), thiscall ret 4 (2016 0x8214D0): vfunc +0x54"
     },
     {
       "name": "NiActorManagerUpdate",
-      "va": "0x00926700",
+      "va": "0x00926E90",
       "kind": "code",
       "use": "time_scale",
       "note": "NiActorManager::Update(float fTime), thiscall ret 4 (2016 0x7C91F0): stores fTime at +0x20, ProcessCallbacks"
     },
     {
       "name": "EffectStart",
-      "va": "0x007BBA00",
+      "va": "0x007BC150",
       "kind": "code",
       "use": "time_scale",
       "note": "Effect::Start(float fTime), thiscall ret 4 (2016 0x684B90, vtable slot 15): start time at +0x64, starts the controllers"
     },
     {
       "name": "EffectUpdate",
-      "va": "0x007BF6D0",
+      "va": "0x007BFE20",
       "kind": "code",
       "use": "time_scale",
       "note": "Effect::Update(float fTime), thiscall ret 4 (2016 0x688680, vtable slot 14): loop / oscillation / AE keys from fTime - +0x64"
     },
     {
       "name": "EffectIsEnd",
-      "va": "0x007C1520",
+      "va": "0x007C1C70",
       "kind": "code",
       "use": "time_scale",
       "note": "Effect::IsEnd(float fTime), thiscall ret 4 (2016 0x689DB0, vtable slot 19): fTime - start (+0x64) against the lifetime"
+    },
+    {
+      "name": "CmdLineParseCall",
+      "va": "0x0052E5FD",
+      "kind": "code",
+      "use": "login_address",
+      "note": "the call to the command-line parser (0x538AE0: -i -> LoginIp / LoginIpCopy, -p -> LoginPort) in the game frame's start-up"
+    },
+    {
+      "name": "LoginIp",
+      "va": "0x00C32514",
+      "kind": "data",
+      "use": "login_address",
+      "note": "char[16] the login server's IP (-i)"
+    },
+    {
+      "name": "LoginIpCopy",
+      "va": "0x00C228BA",
+      "kind": "data",
+      "use": "login_address",
+      "note": "char[] a second copy of the -i string"
+    },
+    {
+      "name": "LoginPort",
+      "va": "0x00C32524",
+      "kind": "data",
+      "use": "login_address",
+      "note": "int the login server's port (-p, atoi)"
     }
   ]
 }
