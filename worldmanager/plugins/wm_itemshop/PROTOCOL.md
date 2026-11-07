@@ -81,3 +81,23 @@ So the server sends WHICH goods are on sale (and prices / categories) by goodsNo
   {goodsNo, price, category, ...}) feeding E805.
 - OPEN: the record layouts (93 / 16 / 12 / 13 / 16 / 78 / 21 B) - static reading goes through STL containers in the window
   code; ONE capture of the official US client opening the item shop (and a buy) would give them all.
+
+## LIVE-VERIFIED with the official 2026 client against ik-fiesta-itemshop (2026-11-07)
+- C-> **E804** NC_PURCHASE_LOAD_ITEM_SHOP_REQ (0x6412C2, "[OnOpenItemMallWin]") 8 B: u16 0, u32 [0xC1CC30] (the catalogue
+  stamp E805 @2 set), u8 [0xC329C4] (shop up), u8 [0xC329BD]. Sent only while CMainWin +0x14F0 == 1 and the shop window's
+  +0x530 (load in flight, 0x4978B0 / 0x4978C0) is 0. The menu: X key -> "Fiesta Store" -> "Fiesta Shop (Alpha)".
+- The chain E804 -> E805 ... E800 -> E801 runs as traced; the window opens after E801 (balance u32 @0x203 shown as
+  "12,345"; the second line "0" = not yet traced).
+- **E805 goods record (0x5D B)** - the goods are the CLIENT's ItemShop.shn rows (goodsNo -> InxName, Lot): the record's
+  goodsNo is FNV-hashed into that table (0x492400..), the InxName then finds the ItemInfo row (name +0x22, grade colour
+  +0x76) - from the slot fill 0x4931B0 (record copied to slot +0x144):
+  | @ | type | meaning |
+  |---|------|---------|
+  | 4 | u32 | goodsNo (ItemShop.shn); must be >= 0 |
+  | 8 | u32 | list key: 0 = Hot Offer + the Catalogue, 1 = Special Selection (verified) |
+  | 0x2C, 0x30 | u32 | compared against the E815 13-byte records (0x499040) - category links, GUESS |
+  | 0x38 | u8 | 1 = listed (0x499048) |
+  | 0x39 | u32 | price - "Item Cost: %d" (text 0x26142475) (verified: 500 / 300 / 700 shown) |
+  | 0x4F | u32 | sale price, used when @0x5C == 1 and the caller has a discount ("-%d%%") |
+  | 0x5C | u8 | sale flag |
+  Icons came out as the placeholder swirl for goods 10002 / 10003 / 10004 (ItemShopView / ItemShopArt - not traced).
