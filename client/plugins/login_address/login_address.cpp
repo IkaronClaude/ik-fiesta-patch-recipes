@@ -9,14 +9,18 @@
 // The item shop's purchase connection needs no hook: PurchaseNetFrameWork connects to the WM's address from the
 // world-select answer (LoginWorldNetFrameWork 0x5583DB -> [0xC3253C] / [0xC3254C]) - its server lives in the WM.
 // ---- this plugin ---------------------------------------------------------------------------------------------------------
-// The loader loads plugins at the client's first CreateWindowExA - AFTER the parser ran (tested 2026-11-07: a stub on the
-// parser call never fired), so [login] ip= / port= from hooks\login_address.ini (when set) overwrite the three globals at
-// load; the parser call also goes through a stub that re-applies them, should a build parse later. No .ini, or empty keys
-// = the command line's values (stock).
+// The command line wins (operator 2026-11-07: "-p should beat the ini. But if no -p supplied, use the value from the
+// ini"): [login] ip= / port= from hooks\login_address.ini fill in only the options the command line lacks (-i / -p, read
+// from GetCommandLineW). The loader loads plugins at the client's first CreateWindowExA - AFTER the parser ran (tested
+// 2026-11-07), so they are written at load; the parser call also goes through a stub that re-applies them, should a build
+// parse later. No .ini, or empty keys = stock.
 #include <hook_core.h>
 #include <client_addrs.h>
 
 #include <windows.h>
+
+#include <shellapi.h>
+#pragma comment(lib, "shell32.lib")
 
 #include <cstring>
 
@@ -27,17 +31,29 @@ char* g_ip = nullptr;
 char* g_ip_copy = nullptr;
 int* g_port = nullptr;
 
+// whether the command line carries the option `opt` ("-i" / "-p") - the parser's own spelling (0x538AE0 strcmp)
+bool on_command_line(const wchar_t* opt) {
+    int n = 0;
+    wchar_t** argv = CommandLineToArgvW(GetCommandLineW(), &n);
+    bool found = false;
+    for (int i = 1; argv && i < n && !found; i++)
+        found = wcscmp(argv[i], opt) == 0;
+    if (argv) LocalFree(argv);
+    return found;
+}
+
 void apply_ini() {
     char ip[64] = {0};
-    hook::config_str("ip", "", ip, sizeof ip, "login");
-    int port = hook::config_int("port", 0, "login");
+    if (!on_command_line(L"-i")) hook::config_str("ip", "", ip, sizeof ip, "login");
+    int port = on_command_line(L"-p") ? 0 : hook::config_int("port", 0, "login");
     if (ip[0]) {
         std::memset(g_ip, 0, 16);
         strncpy_s(g_ip, 16, ip, _TRUNCATE);
         strcpy_s(g_ip_copy, 16, g_ip);
     }
     if (port > 0 && port < 65536) *g_port = port;
-    hook::log("login_address: login server %s:%d (%s)", g_ip, *g_port, ip[0] || port ? "from login_address.ini" : "the command line");
+    hook::log("login_address: login server %s:%d (ip from %s, port from %s)", g_ip, *g_port,
+              ip[0] ? "login_address.ini" : "the command line", port > 0 ? "login_address.ini" : "the command line");
 }
 
 void __declspec(naked) parse_then_override() {

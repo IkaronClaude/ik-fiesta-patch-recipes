@@ -120,10 +120,11 @@ First user: `plugins/remote_control` (`-charname`: the slot from NC_USER_LOGINWO
 ## `login_address` (plugin) - the login server from an ini, not only `-i` / `-p`
 
 `client/plugins/login_address`: the 2026 client takes the login server only from its command line (`-i <ip> -p <port>`,
-parsed by 0x538AE0 into `LoginIp` / `LoginIpCopy` / `LoginPort`; nothing reads it from a file). With
-`hooks\login_address.ini` `[login] ip=` / `port=` set, the plugin overwrites those globals at load (the loader loads
+parsed by 0x538AE0 into `LoginIp` / `LoginIpCopy` / `LoginPort`; nothing reads it from a file). The command line wins: `hooks\login_address.ini` `[login] ip=` / `port=` fill in only the options it lacks; the
+plugin writes those globals at load (the loader loads
 plugins at the first `CreateWindowExA`, after the parser ran) and again after the parser, should a build parse later.
-Empty keys / no .ini = the command line (stock). Live 2026-11-07: launched with `-p 1`, the .ini's 19010 logged in.
+Empty keys / no .ini = the command line (stock). Live 2026-11-07: without `-p` the log shows the .ini's port taken. NOTE: the stock 10.6.6 client then crashed in its
+display-device check (0x53523D) - so did a normal `-p` launch minutes later, so that is the display session, not this.
 
 The item shop's purchase connection needs no such hook: `PurchaseNetFrameWork` connects to the WM's own address from
 the world-select answer, so its server is a WorldManager plugin.
