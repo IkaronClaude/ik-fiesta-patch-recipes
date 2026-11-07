@@ -36,7 +36,8 @@
 //         "Guild Buff Remaining Time: -1:44").
 // ini [config]: advertise = the ip[16] of the 2026 avatar list head. Official sends ITS public address there plus a port
 // (OfficialUS2.pcapng: "192.99.126.72", port 9350 - a service of unknown purpose; the u16 stays 0 here, as the proxy
-// sent it, which worked). The proxy put its own address in; default empty.
+// sent it, which worked). The proxy put its own address in; default empty. advertise_port = the port beside it: the 2026
+// client's item shop (PurchaseNetFrameWork 0x4ACF10) connects THERE - the official's purchase server (9350); 0 = none.
 #include <hook_core.h>
 
 #include <cstdio>
@@ -87,6 +88,7 @@ struct Sess { bool is2026 = false; std::set<unsigned char> used; };
 std::map<void*, Sess> g_sess;
 CRITICAL_SECTION g_lock;
 char g_advertise[16] = {};
+unsigned short g_advertise_port = 0;      // ini [config] advertise_port: the purchase (item shop) server's port
 void* g_table = 0;
 void* g_unknown = 0;
 void* g_h_logout = 0;
@@ -266,7 +268,7 @@ int avatars(const unsigned char* p, int n, unsigned char* o, std::set<unsigned c
     memcpy(o, p, 3); m = 3;
     o[m++] = kAvatarSlots;
     memcpy(o + m, g_advertise, 16); m += 16;
-    o[m++] = 0; o[m++] = 0;
+    o[m++] = (unsigned char)(g_advertise_port & 0xFF); o[m++] = (unsigned char)(g_advertise_port >> 8);
     for (int i = 0; i < count; i++) {
         const unsigned char* a = p + 3 + kAvatar2016 * i;
         if (3 + kAvatar2016 * (i + 1) > n || m + kAvatar2026 > (int)sizeof t_out - 8) break;
@@ -401,6 +403,7 @@ HOOK_PLUGIN("wm_bridge26") {
     char ip[32] = "";
     hook::config_str("advertise", "", ip, sizeof ip);
     strncpy_s(g_advertise, ip, 15);
+    g_advertise_port = (unsigned short)hook::config_int("advertise_port", 0);
     g_table = hook::rebase(kVaGServer + kParserInServer);
     g_unknown = hook::proto::unknown_handler(g_table);
     bool ready = hook::proto::is_registered(g_table, kWmLogin2016);
