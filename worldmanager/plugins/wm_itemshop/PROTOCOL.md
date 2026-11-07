@@ -44,12 +44,12 @@ then please write it as a WM plugin instead").
 | E81B | 0x4AD59F | u32 @0, u32 @4, u32 @8 | window +0x310 0x4A9400(@8, @0, @4) |
 | E81C | 0x4AD5D2 | u32 @0, u32 @4, u32 @8, u32 @0xC | window +0x310 0x4A9480(@0xC, @0, @4, @8), shown (0x884870) |
 | E81E | 0x4AD615 | item u16 @0, u32 @2, err u16 @6 | +0x310 +0x159 = 0; err 0 -> 0x4A93D0(item), 0x4A93F0(@2), the ItemInfo row (0x22 = its name, table [0xCE2E98]) -> 0x4A95B0; else ItemShopSys line "Could not complete the pull. Please try again." (0x128C95AB, 0x497850) - a gacha "pull" |
-| E820 | 0x4AD6F9 | | 0x4AE5D0 |
-| E819 | 0x4AD70E | | 0x4AE810 |
+| E820 | 0x4AD6F9 -> 0x4AE5D0 | item u16 @0, @0xA u16, ... + a balance | a pull result into window +0x310 (0x4A93D0 / 0x4A93F0 / 0x4A95B0, the item's ItemInfo 0x48F070); the balance re-shown (0x495C80); failures "sorry!!nothings!! try again" / "ItemShop purchases currenty not possible. Please try again later." in ItemShopSys |
+| E819 | 0x4AD70E -> 0x4AE810 | a purchase result for window +0x310 + a balance | ok -> the balance re-shown, the item into the premium bag (0x497620), the shop unlocked; "You currently don't have enough coins for this." (0x5BFA3C71) as a system line; the same codes / texts as E824 |
 | E824 | 0x4AD723 | item u16 @6, count u32 @8, code u16 @0xC | the PURCHASE result: code 0 and count > 0 -> 0x497620(item, count); the shop unlocked ([0xC329E5] = 0, 0x4976E0(1)); code 1 "The conditions for purchasing this item are not met." (0x916C6A33, %d item), 2 "You currently don't have enough coins for this." (0x217DC7B3), 5 "ItemShop purchases currenty not possible. Please try again later.", 0x22B "Purchase is still being processed.. please wait", other (3, 4, ...) "Invalid Value" (0x855640D3) - lines in ItemShopSys (0x497850) |
-| E826 | 0x4AD84C | | 0x4AEAC0 |
-| E82A | 0x4AD861 | | 0x4AECF0 |
-| E82C | 0x4AD876 | | 0x4AEF10 |
+| E826 | 0x4AD84C -> 0x4AEAC0 | a purchase result + a balance | ok -> "Your purchase was successful! Your item was added to your premium inventory." (0x95ADE9CC); failures "You currently don't have enough coins for this." (0xBCB44906), "The item you're trying to purchase is out of stock." (0xF2DB4634), "An internal error occurred." (0x253574FC / 0x02F10FE5), not possible / still processing / "Invalid Value" |
+| E82A | 0x4AD861 -> 0x4AECF0 | item u16 @6, code u16 @8 | the GIFT result (E827's answer): 0 -> 0x497650(item), "The item has been sent out as gift. Purchase complete." (0x8526D94A); else conditions (0x916C6A33) / coins (0x217DC7B3) / not possible / "The character you entered could not be found." (0x8092A916) / "The user could not be found." (0xA176D8EA) / "Invalid Value"; the shop unlocked |
+| E82C | 0x4AD876 -> 0x4AEF10 | a gift result + a balance | ok -> "The item has been sent out as gift. Purchase complete." (0xA3FE6DDF); failures as E826 |
 | E82E | 0x4AD88B | ? @0, part u8 @2, count u32 @3, records 16 B @7 | list +0x6C |
 
 The record layouts (93 / 16 / 12 / 13 / 16 / 78 / 21 B) are still to be read from the window functions. Known: the 93-byte
