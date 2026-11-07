@@ -26,7 +26,8 @@ then please write it as a WM plugin instead").
 | E818 | 4 B | 0x5C2710 | |
 | E825 | 1 B (01) | 0x497620 via 0x818A10 (the purchase socket's send) | the shop window |
 | E82B | 33 B | 0x497650 via 0x818A10 | built from our name (0x794E80) - a gift / target name? |
-| E823 / E827 | ? | 0x497D40 / 0x494650 | the shop window (E823 builds a request through 0x4985E0 / 0x498770 - likely the BUY) |
+| E823 | 8 B: goods u16 @6 (+0..5 left as the stack had them) | 0x4981CE / 0x49E0B5 (the shop window, selected goods +0x45D; only with +0x4AC set and no purchase pending) | the BUY: sets "purchase pending" [0xC329E5] = 1 (cleared by E824) |
+| E827 | 28 B: u32 0, u16 0 @4, u32 @6 = [0xC32550] (a byte from a login-stage packet @0x53, set at 0x55537A - the world no?), goods u16 @0xA, name[16] @0xC | 0x4948A3 / 0x49E1BC | the GIFT buy (to that name); sets the pending flag too |
 
 ## Receives (server -> client)
 | op | handler | layout (offsets in the body) | effect |
