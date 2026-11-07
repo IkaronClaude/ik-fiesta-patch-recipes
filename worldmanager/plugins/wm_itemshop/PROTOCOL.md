@@ -1,5 +1,13 @@
 # The 2026 item shop ("PurchaseNet") protocol - traced from the 2026 US client 10.6.6 (Fiesta.exe 6AB41A55)
 
+**CORRECTION (2026-11-07, from the official captures): the purchase connection is NOT the WM's.** OfficialUS /
+OfficialUS2 / Official1 / LinuxZone20260914 all show it to port **9350** on the login host (WM there: 9110 / 9120), so the
+address the client copies in LoginWorldNetFrameWork (+4 IP, +0x14 port) is the PURCHASE SERVER's, advertised by the
+login side - a separate server (operator's first answer: its own repo / dotnet server / docker container), with the
+2026on2016 login path (bridge) putting its address into that answer. First frame on it, every capture: C-> **E806** 6 B
+(`00 00 00 00 dc 20`, `00 00 00 00 39 8e`, `0a 00 00 00 90 d9` - u32 + u16, the u16 differs per login: a key?), then
+only heartbeats (the shop was never opened in these captures).
+
 Status: IN PROGRESS (2026-11-07). Next: the record layouts (window functions 0x495580 / 0x4954E0 / 0x495970 /
 0x495B30 / 0x495940 / 0x4A8B30 / 0x4A8FC0), E823 / E827 bodies, E819 / E820 / E826 / E82A / E82C (0x4AE810 / 0x4AE5D0 /
 0x4AEAC0 / 0x4AECF0 / 0x4AEF10), then the server side (the stack's cash = Account tCash? delivery = the charged items). The server side will be this WorldManager plugin (operator: "If WM address is reused,
