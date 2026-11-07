@@ -34,7 +34,8 @@
 //         INFO_ACK 738 -> 742 B (GUILD_ACADEMY_CLIENT's dAcademyBuffUntilTime widened: 4 zero bytes at 2 + 36, as
 //         0x1097's; the 2026 handler 0x83E161 reads an i64 at data 32 - the 2016 4 bytes + sIntro's first showed
 //         "Guild Buff Remaining Time: -1:44").
-// ini [config]: advertise = the ip[16] of the 2026 avatar list head. Official sends ITS public address there plus a port
+// ini [config]: advertise = the ip[16] of the 2026 avatar list head ($NAME = that environment variable, e.g. $PUBLIC_IP;
+// * = the address the client reached the WM on, per session - the same machine serves the item shop). Official sends ITS public address there plus a port
 // (OfficialUS2.pcapng: "192.99.126.72", port 9350 - a service of unknown purpose; the u16 stays 0 here, as the proxy
 // sent it, which worked). The proxy put its own address in; default empty. advertise_port = the port beside it: the 2026
 // client's item shop (PurchaseNetFrameWork 0x4ACF10) connects THERE - the official's purchase server (9350); 0 = none.
@@ -337,6 +338,13 @@ int __fastcall on_send(void* sock, void*, unsigned char* f, int len) {
         char user[33];
         memcpy(user, g_sess[session].user, sizeof user);
         LeaveCriticalSection(&g_lock);
+        if (m && strcmp(g_advertise, "*") == 0) {           // advertise=*: the address this client reached the WM on
+            sockaddr_in me = {};
+            int ml = sizeof me;
+            memset(body + 4, 0, 16);
+            if (getsockname(*(SOCKET*)sock, (sockaddr*)&me, &ml) == 0)
+                strncpy_s((char*)body + 4, 16, inet_ntoa(me.sin_addr), _TRUNCATE);
+        }
         if (m && n >= 2) register_shop_key(sock, (unsigned short)(p[0] | (p[1] << 8)), user);
         if (!m) break;
         int k = frame(t_out, kAvatars2026, body, m);
@@ -442,6 +450,11 @@ HOOK_PLUGIN("wm_bridge26") {
     InitializeCriticalSection(&g_lock);
     char ip[32] = "";
     hook::config_str("advertise", "", ip, sizeof ip);
+    if (ip[0] == '$') {                                  // advertise=$PUBLIC_IP: the stack's own variable (every service has it)
+        char env[32] = "";
+        GetEnvironmentVariableA(ip + 1, env, sizeof env);
+        strncpy_s(ip, env, _TRUNCATE);
+    }
     strncpy_s(g_advertise, ip, 15);
     g_advertise_port = (unsigned short)hook::config_int("advertise_port", 0);
     char notify[96] = "";
