@@ -36,6 +36,15 @@ then please write it as a WM plugin instead").
 | E801 | 0x4AD1A8 | ? | 0x4AD9F0 |
 | E817 | 0x4AD4B1 | count u32 @0x618, records 0x4E (78) B @4 | window +0x310 (0x4A8B30 per record, 0x4A91F0, 0x4A9080); +0x158 == 2 selects 0x4A8F80 else 0x4A8D00 first |
 | E81A | 0x4AD53B | count u32 @0x41A, u32 @0x41E, records 0x15 (21) B @0xC | window +0x310 0x4A8FC0 per record |
-| E81B / E81C / E81E / E820 / E819 / E824 / E826 / E82A / E82C / E82E | ... | NOT YET TRACED | |
+| E81B | 0x4AD59F | u32 @0, u32 @4, u32 @8 | window +0x310 0x4A9400(@8, @0, @4) |
+| E81C | 0x4AD5D2 | u32 @0, u32 @4, u32 @8, u32 @0xC | window +0x310 0x4A9480(@0xC, @0, @4, @8), shown (0x884870) |
+| E81E | 0x4AD615 | item u16 @0, u32 @2, err u16 @6 | +0x310 +0x159 = 0; err 0 -> 0x4A93D0(item), 0x4A93F0(@2), the ItemInfo row (0x22 = its name, table [0xCE2E98]) -> 0x4A95B0; else ItemShopSys line "Could not complete the pull. Please try again." (0x128C95AB, 0x497850) - a gacha "pull" |
+| E820 | 0x4AD6F9 | | 0x4AE5D0 |
+| E819 | 0x4AD70E | | 0x4AE810 |
+| E824 | 0x4AD723 | item u16 @6, count u32 @8, code u16 @0xC | the PURCHASE result: code 0 and count > 0 -> 0x497620(item, count); the shop unlocked ([0xC329E5] = 0, 0x4976E0(1)); code 1 "The conditions for purchasing this item are not met." (0x916C6A33, %d item), 2 "You currently don't have enough coins for this." (0x217DC7B3), 5 "ItemShop purchases currenty not possible. Please try again later.", 0x22B "Purchase is still being processed.. please wait", other (3, 4, ...) "Invalid Value" (0x855640D3) - lines in ItemShopSys (0x497850) |
+| E826 | 0x4AD84C | | 0x4AEAC0 |
+| E82A | 0x4AD861 | | 0x4AECF0 |
+| E82C | 0x4AD876 | | 0x4AEF10 |
+| E82E | 0x4AD88B | ? @0, part u8 @2, count u32 @3, records 16 B @7 | list +0x6C |
 
 The record layouts (93 / 16 / 12 / 13 / 16 / 78 / 21 B) are still to be read from the window functions.
