@@ -1,0 +1,66 @@
+{
+  "name": "wm-shipped-hotfixes",
+  "summary": "The two hotfixes the shipped WorldManager.exe carries in its .custom section (a null check in CParserClient::fc_NC_FRIEND_DEL_REQ, an index guard in CWMZoneSessionManager::GetServiceMapCanParty), for a WorldManager RELINKED from fiesta-decomp source - whose base keeps the original pre-patch code.",
+  "status": "BUILT 2026-11-12 from the stock exe's .custom bytes (0xA30000 / 0xA30022), reproduced byte for byte. Apply with --reloc <WorldManager.reloc.json> to a relinked exe; the stock exe already has them (its sites then fail the expected-bytes check, so nothing is written twice).",
+  "target": {
+    "file": "WorldManager/WorldManager.exe",
+    "sha256": "0aaec96405b568ee936ca8fd46ed21caceca0769b7bc8e56187d7de3068a57c3",
+    "size": 630272
+  },
+  "params": {},
+  "consts": {
+    "site1": "0x0041D306",
+    "back1": "0x0041D30B",
+    "site2": "0x00439349",
+    "ne2": "0x0043935C",
+    "cont2": "0x00439350",
+    "out2": "0x0043936D",
+    "cave2": 34
+  },
+  "why": [
+    "The shipped exe was binary-patched after linking: a .custom section at 0xA30000 holds two caves, and two",
+    "jumps in .text lead to them. fiesta-decomp's base source is the original compile (docs/WorldManager-",
+    "equivalence.md: #19584, #19062), so a relinked exe needs them re-applied until a source branch carries them.",
+    "",
+    "1. fc_NC_FRIEND_DEL_REQ +0xD6: `mov eax, [ecx]; mov ecx, [esi+2]` (5 B) -> jmp cave:",
+    "     test eax, eax ; je back ; mov eax, [ecx] ; mov ecx, [esi+2] ; jmp back     (back = site + 5)",
+    "   - the friend entry pointer in eax is checked before it is dereferenced.",
+    "2. GetServiceMapCanParty +0x29: `cmp ebx, [edi] ; jne +0xF ; mov ebx, [eax-4]` (7 B) -> jmp cave ; nop ; nop:",
+    "     cmp edi, 0x42 ; jge out2 ; cmp ebx, [edi] ; jne ne2 ; jmp cont2 ; out2: jmp out2",
+    "   - an index guard (edi < 0x42) before the map row is read. NOTE, reproduced as shipped: the cave returns to",
+    "     cont2 = site + 7, so the original `mov ebx, [eax-4]` of the window is not executed - the following",
+    "     `cmp ebx, [edi+4]` compares the [eax-8] value loaded before the window. The stack has run this way."
+  ],
+  "new_section": {
+    "name": ".wmhotfix",
+    "size": "0x40",
+    "materialise": true,
+    "execute": true,
+    "note": "The two caves, at +0 and +0x22 as in the shipped .custom section."
+  },
+  "edits": [
+    { "why": "FRIEND_DEL_REQ: jmp to cave 1 (opcode, replaces mov eax,[ecx])", "at": "site1", "width": 1,
+      "expect": "0x8B", "write": "0xE9" },
+    { "why": "FRIEND_DEL_REQ: jmp to cave 1 (rel32, replaces the rest of mov eax,[ecx] and mov ecx,[esi+2])",
+      "at": "site1 + 1", "expect": "0x024E8B01", "write": "@newbase - (site1 + 5)" },
+    { "why": "GetServiceMapCanParty: jmp to cave 2 (opcode, replaces cmp ebx,[edi])", "at": "site2", "width": 1,
+      "expect": "0x3B", "write": "0xE9" },
+    { "why": "GetServiceMapCanParty: jmp to cave 2 (rel32, replaces the rest of cmp, jne +0xF, mov ebx,)",
+      "at": "site2 + 1", "expect": "0x8B0F751F", "write": "@newbase + cave2 - (site2 + 5)" },
+    { "why": "GetServiceMapCanParty: nop nop (the rest of mov ebx,[eax-4])", "at": "site2 + 5", "width": 2,
+      "expect": "0xFC58", "write": "0x9090" }
+  ],
+  "code": [
+    {
+      "why": "cave 1: null check of the friend entry, then the two moved loads, back",
+      "at": "@newbase",
+      "emit": ["85 C0", "74 05", "8B 01", "8B 4E 02", "E9", { "rel32": "back1" }]
+    },
+    {
+      "why": "cave 2: index guard, the moved compare, back (as shipped: to site2 + 7)",
+      "at": "@newbase + cave2",
+      "emit": ["83 FF 42", "7D 0D", "3B 1F", "0F 85", { "rel32": "ne2" }, "E9", { "rel32": "cont2" },
+               "E9", { "rel32": "out2" }]
+    }
+  ]
+}

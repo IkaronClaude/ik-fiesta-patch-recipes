@@ -227,10 +227,33 @@ inline uptr module_base() {
     return base;
 }
 
+// A plugin built for a RELINKED exe (fiesta-decomp's rebuild of the same source, whose layout differs from the
+// original until it is byte-identical) is compiled with /DHOOK_RELOC_HEADER="<exe>_reloc.h", the table
+// `python -m decomp.reloc <exe>` writes: every original public symbol's address range -> the same symbol in the
+// relink. rebase() then moves an original address with its symbol, keeping the offset into it (gServer + 0xBCBBC,
+// a site inside a function). Without the define nothing changes.
+#ifdef HOOK_RELOC_HEADER
+#include HOOK_RELOC_HEADER
+inline u32 relocate(u32 va) {
+    u32 lo = 0, hi = hook_reloc::kCount;
+    while (lo < hi) {                                   // last range starting at or before va
+        u32 mid = (lo + hi) / 2;
+        if (hook_reloc::kRanges[mid].orig <= va) lo = mid + 1; else hi = mid;
+    }
+    if (lo) {
+        const hook_reloc::Range& r = hook_reloc::kRanges[lo - 1];
+        if (va - r.orig < r.size) return r.ours + (va - r.orig);
+    }
+    return va;                                          // not in the map: a caller passing a non-address
+}
+#else
+inline u32 relocate(u32 va) { return va; }
+#endif
+
 // A PDB VA (based at the default image base) -> the live address in this process.
 // Every Fiesta server exe links at 0x00400000; pass the base from your symbol header if one does not.
 inline void* rebase(u32 va_at_default_base, u32 default_base = 0x00400000u) {
-    return (void*)(module_base() + (va_at_default_base - default_base));
+    return (void*)(module_base() + (relocate(va_at_default_base) - default_base));
 }
 
 // ---- the recipes' arena ---------------------------------------------------------------------------

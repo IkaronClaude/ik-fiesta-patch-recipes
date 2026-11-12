@@ -42,12 +42,18 @@ call "%VCVARS%" >nul 2>&1
 
 set OUT=build\plugins
 set OBJ=build\obj\%~2
+rem For a RELINKED exe (fiesta-decomp's rebuild, not byte-identical in layout yet): set HOOK_RELOC to the
+rem <exe>_reloc.h that `python -m decomp.reloc <exe>` wrote, and PLUGIN_OUT to a folder of its own so the stock
+rem build's DLLs are not overwritten. hook::rebase() then moves every original address with its symbol.
+if defined PLUGIN_OUT set OUT=%PLUGIN_OUT%
+if defined PLUGIN_OUT set OBJ=%PLUGIN_OUT%\obj\%~2
 if not exist %OUT% mkdir %OUT%
 if not exist %OBJ% mkdir %OBJ%
 set INC=/I common\include /I %~1\include
 set FLAGS=/nologo /W4 /EHsc /std:c++17 /O2 /MT /DHOOK_CRT %INC% /Fo%OBJ%\ /Fd%OUT%\%~2.pdb
 if /i "%~3"=="dynamic" set FLAGS=/nologo /W4 /EHsc /std:c++17 /O2 /MD %INC% /Fo%OBJ%\ /Fd%OUT%\%~2.pdb
 if /i "%~3"=="debug" set FLAGS=/nologo /W4 /EHsc /std:c++17 /Od /Zi /MTd /DHOOK_CRT %INC% /Fo%OBJ%\ /Fd%OUT%\%~2.pdb
+if defined HOOK_RELOC set FLAGS=%FLAGS% /DHOOK_RELOC_HEADER="\"%HOOK_RELOC%\""
 
 cl %FLAGS% /LD "%SRC%" /link /OUT:%OUT%\%~2.dll /DEBUG /SUBSYSTEM:WINDOWS kernel32.lib user32.lib
 if errorlevel 1 exit /b 1

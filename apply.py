@@ -307,6 +307,10 @@ class Pe:
                     "chain from the stock exe - it cannot be grown in place, because the data arena "
                     "sits after it." % (name, sec["vsize"], need))
             self._grow_data_arena(sec, need, materialise or bool(sec["rawsize"]))
+        elif materialise and not execute and need > sec["rawsize"]:
+            # the region fits the arena's VirtualSize but lies past its file bytes (an earlier zero-fill
+            # region grew the size only): back the arena with file bytes up to its end
+            self._grow_data_arena(sec, sec["vsize"], True)
 
         self._arena_set_used(sec, need)
         self._arena_record(label, off, size, execute)
@@ -523,6 +527,53 @@ def client_symbols(src):
     return {"@" + k: int(v, 16) for k, v in b["symbols"].items()}, stamp
 
 
+def relocate_recipe(r, reloc_path):
+    """--reloc: the recipe was written against the original exe; the input is a RELINKED build of the same source
+    (fiesta-decomp) whose layout differs. Every address literal in the recipe's consts / edits / code is moved
+    through the build's address map (python -m decomp.reloc <exe>: original symbol + offset -> the same symbol in
+    the relink), BEFORE anything is evaluated - a name that refers to a const is then already translated. Each
+    edit still checks the bytes it expects, so a site that did not move with its symbol refuses rather than
+    patching the wrong instruction."""
+    with open(reloc_path, encoding="utf-8") as f:
+        ranges = json.load(f)["ranges"]
+    starts = [x[0] for x in ranges]
+    import bisect
+
+    def tr(v):
+        i = bisect.bisect_right(starts, v) - 1
+        if i >= 0 and v < ranges[i][0] + ranges[i][1]:
+            return ranges[i][2] + (v - ranges[i][0])
+        raise SystemExit(f"REFUSING: 0x{v:08X} is in no symbol of the address map - cannot relocate it")
+
+    in_image = lambda v: 0x00401000 <= v < 0x00600000
+    moved = []
+
+    def walk(x, key=None):
+        if isinstance(x, dict):
+            return {k: (v if k in ("why", "summary", "status", "note", "name", "target", "params", "dll",
+                                   "function", "section") else walk(v, k)) for k, v in x.items()}
+        if isinstance(x, list):
+            return [walk(v, key) for v in x]
+        if isinstance(x, int) and not isinstance(x, bool) and in_image(x):
+            moved.append((x, tr(x)))
+            return tr(x)
+        if isinstance(x, str):
+            def sub(m):
+                v = int(m.group(0), 16)
+                if not in_image(v):
+                    return m.group(0)
+                moved.append((v, tr(v)))
+                return "0x%08X" % tr(v)
+            return re.sub(r"\b0x[0-9A-Fa-f]{6,8}\b", sub, x)
+        return x
+
+    out = walk(r)
+    print(f"reloc  : {len(moved)} address literal(s) moved through {reloc_path}")
+    for a, b in sorted(set(moved)):
+        print(f"         0x{a:08X} -> 0x{b:08X}")
+    return out
+
+
 def load_recipe(path, overrides):
     with open(path, encoding="utf-8") as f:
         r = json.load(f)
@@ -545,6 +596,9 @@ def main():
                     help="override a recipe parameter, e.g. --set groups=32768")
     ap.add_argument("--allow-hash-mismatch", action="store_true",
                     help="proceed even if the input does not match the recipe's recorded hash")
+    ap.add_argument("--reloc", metavar="RELOC_JSON",
+                    help="the input is a relinked build of the recipe's exe: move every address through this "
+                         "address map (python -m decomp.reloc <exe>); implies --allow-hash-mismatch")
     a = ap.parse_args()
 
     overrides = {}
@@ -552,6 +606,9 @@ def main():
         k, _, v = kv.partition("=")
         overrides[k.strip()] = int(v, 0)
     r = load_recipe(a.recipe, overrides)
+    if a.reloc:
+        r = relocate_recipe(r, a.reloc)
+        a.allow_hash_mismatch = True
 
     src = open(a.exe, "rb").read()
     digest = hashlib.sha256(src).hexdigest()
