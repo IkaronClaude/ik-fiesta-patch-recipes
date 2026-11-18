@@ -212,13 +212,14 @@ def main():
             nxt = os.path.join(work, '%02d-%s.exe' % (i, name))
             apply(a.target, name, sets, cur, nxt, first=(i == 0), allow_mismatch=a.allow_hash_mismatch)
             print('  applied  %-30s %s' % (name, ' '.join(sets)))
+            if cur != a.exe:
+                os.remove(cur)          # only the newest image is kept: a patched Zone.exe is 110 MB, the chain 26 deep
             cur = nxt
-        # Each recipe is verified against its own input, not the stock exe: sections added earlier move the
-        # addresses a later recipe's @newbase resolves to.
-        prev = a.exe
+        # Every recipe is verified on the FINAL binary. --verify reads every region a recipe's @newbase names from the
+        # verified image's own arena directory, so the input passed beside it is only the layout-free reference.
         bad = 0
         for i, (name, sets) in enumerate(chain):
-            ok, tail = verify(a.target, name, sets, prev if i == 0 else os.path.join(work, '%02d-%s.exe' % (i - 1, chain[i - 1][0])), cur)
+            ok, tail = verify(a.target, name, sets, a.exe, cur)
             print('  verify   %-30s %s' % (name, 'ok' if ok else 'FAILED: ' + tail[0]))
             bad += not ok
         if bad:

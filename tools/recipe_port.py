@@ -247,8 +247,9 @@ class Symbols:
                         s = at(m.group(1), m.group(2))
                         if s is not None:
                             glob = pend[1].startswith('S_G') or args[1] == '-globals'
-                            s.names.add(('data', pend[2]) if glob else ('data', pend[2], mod))
-                            s.label = s.label or pend[2]
+                            if pend[2]:                  # an unnamed record (a switch table) is no identity
+                                s.names.add(('data', pend[2]) if glob else ('data', pend[2], mod))
+                            s.label = s.label or pend[2] or '(unnamed data)'
                         pend = None
         self._contribs(img, tool, pdb, secs)
         self._finish(by)
@@ -568,10 +569,11 @@ class Mapper:
                 k += 1
         # a byte index table: in the original it is a symbol of its own (the PDB has an unnamed data record for it)
         s = self.o.containing(v)
-        if s is None or s.va != v or s.names - {('data', '')}:
+        if s is None or s.names:
             return False
-        a, b = self.o.img.read(v, s.extent), self.n.img.read(w, s.extent)
-        return a is not None and a == b and len(a) > 0
+        n = s.va + s.extent - v                       # to the end of the unnamed record (after a dword table)
+        a, b = self.o.img.read(v, n), self.n.img.read(w, n)
+        return a is not None and a == b and n > 0
 
     def _case_eq(self, fo, a, b):
         """a case label of a function that is not byte-identical: equal when it is the aligned instruction"""
@@ -774,6 +776,8 @@ class Mapper:
             return b.addr + (va - i.addr), 'aligned %s+0x%X' % (s.label, va - s.va)
         p = self.loc_piece('o', va)
         t, why = self.counterpart(s)
+        if not s.names:
+            return self._unnamed(s, va, what)
         if t is None and p is not None:
             return self.pieces[p[0]][0] + p[1], 'data %s+0x%X (its object\'s data piece)' % (s.label, va - s.va)
         if t is None:
@@ -782,6 +786,25 @@ class Mapper:
             raise Refuse('%s0x%08X: %s+0x%X lies past our %s (extent 0x%X)' % (what, va, s.label, va - s.va,
                                                                                 t.label, t.extent))
         return t.va + (va - s.va), 'data %s+0x%X' % (s.label, va - s.va)
+
+    def _unnamed(self, s, va, what):
+        """an unnamed record (a switch's jump / index table, emitted right after its function): the function's
+        counterpart + the same offset, accepted only when the function is identical in our build and the table there
+        is the same table (every case label the counterpart of the original's)"""
+        k = bisect.bisect_right(self.o.starts, s.va) - 1
+        while k >= 0 and not (self.o.syms[k].code and self.o.syms[k].names):
+            k -= 1
+        if k < 0:
+            raise Refuse('%s0x%08X: an unnamed record with no function before it' % (what, va))
+        f = self.o.syms[k]
+        d = self.fn(f)
+        if not d.identical:
+            raise Refuse('%s0x%08X: a table of %s, which is not identical in our build (%s)' % (what, va, f.label,
+                                                                                          d.why))
+        w = d.n.va + (s.va - f.va)
+        if not self._table_eq(s.va, w, 2):
+            raise Refuse('%s0x%08X: the table after %s is not the same table in our build' % (what, va, f.label))
+        return w + (va - s.va), 'table of %s+0x%X' % (f.label, va - f.va)
 
     def T_range(self, va, n, identical=False, what=''):
         first, how = self.T(va, identical=identical, what=what)
@@ -868,54 +891,123 @@ class Recipe:
         return self.env[leaf[1]] if leaf[0] == 'const' else int(leaf[1], 0)
 
 
+def rd(img, over, va, n):
+    """n bytes at va with the chain's earlier writes laid over them"""
+    b = img.read(va, n)
+    if b is None or not over:
+        return b
+    return bytes(over.get(va + k, b[k]) for k in range(n))
+
+
+def _with_bytes(img, va, b):
+    d = bytearray(img.data)
+    off = img.pe.offset_of(va)
+    d[off:off + len(b)] = b
+    return d
+
+
 # ---- porting one recipe --------------------------------------------------------------------------
 
-def port_recipe(rec, mp, new_img, notes):
-    """the ported recipe dict, or Refuse. mp: the mapper whose original side is this recipe's reference image"""
+def port_recipe(rec, mp, new_img, notes, o_over=None, n_over=None):
+    """the ported recipe dict, or Refuse. mp: the mapper whose original side is this recipe's reference image.
+    o_over / n_over: {va: byte} the recipes before this one in the chain wrote (original / ours) - a recipe's expect
+    may be an earlier recipe's write. Updated with this recipe's writes on success."""
+    o_over = {} if o_over is None else o_over
+    n_over = {} if n_over is None else n_over
     r = copy.deepcopy(rec.r)
     oimg = mp.o.img
     has_caves = bool(r.get('code'))
     in_img = lambda v: oimg.in_image(v)
 
-    # 1. classify every in-image leaf by where it is used
-    role = {}                                     # leaf -> {'addr', 'scalar'}, with why
-    exprs = []                                    # (kind, expr, edit) for rewriting
-    def mark(leaf, what, why):
+    # 1. classify every in-image leaf by where it is used. An address of the original is an address because the
+    #    bytes it lands in ARE an address operand: of the instruction the recipe edits (its expect), of the
+    #    instruction the patched bytes form (a write; decoded from the original with this recipe's edits applied),
+    #    of a cave instruction (a u32), or a pointer the original data held. A number that lands in opcode / string
+    #    bytes is a number, whatever it looks like.
+    role = {}
+
+    def mark(leaf, what):
         role.setdefault(leaf, set()).add(what)
+
+    edits0 = [(rec.ev(e['at']), int(e.get('width', 4)), rec.ev(e['write'])) for e in r.get('edits', [])]
+
+    def patched_fields(at, w):
+        """address fields of the ORIGINAL function containing `at` once this recipe's edits are in"""
+        s = mp.o.containing(at)
+        if s is None or not s.code:
+            return []
+        lo, hi = s.va, s.va + s.extent
+        b = bytearray(rd(oimg, o_over, lo, hi - lo) or b'')
+        for a2, w2, v2 in edits0:
+            if lo <= a2 and a2 + w2 <= hi:
+                b[a2 - lo:a2 - lo + w2] = struct.pack({1: '<B', 2: '<H', 4: '<I'}[w2], v2 & ((1 << 8 * w2) - 1))
+        tmp = Image(data=_with_bytes(oimg, lo, bytes(b)), label='patched')
+        out = []
+        for i in decode(tmp, lo, hi):
+            if i.addr + i.size <= at or i.addr >= at + w:
+                continue
+            out += [(i.addr + o, fw, k, v) for o, fw, k, v in i.fields if i.addr + o < at + w and i.addr + o + fw > at]
+        return out
 
     for e in r.get('edits', []):
         at = rec.ev(e['at'])
         w = int(e.get('width', 4))
+        site = mp.o.containing(at)
         fields = mp.site_fields(at, w)
         for leaf in rec.leaves(e['at']):
             if in_img(rec.leaf_value(leaf)):
-                mark(leaf, 'addr', 'at')
-        for which in ('expect', 'write'):
-            for leaf in rec.leaves(e[which]):
-                v = rec.leaf_value(leaf)
-                if not in_img(v):
-                    continue
-                if fields and (which == 'expect' or any(f[0] >= at and f[0] + f[1] <= at + w for f in fields)):
-                    mark(leaf, 'addr', which)
-                elif which == 'expect':
-                    mark(leaf, 'scalar', 'expect over no address operand')
-                else:
-                    mark(leaf, 'unknown', 'write')
+                mark(leaf, 'addr')
+        for leaf in rec.leaves(e['expect']):
+            if in_img(rec.leaf_value(leaf)):
+                mark(leaf, 'addr' if fields else 'scalar')
+        wl = [x for x in rec.leaves(e['write']) if in_img(rec.leaf_value(x))]
+        if not wl:
+            continue
+        if site is not None and site.code:
+            pf = patched_fields(at, w)
+            for leaf in wl:
+                mark(leaf, 'addr' if pf else 'scalar')
+        elif fields:
+            for leaf in wl:
+                mark(leaf, 'addr')
+        else:
+            cur = rd(oimg, o_over, at, w)
+            for leaf in wl:
+                mark(leaf, 'scalar' if cur and any(cur) else 'unknown')
     for c in r.get('code', []):
         for leaf in rec.leaves(c['at']):
             if in_img(rec.leaf_value(leaf)):
-                mark(leaf, 'addr', 'code at')
+                mark(leaf, 'addr')
+        blob, u32s = bytearray(), []
         for piece in c['emit']:
-            if isinstance(piece, dict):
-                k, ex = next(iter(piece.items()))
-                for leaf in rec.leaves(ex):
-                    if in_img(rec.leaf_value(leaf)):
-                        mark(leaf, 'addr' if k in ('rel32', 'abs32') else 'unknown', k)
+            if isinstance(piece, str):
+                blob += bytes.fromhex(piece.replace(' ', ''))
+                continue
+            k, ex = next(iter(piece.items()))
+            if k == 'u32':
+                u32s.append((len(blob), ex))
+            blob += struct.pack('<I', rec.ev(ex) & 0xFFFFFFFF) if k != 'rel32' else bytes(4)
+            for leaf in rec.leaves(ex):
+                if in_img(rec.leaf_value(leaf)) and k in ('rel32', 'abs32'):
+                    mark(leaf, 'addr')
+        fields_at = set()
+        for ins in _md.disasm(bytes(blob), 0):
+            if ins.disp_size == 4:
+                fields_at.add(ins.address + ins.disp_offset)
+            if getattr(ins, 'imm_size', 0) == 4:
+                fields_at.add(ins.address + ins.imm_offset)
+        for off, ex in u32s:
+            for leaf in rec.leaves(ex):
+                v = rec.leaf_value(leaf)
+                if not in_img(v):
+                    continue
+                c2 = mp.o.containing(v)
+                mark(leaf, 'addr' if off in fields_at or (c2 is not None and c2.code) else 'unknown')
     for leaf, roles in role.items():
         if 'unknown' in roles and 'addr' not in roles:
-            raise Refuse('%s: %s = 0x%08X lies in the original image but is only used as a plain value (a write or '
-                         'u32) - cannot tell an address from a constant; use abs32 / give it an `at` use' %
-                         (rec.name, leaf[1], rec.leaf_value(leaf)))
+            raise Refuse('%s: %s = 0x%08X lies in the original image, but where it is used nothing says whether it is '
+                         'an address (a u32 outside any instruction operand, or a write into data that held zero) - '
+                         'write it as abs32 if it is one' % (rec.name, leaf[1], rec.leaf_value(leaf)))
         if 'addr' in roles and 'scalar' in roles:
             raise Refuse('%s: %s = 0x%08X is used both as an address and over bytes that hold no address operand' %
                          (rec.name, leaf[1], rec.leaf_value(leaf)))
@@ -981,7 +1073,7 @@ def port_recipe(rec, mp, new_img, notes):
         w = int(e.get('width', 4))
         fmt = {1: '<B', 2: '<H', 4: '<I'}[w]
         oat = rec.ev(e0['at'])
-        obytes = oimg.read(oat, w)
+        obytes = rd(oimg, o_over, oat, w)
         oexp = rec.ev(e0['expect']) & ((1 << 8 * w) - 1)
         if obytes is None or struct.unpack(fmt, obytes)[0] != oexp:
             raise Refuse('%s: 0x%08X does not hold the recipe\'s expect 0x%X in the reference image (it holds %s)' %
@@ -1001,7 +1093,7 @@ def port_recipe(rec, mp, new_img, notes):
                     raise Refuse('%s: edit at 0x%08X (ours 0x%08X) overwrites part of a base-relocated address at '
                                  '0x%08X with something that is not that whole address - the loader would corrupt '
                                  'it on a rebase' % (rec.name, oat, want, rv))
-        nb = new_img.read(want, w)
+        nb = rd(new_img, n_over, want, w)
         nval = struct.unpack(fmt, nb)[0]
         pexp = AP.evaluate(e['expect'], penv) & ((1 << 8 * w) - 1)
         if pexp != nval:
@@ -1023,6 +1115,13 @@ def port_recipe(rec, mp, new_img, notes):
                     if AP.evaluate(p['rel32'], penv) != want:
                         raise Refuse('%s: cave jump target 0x%08X ports to 0x%08X, its instruction to 0x%08X' %
                                      (rec.name, ov, AP.evaluate(p['rel32'], penv), want))
+    for e0, e in zip(rec.r.get('edits', []), r.get('edits', [])):
+        w = int(e.get('width', 4))
+        fmt = {1: '<B', 2: '<H', 4: '<I'}[w]
+        for over, at, val in ((o_over, rec.ev(e0['at']), rec.ev(e0['write'])),
+                              (n_over, AP.evaluate(e['at'], penv), AP.evaluate(e['write'], penv))):
+            for k, b in enumerate(struct.pack(fmt, val & ((1 << 8 * w) - 1))):
+                over[at + k] = b
     r['target'] = {'file': rec.r.get('target', {}).get('file'), 'sha256': new_img.sha256, 'size': len(new_img.data)}
     r['ported'] = {'from_sha256': rec.r.get('target', {}).get('sha256'), 'by': 'tools/recipe_port.py'}
     return r
@@ -1196,11 +1295,12 @@ def cmd_port(a):
     rsyms.img = ref
     mp = Mapper(rsyms, nsyms)
     ported, refused = {}, {}
+    o_over, n_over = {}, {}
     for rec in recipes:
         notes = []
         m = mp
         try:
-            ported[rec.name] = port_recipe(rec, m, nimg, notes)
+            ported[rec.name] = port_recipe(rec, m, nimg, notes, o_over, n_over)
             kinds = {}
             for e in ported[rec.name].get('edits', []):
                 k = e['ported_from'].split()[1]
