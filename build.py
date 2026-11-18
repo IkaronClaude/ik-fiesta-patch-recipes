@@ -126,18 +126,46 @@ WORLDMANAGER_CHAIN = [
 # Account / AccountLog / GameLog / Login (--target <name>): only the plugin loader so far (Q53, cpu_count).
 DB_CHAINS = {t: [('dll-loader-%s' % t, [])] for t in ('account', 'accountlog', 'gamelog', 'login')}
 
+# Recipes only a REBUILT exe needs (--rebuilt; tools/recipe_port.py ports a chain with them): the shipped exe
+# already carries these fixes in its own post-link .custom section, which a build from fiesta-decomp source does not
+# have. Appended at the END, so every other region keeps its place relative to the stock chain.
+REBUILT_ONLY = {
+    'worldmanager': [('wm-shipped-hotfixes', [])],
+}
+
+TARGETS = ('zone', 'character', 'worldmanager', 'account', 'accountlog', 'gamelog', 'login')
+
 # The chain as it was before handle-layout-2026, for reproducing build/Zone.maps.npc.dmg.exe exactly.
 LEGACY = {'npc-object-pool-cap': []}
 
 
+RECIPES_DIR = {}          # target -> another recipes folder (--recipes-dir: e.g. the ported recipes of a rebuilt exe)
+
+
 def recipe_path(target, recipe):
-    return os.path.join(HERE, target, 'recipes', recipe + '.json')
+    return os.path.join(RECIPES_DIR.get(target) or os.path.join(HERE, target, 'recipes'), recipe + '.json')
 
 
-def apply(target, recipe, sets, src, dst, first):
+def chain_for(target, experimental=False, upto=None, legacy=False, rebuilt=False):
+    """[(recipe, sets)] in load order"""
+    chain = []
+    for name, sets in dict({'character': CHARACTER_CHAIN, 'worldmanager': WORLDMANAGER_CHAIN}, **DB_CHAINS).get(target, CHAIN):
+        chain.append((name, LEGACY.get(name, sets) if legacy else sets))
+        if name == upto:
+            return chain
+    if legacy:
+        chain = [c for c in chain if c[0] != 'handle-layout-2026']
+    if experimental and not legacy and target == 'zone':
+        chain += EXPERIMENTAL
+    if rebuilt:
+        chain += REBUILT_ONLY.get(target, [])
+    return chain
+
+
+def apply(target, recipe, sets, src, dst, first, allow_mismatch=False):
     cmd = [sys.executable, os.path.join(HERE, 'apply.py'), recipe_path(target, recipe),
            '--exe', src, '--out', dst]
-    if not first:
+    if not first or allow_mismatch:
         cmd.append('--allow-hash-mismatch')
     for s in sets:
         cmd += ['--set', s]
@@ -158,30 +186,31 @@ def verify(target, recipe, sets, stock, built):
 
 def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument('--target', choices=('zone', 'character', 'worldmanager', 'account', 'accountlog', 'gamelog', 'login'), default='zone')
+    ap.add_argument('--target', choices=TARGETS, default='zone')
     ap.add_argument('--exe', required=True, help='the STOCK Zone.exe (or Character.exe / WorldManager.exe); opened read-only')
     ap.add_argument('--out', required=True)
     ap.add_argument('--upto', help='stop after this recipe')
     ap.add_argument('--experimental', action='store_true', help='also apply the recipes that have not been booted yet')
     ap.add_argument('--legacy', action='store_true', help='NPC handles at the old 0xA000 (reproduces older builds)')
+    ap.add_argument('--rebuilt', action='store_true',
+                    help='the exe is rebuilt from source: also apply REBUILT_ONLY (fixes the shipped exe carries)')
+    ap.add_argument('--recipes-dir', help='read the recipes from here instead of <target>/recipes (tools/recipe_port.py '
+                                          'writes the ported recipes of a rebuilt exe to one)')
+    ap.add_argument('--allow-hash-mismatch', action='store_true',
+                    help='the first recipe too (every site still checks its expected bytes)')
     a = ap.parse_args()
+    if a.recipes_dir:
+        RECIPES_DIR[a.target] = os.path.abspath(a.recipes_dir)
 
-    chain = []
-    for name, sets in dict({'character': CHARACTER_CHAIN, 'worldmanager': WORLDMANAGER_CHAIN}, **DB_CHAINS).get(a.target, CHAIN):
-        chain.append((name, LEGACY.get(name, sets) if a.legacy else sets))
-        if name == a.upto:
-            break
-    if a.legacy and not a.upto:
-        chain = [c for c in chain if c[0] != 'handle-layout-2026']
-    if a.experimental and not a.upto and not a.legacy and a.target == 'zone':
-        chain += EXPERIMENTAL
+    chain = chain_for(a.target, experimental=a.experimental and not a.upto, upto=a.upto, legacy=a.legacy,
+                      rebuilt=a.rebuilt and not a.upto)
 
     work = tempfile.mkdtemp(prefix='zonebuild-')
     try:
         cur = a.exe
         for i, (name, sets) in enumerate(chain):
             nxt = os.path.join(work, '%02d-%s.exe' % (i, name))
-            apply(a.target, name, sets, cur, nxt, first=(i == 0))
+            apply(a.target, name, sets, cur, nxt, first=(i == 0), allow_mismatch=a.allow_hash_mismatch)
             print('  applied  %-30s %s' % (name, ' '.join(sets)))
             cur = nxt
         # Each recipe is verified against its own input, not the stock exe: sections added earlier move the

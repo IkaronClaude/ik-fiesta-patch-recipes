@@ -7,6 +7,8 @@
     "sha256": "0aaec96405b568ee936ca8fd46ed21caceca0769b7bc8e56187d7de3068a57c3",
     "size": 630272
   },
+  "reference": "unpatched",
+  "reference_why": "Every expect is the code BEFORE the shipped exe's own .custom patch: the stock exe carries an equivalent of this recipe already. tools/recipe_port.py ports it against the original with these expects written back (the shipped patch undone).",
   "params": {},
   "consts": {
     "site1": "0x0041D306",
