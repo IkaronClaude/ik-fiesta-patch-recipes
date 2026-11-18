@@ -426,7 +426,12 @@ ZONEHOOK_PLUGIN("rid_gate") {
     g_packet = (unsigned char**)imm32(kVaPacketMov, 2);
     g_zrpb = (void*)imm32(kVaZrpbMov, 1);
     unsigned char* p = (unsigned char*)zone::rebase(kVaInvalidRole);
-    if (std::memcmp(p, kInvalidRoleBytes, sizeof kInvalidRoleBytes) != 0) {
+    // push ebx ; push <"Invalid NPC Role" literal> - the literal's address comes from the site table (it moves in a
+    // rebuilt exe), so compare the opcodes and the mapped address rather than the stock bytes
+    unsigned char expect[sizeof kInvalidRoleBytes];
+    std::memcpy(expect, kInvalidRoleBytes, sizeof expect);
+    *(unsigned*)(expect + 2) = (unsigned)zone::rebase(kInvalidRoleMsgVa);
+    if (std::memcmp(p, expect, sizeof expect) != 0) {
         zone::log("rid_gate: unexpected bytes at 0x4C6456 - RIDGate / RID4Gate NOT enabled (an NPC.txt row using them exits)");
         return;
     }
