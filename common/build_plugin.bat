@@ -50,10 +50,15 @@ if defined PLUGIN_OUT set OBJ=%PLUGIN_OUT%\obj\%~2
 if not exist %OUT% mkdir %OUT%
 if not exist %OBJ% mkdir %OBJ%
 set INC=/I common\include /I %~1\include
+rem For an exe REBUILT from source (tools/recipe_port.py): HOOK_TARGET_INCLUDE = the folder `recipe_port.py headers`
+rem wrote (the target's include\ with every generated address moved to the rebuild), HOOK_SITES = the <exe>_sites.h
+rem `recipe_port.py sites` wrote for hook::site(); PLUGIN_OUT = a folder of its own (the stock DLLs stay as they are).
+if defined HOOK_TARGET_INCLUDE set INC=/I common\include /I "%HOOK_TARGET_INCLUDE%"
 set FLAGS=/nologo /W4 /EHsc /std:c++17 /O2 /MT /DHOOK_CRT %INC% /Fo%OBJ%\ /Fd%OUT%\%~2.pdb
 if /i "%~3"=="dynamic" set FLAGS=/nologo /W4 /EHsc /std:c++17 /O2 /MD %INC% /Fo%OBJ%\ /Fd%OUT%\%~2.pdb
 if /i "%~3"=="debug" set FLAGS=/nologo /W4 /EHsc /std:c++17 /Od /Zi /MTd /DHOOK_CRT %INC% /Fo%OBJ%\ /Fd%OUT%\%~2.pdb
 if defined HOOK_RELOC set FLAGS=%FLAGS% /DHOOK_RELOC_HEADER="\"%HOOK_RELOC%\""
+if defined HOOK_SITES set FLAGS=%FLAGS% /DHOOK_SITES_HEADER="\"%HOOK_SITES%\""
 
 cl %FLAGS% /LD "%SRC%" /link /OUT:%OUT%\%~2.dll /DEBUG /SUBSYSTEM:WINDOWS kernel32.lib user32.lib
 if errorlevel 1 exit /b 1

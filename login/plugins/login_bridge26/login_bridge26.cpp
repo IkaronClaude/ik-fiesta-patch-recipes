@@ -34,19 +34,20 @@
 //         0x0C06 {n, 00 05 00 60, entries}, U(0x0C3E) {challenge} | 0x0C0C world-select ack 83 B -> 0x0C0B 84 B (+ world).
 //   The challenge, the OTP frame and the world-list head are 2026 handshake bytes the 2016 server has no notion of,
 //   replayed from the official captures exactly as the proxy replayed them.
-#include <hook_core.h>
+#include <loginhook.h>
+#include <login_functions.h>
+#include <login_globals.h>
 
 #include <cstring>
 #include <map>
 
 namespace {
 
-const unsigned kVaParser = 0x00406680u;        // CParserClient::Parser(CLoginClientSession*), __thiscall, ret 4
-const unsigned kVaSocketSend = 0x00411030u;    // CSocket_IOCP::Send(void* framed, int len), __thiscall, ret 8
-const unsigned kVaVersionKeys = 0x0044264Cu;   // the loaded ClientVersionKeyInfo keys, 64 B each
-const unsigned kVaVersionKeyCount = 0x0044278Cu;
+// Symbols (generated headers): CParserClient::Parser(CLoginClientSession*) (__thiscall, ret 4) and CSocket_IOCP::Send(
+// void* framed, int len) (__thiscall, ret 8) are detoured; the loaded ClientVersionKeyInfo keys are
+// gServer.m_sVersionKey (64 B each), their count gServer.m_nVersionListNum.
 const unsigned kSessionPacket = 0xDC, kPacketFramed = 0xC, kSessionSocket = 0x28;
-const unsigned kVaXorTable = 0x00430430u;      // the C->S XOR table 0x40B170 decrypts with
+// the C->S XOR table 0x40B170 decrypts with: PacketEncrypt::pe_encryptstr
 const unsigned kSessionXorPos = 0x10C;         // u16 stream position, advanced per byte by 0x40B170
 const unsigned kXorLen = 0x1F3;
 
@@ -119,7 +120,7 @@ void to_client(void* session, unsigned short op, const unsigned char* payload, i
 unsigned short* xor_pos(void* session) { return (unsigned short*)((char*)session + kSessionXorPos); }
 // XOR n bytes with the stream from pos - decrypts and encrypts alike, leaves the session's position alone
 void xor_at(unsigned char* b, int n, unsigned pos) {
-    const unsigned char* t = (const unsigned char*)hook::rebase(kVaXorTable);
+    const unsigned char* t = (const unsigned char*)login::global::PacketEncrypt__pe_encryptstr();
     for (int i = 0; i < n; i++) { b[i] ^= t[pos]; if (++pos >= kXorLen) pos = 0; }
 }
 // the client encrypted `consumed` bytes for this packet: move the server's stream there
@@ -176,9 +177,9 @@ int __fastcall on_parser(void* parser, void*, void* session) {
     if (n == kVersionKey2026 && op >= kVersion2026 && op < 0x1000) {  // the 2026 version check: the session is marked
         Sess s; s.is2026 = true; s.shift = (int)op - kVersion2026;
         EnterCriticalSection(&g_lock); g_sess[session] = s; LeaveCriticalSection(&g_lock);
-        int count = *(int*)hook::rebase(kVaVersionKeyCount);
+        int count = login::global::gServer()->m_nVersionListNum;
         unsigned char key[kVersionKey2016] = {};
-        if (count > 0) memcpy(key, hook::rebase(kVaVersionKeys), kVersionKey2016);
+        if (count > 0) memcpy(key, login::global::gServer()->m_sVersionKey[0], kVersionKey2016);
         // wsprintf (hook::log) has no '+' flag: "%+d" misparsed the arguments and handed %s an int - Login.exe died in
         // WPRINTF_GetLen on the first 2026 version check (2026-10-05). Plain %d, and a terminated copy of the key.
         char shown[21] = {};
@@ -265,8 +266,8 @@ int __fastcall on_send(void* sock, void*, const unsigned char* f, int len) {
 
 HOOK_PLUGIN("login_bridge26") {
     InitializeCriticalSection(&g_lock);
-    bool a = hook::detour(hook::rebase(kVaParser), (void*)on_parser, &g_parser);
-    bool b = hook::detour(hook::rebase(kVaSocketSend), (void*)on_send, &g_send);
+    bool a = hook::detour((void*)login::fn::CParserClient__Parser(), (void*)on_parser, &g_parser);
+    bool b = hook::detour((void*)login::fn::CSocket_IOCP__Send(), (void*)on_send, &g_send);
     hook::log("login_bridge26: parser %s, send %s; %d version key(s) loaded by the server", a ? "hooked" : "NOT hooked",
-              b ? "hooked" : "NOT hooked", *(int*)hook::rebase(kVaVersionKeyCount));
+              b ? "hooked" : "NOT hooked", login::global::gServer()->m_nVersionListNum);
 }

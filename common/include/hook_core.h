@@ -256,6 +256,26 @@ inline void* rebase(u32 va_at_default_base, u32 default_base = 0x00400000u) {
     return (void*)(module_base() + (relocate(va_at_default_base) - default_base));
 }
 
+// A SITE: an address INSIDE a function of the original exe (a jump to redirect, an operand to read, a return address
+// to recognise) - not a symbol, so no generated header can carry it. A plugin writes hook::site(0x...) with the
+// ORIGINAL address and nothing else; every symbol it uses comes from the generated headers (zone::fn::X(), ...).
+// For the stock exe the original address is the address. For an exe rebuilt from source the plugin is compiled with
+// /DHOOK_SITES_HEADER="<exe>_sites.h", the table `tools/recipe_port.py sites` writes from the plugin sources: each
+// site moved with its function (identical in our build, or its instruction aligned with an identical one). A site
+// that does not map exactly fails that tool, so no plugin is ever built against a guessed address.
+#ifdef HOOK_SITES_HEADER
+#include HOOK_SITES_HEADER
+inline void* site(u32 va) {
+    for (u32 i = 0; i < hook_sites::kCount; ++i)
+        if (hook_sites::kSites[i].orig == va)
+            return (void*)(module_base() + (hook_sites::kSites[i].ours - 0x00400000u));
+    log("hook::site(0x%08X) is not in the site table - regenerate it (tools/recipe_port.py sites)", va);
+    return nullptr;
+}
+#else
+inline void* site(u32 va) { return rebase(va); }
+#endif
+
 // ---- the recipes' arena ---------------------------------------------------------------------------
 //
 // Recipes that need memory take a REGION of a shared arena (apply.py: Pe.reserve) rather than a section

@@ -16,21 +16,20 @@
 // so nobody got the notice or the prompt - and the low 16 bits (the character number) could name an unrelated party
 // that got the notice instead. This plugin answers both commands for a solo key (>= 0x10000 - no party number is):
 // the character itself gets the notices, and it is the DELETE target, so it gets the same prompt a party leader gets.
-// Every other key goes to the stock handlers untouched. Addresses are WorldManager.exe's (PDB publics).
-#include <hook_core.h>
+// Every other key goes to the stock handlers untouched. Every address is a generated symbol (wm_functions.h /
+// wm_globals.h), so the plugin builds for the stock exe and for one rebuilt from source alike.
+#include <wmhook.h>
+#include <wm_functions.h>
+#include <wm_globals.h>
 
 #include <cstring>
 
 namespace {
 
-const unsigned kVaEmptyCmd = 0x42BA20;        // CParserZone::fc_NC_INSTANCE_DUNGEON_EMPTY_DUNGEON_CMD
-const unsigned kVaResetCmd = 0x42BC40;        // CParserZone::fc_NC_INSTANCE_DUNGEON_RESET_COUNTDOWN_CMD
-const unsigned kVaCheckValid = 0x428230;      // CParserZone::CheckConnectionValidation(session, packet, len)
-const unsigned kVaGetSession = 0x437910;      // CWMClientSessionManager::GetSession(unsigned long charNo)
-const unsigned kVaClientMgr = 0x556BB0;       // the CWMClientSessionManager
-const unsigned kVaSend = 0x42FCA0;            // CWMBaseSession::Send(void*, int)
-const unsigned kVaBroadCast = 0x4394B0;       // CWMZoneSessionManager::BroadCast(void*, int)
-const unsigned kVaZoneMgr = 0x557CEC;         // the CWMZoneSessionManager
+// CParserZone::fc_NC_INSTANCE_DUNGEON_EMPTY_DUNGEON_CMD / _RESET_COUNTDOWN_CMD (detoured),
+// CParserZone::CheckConnectionValidation(session, packet, len), CWMClientSessionManager::GetSession(unsigned long
+// charNo) (the third GetSession overload) on gServer.m_Client, CWMBaseSession::Send(void*, int) (the second Send
+// overload), CWMZoneSessionManager::BroadCast(void*, int) on gServer.m_Zone - all from the generated headers.
 const unsigned kSessionChar = 0x560;          // CWMClientSession: its character (null = not in game)
 const unsigned long kSoloKeyBase = 0x10000;   // indun_solo's key = this + character number; no party number reaches it
 const unsigned char kTypeParty = 0;
@@ -51,18 +50,17 @@ bool solo_key(const unsigned char* pkt, unsigned long* chr) {
 
 bool valid(void* self, void* session, unsigned char* pkt, int len) {
     typedef int(__fastcall * CheckFn)(void*, void*, void*, unsigned char*, int);
-    return ((CheckFn)hook::rebase(kVaCheckValid))(self, nullptr, session, pkt, len) != 0;
+    return ((CheckFn)wm::fn::CParserZone__CheckConnectionValidation())(self, nullptr, session, pkt, len) != 0;
 }
 
 // the stock notice to one character, if it is in game: {len 5, op 0x0810, u8 1, u16 seconds}
 void notice(unsigned long chr, unsigned short seconds) {
-    typedef void*(__fastcall * GetFn)(void*, void*, unsigned long);
     typedef int(__fastcall * SendFn)(void*, void*, void*, int);
-    void* s = ((GetFn)hook::rebase(kVaGetSession))(hook::rebase(kVaClientMgr), nullptr, chr);
+    void* s = wm::fn::CWMClientSessionManager__GetSession_3()(&wm::global::gServer()->m_Client, nullptr, chr);
     if (!s || !*(void**)((char*)s + kSessionChar)) return;
     unsigned char buf[6] = {5, (unsigned char)(kOpNotice & 0xFF), (unsigned char)(kOpNotice >> 8), 1,
                             (unsigned char)(seconds & 0xFF), (unsigned char)(seconds >> 8)};
-    ((SendFn)hook::rebase(kVaSend))(s, nullptr, buf, sizeof buf);
+    ((SendFn)wm::fn::CWMBaseSession__Send_2())(s, nullptr, buf, sizeof buf);
 }
 
 int __fastcall empty_cmd(void* self, void*, void* session, unsigned char* pkt, int len) {
@@ -74,8 +72,7 @@ int __fastcall empty_cmd(void* self, void*, void* session, unsigned char* pkt, i
     unsigned char buf[12] = {11, (unsigned char)(kOpDelete & 0xFF), (unsigned char)(kOpDelete >> 8), pkt[2]};
     std::memcpy(buf + 4, pkt + 3, 4);
     std::memcpy(buf + 8, &chr, 4);
-    typedef int(__fastcall * BroadFn)(void*, void*, void*, int);
-    ((BroadFn)hook::rebase(kVaBroadCast))(hook::rebase(kVaZoneMgr), nullptr, buf, sizeof buf);
+    wm::fn::CWMZoneSessionManager__BroadCast()(&wm::global::gServer()->m_Zone, nullptr, buf, sizeof buf);
     hook::log("wm_indun_solo: solo instance of character %lu is empty - 5-minute notice + delete prompt sent", chr);
     return 1;
 }
@@ -92,8 +89,8 @@ int __fastcall reset_cmd(void* self, void*, void* session, unsigned char* pkt, i
 }  // namespace
 
 HOOK_PLUGIN("wm_indun_solo") {
-    bool a = hook::detour(hook::rebase(kVaEmptyCmd), (void*)empty_cmd, &g_empty);
-    bool b = hook::detour(hook::rebase(kVaResetCmd), (void*)reset_cmd, &g_reset);
+    bool a = hook::detour((void*)wm::fn::CParserZone__fc_NC_INSTANCE_DUNGEON_EMPTY_DUNGEON_CMD(), (void*)empty_cmd, &g_empty);
+    bool b = hook::detour((void*)wm::fn::CParserZone__fc_NC_INSTANCE_DUNGEON_RESET_COUNTDOWN_CMD(), (void*)reset_cmd, &g_reset);
     hook::log("wm_indun_solo: EMPTY_DUNGEON %s, RESET_COUNTDOWN %s - solo instance keys (>= 0x10000) answered for the "
               "character itself", a ? "hooked" : "NOT hooked", b ? "hooked" : "NOT hooked");
 }

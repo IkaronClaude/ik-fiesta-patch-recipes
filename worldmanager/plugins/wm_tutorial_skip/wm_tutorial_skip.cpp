@@ -18,7 +18,8 @@
 // TutorialLoginProcess runs for a skipped character (state != 0) whose slot map is the exe's own "RouT" placeholder,
 // the kept map goes back into the slot - the character logs in where the character server has it, as its next login
 // would. The tutorial path (state 0) is untouched.
-#include <hook_core.h>
+#include <wmhook.h>
+#include <wm_functions.h>
 #include <windows.h>
 
 #include <cstring>
@@ -27,9 +28,7 @@
 
 namespace {
 
-const unsigned kVaAvatarInfoAck = 0x40EDE0;   // CParserCharDB::fc_NC_USER_AVATARINFO_ACK
-const unsigned kVaTutorialLogin = 0x4371A0;   // CWMClientSession::TutorialLoginProcess
-const unsigned kVaRouT = 0x486120;            // the exe's "RouT" placeholder string
+// detoured: CParserCharDB::fc_NC_USER_AVATARINFO_ACK, CWMClientSession::TutorialLoginProcess (generated symbols)
 const int kRecords = 5, kRecordSize = 0x82, kRecMap = 0x1B, kRecState = 0x7D, kMapLen = 12;
 const unsigned kSlotField = 0x1ED2D;          // the tutorial-selected slot (SetTutorialSelectedSlot 0x433610)
 const unsigned kSlotBase = 0x23C;             // the slot's copy of the avatar record (character number first)
@@ -60,7 +59,8 @@ int __fastcall tutorial_login(void* self, void*) {
     unsigned slot = s[kSlotField];
     if (slot < kMaxSlots) {
         unsigned char* r = s + kSlotBase + slot * kRecordSize;
-        const char* rout = (const char*)hook::rebase(kVaRouT);
+        // the exe's "RouT" placeholder string: a literal no generated header names, so a site
+        const char* rout = (const char*)hook::site(0x00486120u);
         if (*(const int*)(r + kRecState) != 0 && strncmp((const char*)r + kRecMap, rout, kMapLen) == 0) {
             unsigned long chr = *(const unsigned long*)r;
             std::string map;
@@ -85,8 +85,8 @@ int __fastcall tutorial_login(void* self, void*) {
 
 HOOK_PLUGIN("wm_tutorial_skip") {
     InitializeCriticalSection(&g_lock);
-    bool a = hook::detour(hook::rebase(kVaAvatarInfoAck), (void*)avatar_info, &g_avatars);
-    bool b = hook::detour(hook::rebase(kVaTutorialLogin), (void*)tutorial_login, &g_login);
+    bool a = hook::detour((void*)wm::fn::CParserCharDB__fc_NC_USER_AVATARINFO_ACK(), (void*)avatar_info, &g_avatars);
+    bool b = hook::detour((void*)wm::fn::CWMClientSession__TutorialLoginProcess(), (void*)tutorial_login, &g_login);
     hook::log("wm_tutorial_skip: AVATARINFO_ACK %s, TutorialLoginProcess %s - a skipped tutorial logs in on the "
               "character's own map", a ? "hooked" : "NOT hooked", b ? "hooked" : "NOT hooked");
 }

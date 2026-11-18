@@ -286,6 +286,11 @@ class Namer:
             esz = self.sizeof(elem_idx)
             if not elem or not esz or total % esz:
                 return None
+            if '[' in elem:
+                # an array of arrays: the OUTER count comes first - char[5][64] is five 64-byte rows (spelling it
+                # char[64][5] kept the size, so no static_assert could catch it, and swapped every index)
+                base, dims = elem.split('[', 1)
+                return '%s[%d][%s' % (base, total // esz, dims)
             return '%s[%d]' % (elem, total // esz)
         return None
 
@@ -774,6 +779,18 @@ def human(n):
     return '%.1f MB' % (n / 1048576.0) if n > 1048576 else '%.0f KB' % (n / 1024.0)
 
 
+def retarget(text, ns, hook_header):
+    """the headers as written for the zone -> the same for namespace `ns` (wm, login, ...): only the namespace, the
+    file names, the size-check macro and the hook header change; every type, name and address stays"""
+    text = re.sub(r'(?<![A-Za-z0-9_])zone::', ns + '::', text)
+    text = re.sub(r'namespace zone \{', 'namespace %s {' % ns, text)
+    text = re.sub(r'// namespace zone\b', '// namespace %s' % ns, text)
+    text = text.replace('ZONE_CHECK_SIZE', '%s_CHECK_SIZE' % ns.upper())
+    text = re.sub(r'\bzone_(types|functions|globals)\.h\b', ns + r'_\1.h', text)
+    text = text.replace('#include "zonehook.h"', '#include "%s"' % hook_header)
+    return text
+
+
 def main():
     ap = argparse.ArgumentParser(description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
@@ -783,13 +800,20 @@ def main():
     ap.add_argument('--types-dump', help='an existing llvm-pdbutil -types dump (else one is made)')
     ap.add_argument('--symbols-dump', help='an existing llvm-pdbutil -symbols dump')
     ap.add_argument('--pdbutil', default=r'C:/Program Files/LLVM/bin/llvm-pdbutil.exe')
+    ap.add_argument('--ns', default='zone',
+                    help='namespace and file prefix (zone -> zone_types.h, zone::fn::...; wm -> wm_types.h, wm::fn::...). '
+                         'The same generator serves every server exe that has a PDB.')
+    ap.add_argument('--hook-header', help='the header the generated ones include (default <ns>hook.h)')
     a = ap.parse_args()
 
     tmp = os.environ.get('TEMP', '.')
-    tdump = a.types_dump or os.path.join(tmp, 'zone-types.txt')
-    sdump = a.symbols_dump or os.path.join(tmp, 'zone-syms.txt')
-    gdump = os.path.join(tmp, 'zone-globals.txt')
-    pdump = os.path.join(tmp, 'zone-publics.txt')
+    # the dumps are cached per PDB (size + mtime), so a run for another exe never reads a stale one
+    st = os.stat(a.pdb)
+    tag = '%s-%x-%x' % (os.path.splitext(os.path.basename(a.pdb))[0], st.st_size, int(st.st_mtime))
+    tdump = a.types_dump or os.path.join(tmp, '%s-types.txt' % tag)
+    sdump = a.symbols_dump or os.path.join(tmp, '%s-syms.txt' % tag)
+    gdump = os.path.join(tmp, '%s-globals.txt' % tag)
+    pdump = os.path.join(tmp, '%s-publics.txt' % tag)
     for flag, path in (('-types', tdump), ('-symbols', sdump), ('-globals', gdump), ('-publics', pdump)):
         if not os.path.exists(path):
             print('dumping %s -> %s' % (flag, path))
@@ -892,7 +916,7 @@ def main():
                 aggregate_text.append(s)
 
     os.makedirs(a.out, exist_ok=True)
-    types_h = os.path.join(a.out, 'zone_types.h')
+    types_h = os.path.join(a.out, '%s_types.h' % a.ns)
     with open(types_h, 'w', newline='\n') as fh:
         fh.write(BANNER % (os.path.basename(a.pdb), os.path.basename(a.exe), exe_sha, WHY_TYPES))
         fh.write('\n// A sizeof check that works with and without a CRT, and names the type in the error.\n')
@@ -917,7 +941,7 @@ def main():
     fn_lines = emit_functions(syms, recs, namer, secs, image_base, notes)
     taken = {l.split('kVa_')[1].split(' ')[0] for l in fn_lines if l.startswith('static const unsigned int kVa_')}
     fn_lines += emit_public_functions(pdump, taken, set(candidates), secs, image_base, notes)
-    fns_h = os.path.join(a.out, 'zone_functions.h')
+    fns_h = os.path.join(a.out, '%s_functions.h' % a.ns)
     with open(fns_h, 'w', newline='\n') as fh:
         fh.write(BANNER % (os.path.basename(a.pdb), os.path.basename(a.exe), exe_sha, WHY_FNS))
         fh.write('#include "zonehook.h"\n#include "zone_types.h"\n\n')
@@ -935,7 +959,7 @@ def main():
                 seen.add((d[1], d[2]))
                 dsyms.append(d)
     glob_lines = emit_globals(dsyms, recs, namer, secs, image_base, notes)
-    globals_h = os.path.join(a.out, 'zone_globals.h')
+    globals_h = os.path.join(a.out, '%s_globals.h' % a.ns)
     with open(globals_h, 'w', newline='\n') as fh:
         fh.write(BANNER % (os.path.basename(a.pdb), os.path.basename(a.exe), exe_sha, WHY_GLOBALS))
         fh.write('#include "zonehook.h"\n#include "zone_types.h"\n\n')
@@ -946,6 +970,13 @@ def main():
         fh.write('namespace vtable {\n\n')
         fh.write('\n'.join(emit_vtables(pdump, set(candidates), secs, image_base, notes)))
         fh.write('\n\n}  // namespace vtable\n}  // namespace zone\n')
+
+    if a.ns != 'zone' or a.hook_header:
+        for path in (types_h, fns_h, globals_h):
+            with open(path, encoding='utf-8') as fh:
+                text = fh.read()
+            with open(path, 'w', newline='\n') as fh:
+                fh.write(retarget(text, a.ns, a.hook_header or '%shook.h' % a.ns))
 
     print()
     print('  %s  %d globals, %d vtables  (%s)' % (globals_h, notes['global'], notes['vtable'],

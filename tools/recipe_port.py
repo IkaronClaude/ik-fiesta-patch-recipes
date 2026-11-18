@@ -338,7 +338,8 @@ class Symbols:
 def _primary(names):
     """match by mangled publics when the symbol has any; a static without a public by its (name, module) key"""
     pubs = {n for n in names if n[0] in ('pub', 'arena')}
-    return pubs or set(names)
+    local = {n for n in names if len(n) == 3}          # a static named with its module beats the bare name
+    return pubs or local or set(names)
 
 
 def match(src, dst, s):
@@ -1271,19 +1272,98 @@ def cmd_where(a):
     return rc
 
 
+def map_symbol_address(mp, va):
+    """a generated header's address (a function entry, a global, a vtable) -> ours: a function by its symbol (the
+    mangled name carries the signature), anything else as T() maps it. (our va, how) or Refuse"""
+    s = mp.o.containing(va)
+    if s is not None and s.va == va and s.code:
+        t, why = mp.counterpart(s)
+        if t is None:
+            raise Refuse(why)
+        return t.va, 'function %s' % s.label
+    return mp.T(va)
+
+
+_HDR_VA = re.compile(r'^(\s*static const unsigned int (kVa\w*) = )0x([0-9A-Fa-f]{8})u;(.*)$')
+_HDR_ENTRY = re.compile(r'^(\s*\{ "([^"]*)", )0x([0-9A-Fa-f]{8})u( \},.*)$')
+
+
+def cmd_headers(a):
+    """rewrite generated headers (mk_types.py / mk_symbols.py output, written from the ORIGINAL PDB) for our exe:
+    every address through its symbol. Types and names stay the original PDB's - our rebuild's PDB carries neither
+    (its objects are compiled without CodeView), and the source, so every layout, is the same. An address that does
+    not map is REMOVED with its accessor, so a plugin that uses it fails to compile instead of calling into the
+    wrong place."""
+    oimg, nimg = Image(a.orig_exe), Image(a.new_exe)
+    mp = Mapper(Symbols(oimg, a.orig_pdb, a.pdbutil), Symbols(nimg, a.new_pdb, a.pdbutil))
+    os.makedirs(a.out_dir, exist_ok=True)
+    if a.base_include:
+        # the target's hand-written headers beside the remapped generated ones: a quoted #include searches the
+        # including header's own folder first, so the two must sit in ONE folder or the stock ones win
+        for f in os.listdir(a.base_include):
+            if f.endswith('.h') and os.path.basename(f) not in {os.path.basename(h) for h in a.headers}:
+                shutil.copyfile(os.path.join(a.base_include, f), os.path.join(a.out_dir, f))
+    total_bad = 0
+    for path in a.headers:
+        lines = open(path, encoding='utf-8').read().split('\n')
+        out, dropped, mapped, dead = [], [], 0, set()
+        for ln in lines:
+            m = _HDR_VA.match(ln)
+            e = None if m else _HDR_ENTRY.match(ln)
+            if m or e:
+                g = m or e
+                va = int(g.group(3), 16)
+                name = g.group(2)
+                try:
+                    nv, _how = map_symbol_address(mp, va)
+                    out.append('%s0x%08Xu%s%s' % (g.group(1), nv, ';' if m else '', g.group(4)))
+                    mapped += 1
+                except Refuse as x:
+                    dropped.append('%s 0x%08X: %s' % (name, va, x))
+                    if m:
+                        dead.add(name)
+                continue
+            if dead and any(('%s)' % d) in ln or ('%s,' % d) in ln for d in dead if d in ln):
+                continue                                   # the accessor of a dropped address
+            ln = ln.replace(oimg.sha256, nimg.sha256)
+            out.append(ln)
+        # entry tables carry a count
+        text = '\n'.join(out)
+        for arr, cnt in (('kHandlers', 'kHandlerCount'), ('kVtables', 'kVtableCount')):
+            mm = re.search(r'%s\[\] = \{\n(.*?)\n\};' % arr, text, re.S)
+            if mm:
+                n = len([x for x in mm.group(1).split('\n') if x.strip().startswith('{')])
+                text = re.sub(r'(static const int %s = )\d+;' % cnt, r'\g<1>%d;' % n, text)
+        head = ('// REMAPPED by tools/recipe_port.py headers for %s (sha256 %s): every address moved with its symbol '
+                'from %s;\n// %d mapped, %d removed (no exact counterpart in our build%s).\n' %
+                (os.path.basename(a.new_exe), nimg.sha256, os.path.basename(a.orig_exe), mapped, len(dropped),
+                 ': ' + '; '.join(d.split(':')[0] for d in dropped[:40]) + (' ...' if len(dropped) > 40 else '')
+                 if dropped else ''))
+        dest = os.path.join(a.out_dir, os.path.basename(path))
+        with open(dest, 'w', encoding='utf-8', newline='\n') as f:
+            f.write(head + text)
+        print('  %-24s %5d mapped, %4d removed -> %s' % (os.path.basename(path), mapped, len(dropped), dest))
+        if a.verbose:
+            for d in dropped:
+                print('      removed ' + d[:200])
+        total_bad += len(dropped)
+    return 0
+
+
 _SITE = re.compile(r'\bsite\(\s*(0x[0-9A-Fa-f]+)u?\s*\)')
 
 
-def cmd_sites(a):
-    """every hook::site(0x...) in the given plugin sources -> a table of (original, ours) for HOOK_SITES_HEADER.
-    Refuses (no header) when any one does not map exactly."""
-    oimg, nimg = Image(a.orig_exe), Image(a.new_exe)
-    mp = Mapper(Symbols(oimg, a.orig_pdb, a.pdbutil), Symbols(nimg, a.new_pdb, a.pdbutil))
+def plugin_sources(path):
+    return [path] if os.path.isfile(path) else sorted(os.path.join(dp, f) for dp, _d, fs in os.walk(path)
+                                                     for f in fs if f.endswith(('.cpp', '.h')))
+
+
+def write_sites(mp, oimg, nimg, sources, out):
+    """every hook::site(0x...) in the sources -> a table of (original, ours) for HOOK_SITES_HEADER. False (and no
+    table) when any one does not map exactly."""
     found = {}
-    for path in a.sources:
-        files = [path] if os.path.isfile(path) else [os.path.join(dp, f) for dp, _d, fs in os.walk(path)
-                                                     for f in fs if f.endswith(('.cpp', '.h'))]
-        for f in files:
+    for path in sources:
+        for f in plugin_sources(path):
             for m in _SITE.finditer(open(f, encoding='utf-8', errors='replace').read()):
                 found.setdefault(int(m.group(1), 16), set()).add(os.path.relpath(f, HERE))
     rows, bad = [], 0
@@ -1291,26 +1371,125 @@ def cmd_sites(a):
         try:
             nv, how = mp.T(va)
             rows.append((va, nv, how))
-            print('  0x%08X -> 0x%08X  %s   (%s)' % (va, nv, how, ', '.join(sorted(found[va]))))
+            print('  site 0x%08X -> 0x%08X  %s   (%s)' % (va, nv, how[:90], ', '.join(sorted(found[va]))))
         except Refuse as e:
             bad += 1
-            print('  0x%08X  REFUSED: %s   (%s)' % (va, e, ', '.join(sorted(found[va]))))
+            print('  site 0x%08X  REFUSED: %s   (%s)' % (va, e, ', '.join(sorted(found[va]))))
     if bad:
-        print('%d site(s) refused - no header written' % bad)
-        return 1
-    with open(a.out, 'w', encoding='utf-8', newline='\n') as f:
-        f.write('// GENERATED by tools/recipe_port.py sites - do not edit.\n')
+        print('%d site(s) refused - no site table written' % bad)
+        return False
+    with open(out, 'w', encoding='utf-8', newline='\n') as f:
+        f.write('// GENERATED by tools/recipe_port.py - do not edit.\n')
         f.write('//   original %s  sha256 %s\n//   ours     %s  sha256 %s\n' % (
-            os.path.basename(a.orig_exe), oimg.sha256, os.path.basename(a.new_exe), nimg.sha256))
-        f.write('// Every hook::site(original VA) a plugin uses, mapped by its symbol (identical function, or the '
-                'aligned instruction).\n#pragma once\nnamespace hook_sites {\nstruct Site { unsigned orig, ours; };\n'
-                'static const Site kSites[] = {\n')
+            oimg.label, oimg.sha256, nimg.label, nimg.sha256))
+        f.write('// Every hook::site(original VA) the plugins use, moved with its function (identical in our build, or '
+                'the aligned instruction) or its data symbol.\n#pragma once\nnamespace hook_sites {\n'
+                'struct Site { unsigned orig, ours; };\nstatic const Site kSites[] = {\n')
         for va, nv, how in rows:
             f.write('    {0x%08Xu, 0x%08Xu},   // %s\n' % (va, nv, how.replace('*/', '')))
-        f.write('};\nstatic const unsigned kCount = %d;\nstatic const char kExeSha256[] = "%s";\n'
-                '}  // namespace hook_sites\n' % (len(rows), nimg.sha256))
-    print('wrote %s (%d sites)' % (a.out, len(rows)))
-    return 0
+        if not rows:
+            f.write('    {0u, 0u},   // (no sites)\n')
+        f.write('};\nstatic const unsigned kCount = %d;\n}  // namespace hook_sites\n' % len(rows))
+    return True
+
+
+def cmd_sites(a):
+    oimg, nimg = Image(a.orig_exe), Image(a.new_exe)
+    mp = Mapper(Symbols(oimg, a.orig_pdb, a.pdbutil), Symbols(nimg, a.new_pdb, a.pdbutil))
+    return 0 if write_sites(mp, oimg, nimg, a.sources, a.out) else 1
+
+
+# an address literal of the original image written into plugin code (not in a comment): what `plugins` reports
+_HARD = re.compile(r'0x0*([4-9A-Fa-f][0-9A-Fa-f]{5}|[1-9A-Fa-f][0-9A-Fa-f]{6,7})u?\b')
+
+GENERATED = {'zone': ['zone_types.h', 'zone_functions.h', 'zone_globals.h', 'zone_symbols.h'],
+             'worldmanager': ['wm_types.h', 'wm_functions.h', 'wm_globals.h'],
+             'login': ['login_types.h', 'login_functions.h', 'login_globals.h']}
+
+
+def hardcoded(img, sources):
+    """[(file, line, text)]: original-image addresses a plugin writes as numbers instead of using a generated symbol
+    (hook::site() is the declared way for an address inside a function; struct offsets and opcodes are not addresses)"""
+    out = []
+    for path in sources:
+        for f in plugin_sources(path):
+            if os.path.basename(f) in sum(GENERATED.values(), []):
+                continue
+            for n, line in enumerate(open(f, encoding='utf-8', errors='replace'), 1):
+                code = line.split('//', 1)[0]
+                for m in _HARD.finditer(code):
+                    v = int(m.group(0).rstrip('uU'), 16)
+                    if not img.in_image(v) or v < img.base + 0x1000:
+                        continue
+                    if re.search(r'\bsite\(\s*' + re.escape(m.group(0)), code):
+                        continue
+                    out.append((os.path.relpath(f, HERE), n, line.strip()[:140]))
+    return out
+
+
+def cmd_plugins(a):
+    """the plugins of one target for our exe: remapped generated headers + the site table + every plugin built into
+    a folder of its own. A plugin that still hard-codes an address is reported and NOT built."""
+    oimg, nimg = Image(a.orig_exe), Image(a.new_exe)
+    mp = Mapper(Symbols(oimg, a.orig_pdb, a.pdbutil), Symbols(nimg, a.new_pdb, a.pdbutil))
+    tinc = os.path.join(HERE, a.target, 'include')
+    gen = [os.path.join(tinc, h) for h in GENERATED.get(a.target, [])]
+    missing = [g for g in gen if not os.path.exists(g)]
+    if missing:
+        raise Refuse('the generated headers are missing (%s) - generate them from the ORIGINAL exe + PDB first: '
+                     'python zone/tools/mk_types.py --ns %s --pdb <orig pdb> --exe <orig exe> --out %s/include' %
+                     (', '.join(os.path.basename(m) for m in missing), {'worldmanager': 'wm'}.get(a.target, a.target),
+                      a.target))
+    for g in gen:
+        if oimg.sha256 not in open(g, encoding='utf-8', errors='replace').read(4096):
+            raise Refuse('%s was not generated from %s (its sha256 is not in the header)' % (g, a.orig_exe))
+    out_inc = os.path.abspath(os.path.join(a.out_dir, 'include', a.target))
+    out_dll = os.path.abspath(os.path.join(a.out_dir, 'plugins', a.target))
+    os.makedirs(out_inc, exist_ok=True)
+    if gen:
+        print('headers:')
+        cmd_headers(argparse.Namespace(orig_exe=a.orig_exe, orig_pdb=a.orig_pdb, new_exe=a.new_exe,
+                                       new_pdb=a.new_pdb, pdbutil=a.pdbutil, out_dir=out_inc, base_include=tinc,
+                                       verbose=a.verbose, headers=gen))
+    elif os.path.isdir(tinc):
+        for f in os.listdir(tinc):
+            shutil.copyfile(os.path.join(tinc, f), os.path.join(out_inc, f))
+    pdir = os.path.join(HERE, a.target, 'plugins')
+    names = sorted(d for d in os.listdir(pdir) if os.path.isfile(os.path.join(pdir, d, d + '.cpp'))) \
+        if os.path.isdir(pdir) else []
+    if a.only:
+        names = [n for n in names if n in a.only]
+    srcs = [os.path.join(pdir, n) for n in names] + ([tinc] if os.path.isdir(tinc) else [])
+    sites_h = os.path.join(out_inc, '%s_sites.h' % a.target)
+    print('sites:')
+    if not write_sites(mp, oimg, nimg, srcs, sites_h):
+        return 1
+    hard = hardcoded(oimg, srcs)
+    print('hard-coded addresses left (use a generated symbol, or hook::site() for an address no header names):')
+    for f, n, t in hard:
+        print('  %s:%d  %s' % (f, n, t))
+    if not hard:
+        print('  none')
+    blocked = {f.replace('\\', '/').split('/')[2] for f, _n, _t in hard
+               if f.replace('\\', '/').startswith(a.target + '/plugins/')}
+    shared = [f for f, _n, _t in hard if not f.replace('\\', '/').startswith(a.target + '/plugins/')]
+    env = dict(os.environ, HOOK_TARGET_INCLUDE=out_inc, HOOK_SITES=sites_h, PLUGIN_OUT=out_dll)
+    env.pop('HOOK_RELOC', None)
+    built, failed = [], []
+    for n in names:
+        if n in blocked or shared:
+            failed.append((n, 'hard-codes an address (listed above) - not built for the rebuilt exe'))
+            continue
+        r = subprocess.run(['cmd', '/c', os.path.join(HERE, 'common', 'build_plugin.bat'), a.target, n],
+                           capture_output=True, text=True, env=env, cwd=HERE)
+        if r.returncode or not os.path.exists(os.path.join(out_dll, n + '.dll')):
+            failed.append((n, [l for l in (r.stdout + r.stderr).splitlines() if 'error' in l.lower()][:12]))
+        else:
+            built.append(n)
+    print('built %d plugin(s) into %s: %s' % (len(built), out_dll, ' '.join(built)))
+    for n, why in failed:
+        print('  NOT BUILT %s: %s' % (n, why if isinstance(why, str) else '\n      ' + '\n      '.join(why)))
+    return 1 if failed else 0
 
 
 def main():
@@ -1338,9 +1517,22 @@ def main():
     common(p)
     p.add_argument('--out', required=True)
     p.add_argument('sources', nargs='+')
+    p = sub.add_parser('headers', help='remap generated plugin headers onto our exe')
+    common(p)
+    p.add_argument('--out-dir', required=True)
+    p.add_argument('--base-include', help="copy the target's other headers (its include/ folder) beside them")
+    p.add_argument('-v', '--verbose', action='store_true')
+    p.add_argument('headers', nargs='+')
+    p = sub.add_parser('plugins', help="build a target's hook plugins for our exe")
+    common(p)
+    p.add_argument('--target', required=True, choices=sorted(BUILD.TARGETS))
+    p.add_argument('--out-dir', required=True, help='e.g. build/rebuilt: include/<target>/ and plugins/<target>/ go there')
+    p.add_argument('--only', nargs='*', help='just these plugins')
+    p.add_argument('-v', '--verbose', action='store_true')
     a = ap.parse_args()
     try:
-        return {'port': cmd_port, 'where': cmd_where, 'sites': cmd_sites}[a.cmd](a)
+        return {'port': cmd_port, 'where': cmd_where, 'sites': cmd_sites, 'headers': cmd_headers,
+                'plugins': cmd_plugins}[a.cmd](a)
     except Refuse as e:
         print('REFUSED: %s' % e)
         return 1

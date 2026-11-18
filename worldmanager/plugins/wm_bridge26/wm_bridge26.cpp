@@ -41,7 +41,9 @@
 // client's item shop (PurchaseNetFrameWork 0x4ACF10) connects THERE - the official's purchase server (9350); 0 = none.
 #include <winsock2.h>
 #pragma comment(lib, "ws2_32.lib")
-#include <hook_core.h>
+#include <wmhook.h>
+#include <wm_functions.h>
+#include <wm_globals.h>
 
 #include <cstdio>
 #include <cstring>
@@ -50,18 +52,16 @@
 
 namespace {
 
-const unsigned kVaParser = 0x00419690u;        // CParserClient::Parser(CWMClientSession*), __thiscall, ret 4
-const unsigned kVaSocketSend = 0x004666F0u;    // CSocket_IOCP::Send(void* framed, int len), __thiscall, ret 8
-const unsigned kVaBaseSend = 0x0042FCA0u;      // CWMBaseSession::Send(void* framed, int len)
-const unsigned kVaGServer = 0x0049A028u;       // gServer (WorldManagerServer)
-const unsigned kParserInServer = 0xBCBBCu;     // its CParserClient = the client protocol table
+// Symbols (generated headers): CParserClient::Parser(CWMClientSession*) (__thiscall, ret 4) and CSocket_IOCP::Send(void*
+// framed, int len) (__thiscall, ret 8) are detoured; CWMBaseSession::Send(void* framed, int len) is the second Send
+// overload; gServer.m_ClientParser is the client protocol table.
 const unsigned kSessionPacket = 0xDC;          // CWMBaseSession: the CPacket being parsed
 const unsigned kPacketFramed = 0xC;            // CPacket: the framed bytes
 const unsigned kSessionSocket = 0x28;          // CWMBaseSession: its CSocket_IOCP
 // THE PACKET IS STILL ENCRYPTED IN THE PARSER DETOUR: Parser decrypts it in place with 0x45D4B0 (byte ^= table[pos],
 // pos = u16 at session+0x11E, table at 0x497840, wrapping at 0x1F3 - the 499-byte XOR table). Found 2026-10-05 on the
-// Login twin (first live 2026 login refused); the WM login rename read and wrote encrypted bytes the same way.
-const unsigned kVaXorTable = 0x00497840u;
+// Login twin (first live 2026 login refused); the WM login rename read and wrote encrypted bytes the same way. The table
+// is PacketEncrypt::pe_encryptstr.
 const unsigned kSessionXorPos = 0x11E;
 const unsigned kXorLen = 0x1F3;
 
@@ -133,7 +133,7 @@ int frame(unsigned char* o, unsigned short op, const unsigned char* payload, int
 
 // the XOR stream byte at pos + i
 unsigned char key_at(unsigned pos, int i) {
-    return ((const unsigned char*)hook::rebase(kVaXorTable))[(pos + (unsigned)i) % kXorLen];
+    return ((const unsigned char*)wm::global::PacketEncrypt__pe_encryptstr())[(pos + (unsigned)i) % kXorLen];
 }
 
 // ---- C->S: the WM login, renamed before the parser's pre-login gate ----------------------------------------------------
@@ -191,7 +191,7 @@ void send_to(void* session, unsigned short op, const unsigned char* payload, int
     unsigned char b[0x100];
     int m = frame(b, op, payload, n);
     typedef int(__fastcall * SendFn)(void*, void*, void*, int);
-    ((SendFn)hook::rebase(kVaBaseSend))(session, nullptr, b, m);
+    ((SendFn)wm::fn::CWMBaseSession__Send_2())(session, nullptr, b, m);
 }
 
 void on_client(hook::proto::Call& c) {
@@ -408,13 +408,11 @@ int __fastcall on_send(void* sock, void*, unsigned char* f, int len) {
 // ---- whispers from the ZONE (bridge26) ---------------------------------------------------------------------------------
 // The 2026 client sends NC_ACT_WHISPER_REQ 0x200C to the zone, not here; the zone half (bridge26) sends it on over its WM
 // link as 0x200C {wldmanhandle u16, the client's payload}. This registers that opcode in the ZONE protocol table
-// (CParserZone at gServer + 0xC1E94: its ctor 0x42F540 is called on [esi + 0xC1E94] in WorldManagerServer's ctor 0x406B40;
+// (CParserZone gServer.m_ZoneParser, at gServer + 0xC1E94: its ctor 0x42F540 is called on [esi + 0xC1E94] in WorldManagerServer's ctor 0x406B40;
 // its Register(dept, cmd, fn) rows have no 8/0x0C) and runs the stock client handler for the sender's session:
-// CWMClientSessionManager::GetSession(handle) 0x437860 on 0x556BB0 (as fc_NC_CHAR_ZONE_AUTO_PICK_CMD 0x429C30 finds its
+// CWMClientSessionManager::GetSession(handle) 0x437860 (the first GetSession overload) on gServer.m_Client (as fc_NC_CHAR_ZONE_AUTO_PICK_CMD 0x429C30 finds its
 // client), then CParserClient::fc_NC_ACT_WHISPER_REQ (the client table's 0x200C) with the client's packet - so the answers
 // (SUCCESS / FAIL to the sender, SOMEONEWHISPER to the receiver) go out exactly as for a 2016 client.
-const unsigned kZoneParserInServer = 0xC1E94u;
-const unsigned kVaClientSessions = 0x00556BB0u, kVaGetSession = 0x00437860u;
 // The party / guild / academy chat come the same way (NC_ACT_PARTYCHAT_REQ 0x2014, NC_GUILD_CHAT_REQ 0x7473,
 // NC_GUILD_ACADEMY_CHAT_REQ 0x9868 - the 2026 client sends them to the zone too) and go to their own client handlers
 // (fc_NC_ACT_PARTYCHAT_REQ / fc_NC_GUILD_CHAT_REQ / fc_NC_GUILD_ACADEMY_CHAT_REQ, the client table's rows).
@@ -430,8 +428,7 @@ hook::u32 __fastcall zone_whisper(void* zparser, void*, hook::u32 zsession, hook
         if (kRelayed[i] == op) h_client = g_h_relayed[i];
     if (n < 2 + 2 || !h_client) return 1;
     unsigned short h = (unsigned short)(p[0] | (p[1] << 8));
-    typedef void*(__fastcall * GetSession)(void*, void*, unsigned short);
-    void* cs = ((GetSession)hook::rebase(kVaGetSession))(hook::rebase(kVaClientSessions), 0, h);
+    void* cs = wm::fn::CWMClientSessionManager__GetSession()(&wm::global::gServer()->m_Client, 0, h);
     if (!cs) {
         hook::log("wm_bridge26: 0x%04x from the zone for client handle %u: no such session", op, h);
         return 1;
@@ -467,7 +464,7 @@ HOOK_PLUGIN("wm_bridge26") {
     hook::config_str("itemshop_secret", "", g_shop_secret, sizeof g_shop_secret);
     WSADATA wd;
     if (g_shop_port) WSAStartup(MAKEWORD(2, 2), &wd);
-    g_table = hook::rebase(kVaGServer + kParserInServer);
+    g_table = &wm::global::gServer()->m_ClientParser;
     g_unknown = hook::proto::unknown_handler(g_table);
     bool ready = hook::proto::is_registered(g_table, kWmLogin2016);
     g_h_logout = hook::proto::is_registered(g_table, kLogout2016) ? hook::proto::get(g_table, kLogout2016) : 0;
@@ -482,7 +479,7 @@ HOOK_PLUGIN("wm_bridge26") {
         ok += hook::proto::hook_opcode<0>(g_table, op, on_client, hook::proto::kPacketArg2) ? 1 : 0;
     int covered = hook::proto::cover_unregistered(g_table, (void*)&cover);
     // whispers relayed by the zone (see zone_whisper): only into a free zone-table slot
-    void* ztable = hook::rebase(kVaGServer + kZoneParserInServer);
+    void* ztable = &wm::global::gServer()->m_ZoneParser;
     for (int i = 0; i < 4; i++) {
         unsigned short op = kRelayed[i];
         g_h_relayed[i] = hook::proto::is_registered(g_table, op) ? hook::proto::get(g_table, op) : 0;
@@ -492,8 +489,8 @@ HOOK_PLUGIN("wm_bridge26") {
         hook::log("wm_bridge26: zone-relayed 0x%04x %s", op, zw ? "on" : (g_h_relayed[i] ? "NOT installed (zone table slot taken)" :
                                                                          "NOT installed (no client handler)"));
     }
-    bool a = hook::detour(hook::rebase(kVaParser), (void*)on_parser, &g_parser);
-    bool b = hook::detour(hook::rebase(kVaSocketSend), (void*)on_send, &g_send);
+    bool a = hook::detour((void*)wm::fn::CParserClient__Parser(), (void*)on_parser, &g_parser);
+    bool b = hook::detour((void*)wm::fn::CSocket_IOCP__Send(), (void*)on_send, &g_send);
     hook::log("wm_bridge26: parser %s, send %s, %d of %d request hook(s), %d unregistered slot(s) covered; handlers "
               "0x0C18 %s, 0x0C1F %s, 0x0C33 %s; advertise '%s'", a ? "hooked" : "NOT hooked", b ? "hooked" : "NOT hooked",
               ok, (int)(sizeof kHooked / sizeof kHooked[0]), covered, g_h_logout ? "ok" : "MISSING",

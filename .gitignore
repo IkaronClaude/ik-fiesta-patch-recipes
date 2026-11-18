@@ -20,3 +20,10 @@ zone/include/zone_types.h
 zone/include/zone_functions.h
 zone/include/zone_globals.h
 zone/include/zone_symbols.h
+# the same generator for the other exes (mk_types.py --ns wm / --ns login): BYO-derived, not committed
+worldmanager/include/wm_types.h
+worldmanager/include/wm_functions.h
+worldmanager/include/wm_globals.h
+login/include/login_types.h
+login/include/login_functions.h
+login/include/login_globals.h
