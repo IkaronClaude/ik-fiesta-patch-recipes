@@ -380,7 +380,7 @@ extern "C" void* __cdecl void_bag_of(void* player) {
 // code no instruction in Zone.exe carries as a constant, so it is computed. Logged here with the caller's address so
 // the branch that builds it is known; codes 0x0241 (moved) are not logged.
 zone::Detour g_ack_detour;
-const unsigned kVaPlayerSendAck = 0x0054F050;   // ShinePlayer vtable slot 0x308
+// ShinePlayer vtable slot 0x308: ShinePlayer::so_SendErrorCode (generated symbol)
 const unsigned kRelocOk = 0x0241;
 
 extern "C" void* _ReturnAddress(void);
@@ -397,7 +397,6 @@ void __fastcall ack_impl(void* self, void* /*edx*/, int dept, int cmd, unsigned 
 // every move that reaches the move handler - client requests AND the server's own inventory sort, which calls
 // ShinePlayer::sp_ItemReloc (0x536780) directly with a built request (so_ply_ArrangeInven 0x56389A)
 zone::Detour g_itemreloc_detour;
-const unsigned kVaItemReloc = 0x00536780;
 
 void __fastcall itemreloc_impl(void* self, void* /*edx*/, unsigned short handle, const unsigned short* req) {
     void* from = _ReturnAddress();
@@ -704,9 +703,9 @@ ZONEHOOK_PLUGIN("void_bag") {
     zone::hook_function("GameDBSession::gds_NC_CHAR_GET_ITEMLIST_BY_TYPE_ACK",
                         (void*)zone::fn::GameDBSession__gds_NC_CHAR_GET_ITEMLIST_BY_TYPE_ACK(),
                         (void*)list_ack_thunk, &g_list_detour);
-    zone::hook_function("ShinePlayer vtable+0x308 (error ACK sender)", (void*)zone::rebase(kVaPlayerSendAck),
+    zone::hook_function("ShinePlayer vtable+0x308 (error ACK sender)", (void*)zone::fn::ShineObjectClass__ShinePlayer__so_SendErrorCode(),
                         (void*)ack_impl, &g_ack_detour);
-    zone::hook_function("ShinePlayer::sp_ItemReloc", (void*)zone::rebase(kVaItemReloc), (void*)itemreloc_impl,
+    zone::hook_function("ShinePlayer::sp_ItemReloc", (void*)zone::fn::ShineObjectClass__ShinePlayer__sp_ItemReloc(), (void*)itemreloc_impl,
                         &g_itemreloc_detour);
     zone::hook_function("CItemAuthorityBase::IA_CanInvenReloc",
                         (void*)zone::fn::CItemAuthorityBase__IA_CanInvenReloc(),

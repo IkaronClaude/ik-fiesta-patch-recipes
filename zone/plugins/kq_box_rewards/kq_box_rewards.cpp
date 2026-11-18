@@ -38,12 +38,11 @@
 namespace {
 
 const char* kFlag = "../9Data/Shine/KQBoxRewards.flag";
-const unsigned kVaMagicContainerMake = 0x0049C050u;
-const unsigned kVaGetItemNum = 0x005956B0u;
-const unsigned kVaSelectFrom = 0x00648310u;
-const unsigned kVaGetItemNumReturn = 0x0049C122u;   // sp_MagicContainerMake, after `call tcm_GetItemNum`
-const unsigned kVaContainerRowReturn = 0x0049C168u; // sp_MagicContainerMake, after the Container or_SelectFrom
-const unsigned kVaWell512 = 0x150BA418u;            // mov ecx, 0x150ba418 at every well512_GetRandom call
+// detoured: ShinePlayer::sp_MagicContainerMake, TreasureChestMaker::tcm_GetItemNum, OptionReader::or_SelectFrom (the
+// second overload) - generated symbols. The random generator every well512_GetRandom call uses is
+// rndbox.rb_well512random. Two return addresses inside sp_MagicContainerMake are sites:
+constexpr unsigned kVaGetItemNumReturn = hook::site_va(0x0049C122u);   // after `call tcm_GetItemNum`
+constexpr unsigned kVaContainerRowReturn = hook::site_va(0x0049C168u); // after the Container or_SelectFrom
 const unsigned kItemNumOffset = 0x3E8;              // tcm_GetItemNum: mov eax, [ecx+0x3e8]
 const unsigned char kRewardItem = 1;                // ShineReward.RewardType (sp_KQReward jump table 0x52E348)
 const int kMakeType = 6;                            // the container path's creation type
@@ -88,7 +87,7 @@ void fill(void* tcm) {
     int made = 0;
     for (int i = 0; i < 15; ++i) {
         if (!row->Reward[i] || !row->RewardRate[i]) continue;
-        unsigned roll = zone::fn::cWell512Random__well512_GetRandom_3()(zone::rebase(kVaWell512), nullptr, 1000) & 0xFFFF;
+        unsigned roll = zone::fn::cWell512Random__well512_GetRandom_3()(&zone::global::rndbox()->rb_well512random, nullptr, 1000) & 0xFFFF;
         if (roll >= row->RewardRate[i]) continue;
         auto* reward = zone::fn::RewardData__rd_FindHandle()(zone::global::rewarddata(), nullptr, row->Reward[i]);
         if (!reward) {
@@ -128,10 +127,10 @@ ZONEHOOK_PLUGIN("kq_box_rewards") {
         return;
     }
     zone::hook_function("ShinePlayer::sp_MagicContainerMake 0x49C050 (note the box being made)",
-                        zone::rebase(kVaMagicContainerMake), (void*)make, &g_make);
+                        (void*)zone::fn::ShineObjectClass__ShinePlayer__sp_MagicContainerMake(), (void*)make, &g_make);
     zone::hook_function("TreasureChestMaker::tcm_GetItemNum 0x5956B0 (fill a KQ box with the KQ's rolls)",
-                        zone::rebase(kVaGetItemNum), (void*)item_num, &g_num);
+                        (void*)zone::fn::TreasureChestMaker__tcm_GetItemNum(), (void*)item_num, &g_num);
     zone::hook_function("OptionReader::or_SelectFrom 0x648310 (a KQ box has no Container row: answer an empty one)",
-                        zone::rebase(kVaSelectFrom), (void*)select_from, &g_select);
+                        (void*)zone::fn::OptionReader__or_SelectFrom_2(), (void*)select_from, &g_select);
     zone::log("kq_box_rewards: %s - KQ boxes bought / made hold the KQ's rewards, rolled with its odds", kFlag);
 }

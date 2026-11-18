@@ -24,7 +24,7 @@ namespace {
 
 #include "packet_guard_rules.h"
 
-const unsigned kVaProtocolStore = 0x004D4510u;   // protocolstore(PROTOCOLFUNCTIONTEMPLETE<ShinePlayer>*), cdecl
+// detoured: protocolstore(PROTOCOLFUNCTIONTEMPLETE<ShinePlayer>*), cdecl - zone::fn::protocolstore_5()
 zone::Detour g_store;
 
 short g_rule_of[0x10000];                        // opcode -> index into kRules, -1 none
@@ -115,5 +115,5 @@ ZONEHOOK_PLUGIN("packet_guard") {
     memset(g_rule_of, 0xFF, sizeof g_rule_of);
     memset(g_string_of, 0xFF, sizeof g_string_of);
     zone::hook_function("protocolstore(ShinePlayer table) 0x4D4510 (+ packet length checks)",
-                        (void*)zone::rebase(kVaProtocolStore), (void*)store, &g_store);
+                        (void*)zone::fn::protocolstore_5(), (void*)store, &g_store);
 }

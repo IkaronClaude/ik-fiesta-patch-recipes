@@ -21,7 +21,7 @@
 
 namespace {
 
-const unsigned kVaMapBuffDicMov = 0x00464620;   // MapBuffDataBox::mbdb_SetAbstate: mov ecx, &dic_abstate; call as_FromName
+constexpr unsigned kVaMapBuffDicMov = hook::site_va(0x00464620u);   // MapBuffDataBox::mbdb_SetAbstate: mov ecx, &dic_abstate; call as_FromName
 const unsigned kIsSetSlot = 0x3E4;              // the vtable slot so_mobile_IsImmortal asks (abstate index -> set?)
 const int kMax = 32;
 int g_index[kMax];

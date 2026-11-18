@@ -263,8 +263,16 @@ inline void* rebase(u32 va_at_default_base, u32 default_base = 0x00400000u) {
 // /DHOOK_SITES_HEADER="<exe>_sites.h", the table `tools/recipe_port.py sites` writes from the plugin sources: each
 // site moved with its function (identical in our build, or its instruction aligned with an identical one). A site
 // that does not map exactly fails that tool, so no plugin is ever built against a guessed address.
+//
+// hook::site_va(0x...) is the same as a number, for a constant: `constexpr unsigned kVaJcc = hook::site_va(0x0053D025u);`
+// is evaluated by the COMPILER, so a site missing from the table is a build error, not a wrong address at run time.
 #ifdef HOOK_SITES_HEADER
 #include HOOK_SITES_HEADER
+constexpr u32 site_va(u32 va) {
+    for (u32 i = 0; i < hook_sites::kCount; ++i)
+        if (hook_sites::kSites[i].orig == va) return hook_sites::kSites[i].ours;
+    throw "hook::site_va: an original address that is not in the site table - regenerate it (tools/recipe_port.py)";
+}
 inline void* site(u32 va) {
     for (u32 i = 0; i < hook_sites::kCount; ++i)
         if (hook_sites::kSites[i].orig == va)
@@ -273,6 +281,7 @@ inline void* site(u32 va) {
     return nullptr;
 }
 #else
+constexpr u32 site_va(u32 va) { return va; }
 inline void* site(u32 va) { return rebase(va); }
 #endif
 

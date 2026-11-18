@@ -14,11 +14,11 @@
 //   Both clears return without clearing - but only when 9Data/Shine/MinimonKeepSlots.flag exists (the QoL layer ships
 //   it; parity keeps the stock clearing). The player's own slot edits (NC_CHAR_USEITEM_MINIMON_*_ON_REQ) are untouched.
 #include <zonehook.h>
+#include <zone_functions.h>
 
 namespace {
 
-const unsigned kVaNormalClear = 0x00563F60u;     // ShinePlayer::sp_UseItemMinimon_NormalSlotClear(u8 slot), thiscall
-const unsigned kVaChargedClear = 0x00564150u;    // ShinePlayer::sp_UseItemMinimon_ChargedSlotClear(u8 slot)
+// detoured: ShinePlayer::sp_UseItemMinimon_NormalSlotClear / _ChargedSlotClear (u8 slot), thiscall - generated symbols
 const char* kFlag = "../9Data/Shine/MinimonKeepSlots.flag";
 
 zone::Detour g_normal, g_charged;
@@ -42,8 +42,8 @@ ZONEHOOK_PLUGIN("minimon_keep") {
         return;
     }
     zone::hook_function("ShinePlayer::sp_UseItemMinimon_NormalSlotClear 0x563F60 (emptied slots are kept)",
-                        zone::rebase(kVaNormalClear), (void*)normal_clear, &g_normal);
+                        (void*)zone::fn::ShineObjectClass__ShinePlayer__sp_UseItemMinimon_NormalSlotClear(), (void*)normal_clear, &g_normal);
     zone::hook_function("ShinePlayer::sp_UseItemMinimon_ChargedSlotClear 0x564150 (emptied slots are kept)",
-                        zone::rebase(kVaChargedClear), (void*)charged_clear, &g_charged);
+                        (void*)zone::fn::ShineObjectClass__ShinePlayer__sp_UseItemMinimon_ChargedSlotClear(), (void*)charged_clear, &g_charged);
     zone::log("minimon_keep: %s - an auto-use pet keeps the slot of a used-up item and uses it again once restocked", kFlag);
 }

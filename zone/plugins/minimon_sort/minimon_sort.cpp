@@ -23,7 +23,7 @@ zone::Detour g_check;
 
 void __fastcall slot_item_check(void* player, void*, unsigned short item) {
     typedef int(__fastcall * IsArrangeInven)(void*, void*);
-    if (((IsArrangeInven)zone::rebase(0x00560DB0u))(player, nullptr)) return;   // mid-sort: the item is only moving
+    if (((IsArrangeInven)zone::fn::ShineObjectClass__ShinePlayer__so_ply_IsArrangeInven())(player, nullptr)) return;   // mid-sort: the item is only moving
     ((void(__fastcall*)(void*, void*, unsigned short))g_check.trampoline)(player, nullptr, item);
 }
 
@@ -31,5 +31,5 @@ void __fastcall slot_item_check(void* player, void*, unsigned short item) {
 
 ZONEHOOK_PLUGIN("minimon_sort") {
     zone::hook_function("ShinePlayer::so_ply_UseItemMinimon_SlotItemCheck 0x564C90 (skipped while the inventory sorts)",
-                        zone::rebase(0x00564C90u), (void*)slot_item_check, &g_check);
+                        (void*)zone::fn::ShineObjectClass__ShinePlayer__so_ply_UseItemMinimon_SlotItemCheck(), (void*)slot_item_check, &g_check);
 }

@@ -242,7 +242,7 @@ unsigned short __fastcall tcm2_hook(void* self, void* edx, int type, ShineReward
 //   if pp_SetPacketLen(n + 0x19) -> pp_SendPacket(the DB session, bundle 0x14D454B8); lock->vfunc(+0x48)(buf+0xC, 0, 0, 1);
 //   icl_IncIndex(lock); ~ItemListMaker
 // The player checks cRewardItem makes first: vfunc(+0x300)() != 1, vfunc(+0x4D0)() == 2, *(player+0x7A) != 0.
-const unsigned kVaPacket = 0x84D908, kVaDbBundle = 0x14D454B8;
+// the shared packet buffer zone::global::gpp(), the GameDB socket bundle zone::global::sock2gameDB() (generated)
 const unsigned short kOpItemCreate = 0x344D;
 const unsigned kVtGone = 0x300, kVtKind = 0x4D0, kVtRegnum = 0x344, kVtCellLock = 0x7D4, kVtLockMark = 0x48;
 const unsigned kOffCharData = 0x7A;
@@ -264,7 +264,7 @@ bool give_item(void* player, unsigned short id) {
     if (!chr) return false;
     ItemTotalInformation iti;
     if (!make_reward_item(id, iti)) return false;
-    void* pkt = zone::rebase(kVaPacket);
+    void* pkt = zone::global::gpp();
     auto* buf = *(unsigned char**)pkt;
     *(unsigned short*)buf = kOpItemCreate;
     *(unsigned short*)(buf + 0xE) = **(unsigned short**)(chr + 0x10);
@@ -282,7 +282,7 @@ bool give_item(void* player, unsigned short id) {
     *(unsigned short*)(buf + 0xC) = zone::fn::ShineObjectClass__ShineObject__so_GetZoneHandle_ItemLooter()(lock, 0);
     bool sent = false;
     if (zone::fn::ProtocolPacket__pp_SetPacketLen()(pkt, 0, n + 0x19)) {
-        auto* db = zone::fn::SocketBundle_GameDBSession___sb_GetSocket()(zone::rebase(kVaDbBundle), 0);
+        auto* db = zone::fn::SocketBundle_GameDBSession___sb_GetSocket()(zone::global::sock2gameDB(), 0);
         zone::fn::ProtocolPacket__pp_SendPacket()(pkt, 0, (ZoneBaseSession*)db);
         sent = true;
     }

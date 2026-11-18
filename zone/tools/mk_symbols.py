@@ -44,6 +44,15 @@ ANCHORS = {
     'ZoneServiceThread': '?zs_ServiceThreadFunction@ZoneServer@@SGKPAX@Z',
     'StartDispatcher': '?startDispatcher@WinService@@QAE_NVString@@P6A_NXZP6AXXZ@Z',
     'WinMain': '_WinMain@16',
+    # Things a plugin needs that mk_types.py cannot give a typed accessor (a CRT function, a template member whose
+    # signature it cannot spell, a virtual it leaves out), named here so no plugin types the number.
+    'ClientProtocolTable': '?shineprotofunc@@3V?$PROTOCOLFUNCTIONTEMPLETE@P8ShinePlayer@ShineObjectClass@@AEXPATNETCOMMAND@@HG@Z@@A',
+    'PftStoreShinePlayer': '?pft_Store@?$PROTOCOLFUNCTIONTEMPLETE@P8ShinePlayer@ShineObjectClass@@AEXPATNETCOMMAND@@HG@Z@@'
+                           'QAEXHHP8ShinePlayer@ShineObjectClass@@AEXPATNETCOMMAND@@HG@Z@Z',
+    'IocpProcess': '?IOCP_Process@IOCPProcessSession@@UAEHPAUIOCP_OVERLAPPED@CIOCP@@K@Z',
+    'Fread': '_fread',
+    'OperatorNewArray': '??_U@YAPAXI@Z',
+    'OperatorDelete': '??3@YAXPAX@Z',
     # Data, vtables and template functions are NOT anchors any more: mk_types.py generates a typed accessor
     # for every one - zone::global::chargedbuffdatabox(), zone::global::gpp(), zone::vtable::ItemInventory(),
     # zone::fn::SocketBundle_GameDBSession___sb_GetSocket() - from the global stream and the public names.
@@ -109,7 +118,9 @@ def main():
     ]
     out.append('// Anchors - see ANCHORS in mk_symbols.py for why the service thread, and not WinMain.')
     for k in sorted(anchors):
-        out.append('static const unsigned int kVa%s = 0x%08Xu;' % (k, anchors[k]))
+        # the mangled name rides along, so tools/recipe_port.py headers moves the anchor by THIS name (an identical-
+        # code fold can give one address several names, and another link can fold them differently)
+        out.append('static const unsigned int kVa%s = 0x%08Xu;   // %s' % (k, anchors[k], ANCHORS[k]))
     out.append('')
 
     if extra:

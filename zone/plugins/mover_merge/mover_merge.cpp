@@ -26,14 +26,16 @@
 // Gameplay, not parity: active only when the server data carries the flag the QoL layer ships
 // (Fiesta2026on2016 migrations-qol/overrides/server/Shine/MoverMergeNoFeed.flag).
 #include <zonehook.h>
+#include <zone_globals.h>
 
 #include <cstring>
 
 namespace {
 
 const char* kFlag = "../9Data/Shine/MoverMergeNoFeed.flag";
-const unsigned kSites[] = {0x0051CEFCu, 0x0051D004u, 0x0051D06Bu, 0x0051D368u};   // riding main, mover main, riding sub, mover sub
-const unsigned char kStock[7] = {0x66, 0x3B, 0x05, 0xD0, 0x04, 0xD5, 0x14};
+// the four compares inside sp_NC_ITEM_MOVER_UPGRADE_REQ: riding main, mover main, riding sub, mover sub
+constexpr unsigned kSites[] = {hook::site_va(0x0051CEFCu), hook::site_va(0x0051D004u), hook::site_va(0x0051D06Bu),
+                               hook::site_va(0x0051D368u)};
 const unsigned char kNoFeed[7] = {0x66, 0x3D, 0xFF, 0xFF, 0x0F, 0x1F, 0x00};
 
 }  // namespace
@@ -43,6 +45,10 @@ ZONEHOOK_PLUGIN("mover_merge") {
         zone::log("mover_merge: no %s - only LifeDust-fed mounts merge (stock)", kFlag);
         return;
     }
+    // cmp ax, word ptr [itemdatabox.idb_specialid.sii_UpgradeMoverFeedType] - the LifeDust item, by its symbol
+    unsigned char kStock[7] = {0x66, 0x3B, 0x05};
+    unsigned lifedust = (unsigned)&zone::global::itemdatabox()->idb_specialid.sii_UpgradeMoverFeedType;
+    std::memcpy(kStock + 3, &lifedust, 4);
     int done = 0;
     for (unsigned va : kSites) {
         unsigned char* p = (unsigned char*)zone::rebase(va);

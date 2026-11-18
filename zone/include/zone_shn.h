@@ -46,10 +46,10 @@ typedef bool (*Injector)(void* ctx, const char* path, const unsigned char* data,
 
 namespace detail {
 
-const unsigned kVaRead = 0x0062A780u;          // CDataReader::Read(char*)
-const unsigned kVaFreadCall = 0x0062A825u;     // its one `call _fread`
-const unsigned kVaNew = 0x00654F0Bu;           // operator new[] - what Read allocates the buffer with
-const unsigned kVaDelete = 0x0065677Fu;        // operator delete - what Read frees it with
+// CDataReader::Read(char*): its one `call _fread` (a site inside the function), and what Read allocates / frees the
+// buffer with - operator new[] / operator delete (kVaOperatorNewArray / kVaOperatorDelete, zone_symbols.h)
+constexpr unsigned kVaFreadCall = hook::site_va(0x0062A825u);
+constexpr unsigned kVaReadHead = hook::site_va(0x0062A7B4u);   // the code before it, checked as a whole
 const unsigned kOffLen = 0x04, kOffCap = 0x08, kOffData = 0x34;   // CDataReader: file length, capacity, buffer
 
 struct Entry { char file[64]; Injector fn; void* ctx; };
@@ -77,8 +77,8 @@ inline int __cdecl after_fread(unsigned char* reader, const char* path, int resu
         if (out.size() > cap) {
             typedef void*(__cdecl * NewFn)(size_t);
             typedef void(__cdecl * DeleteFn)(void*);
-            ((DeleteFn)rebase(kVaDelete))(data);
-            data = (unsigned char*)((NewFn)rebase(kVaNew))(out.size());
+            ((DeleteFn)rebase(kVaOperatorDelete))(data);
+            data = (unsigned char*)((NewFn)rebase(kVaOperatorNewArray))(out.size());
             cap = (unsigned)out.size();
         }
         std::memcpy(data, out.data(), out.size());
@@ -109,7 +109,7 @@ __declspec(naked) inline void fread_thunk() {
 // the bytes around the call that pin the register contract: mov esi,ecx at 0x62A7B4, and push edi / push 1 /
 // push edx / push eax just before the call, mov [ebp-0x34],eax after it
 inline bool site_ok() {
-    const unsigned char* s = (const unsigned char*)rebase(0x0062A7B4u);
+    const unsigned char* s = (const unsigned char*)rebase(kVaReadHead);
     const unsigned char* c = (const unsigned char*)rebase(kVaFreadCall);
     static const unsigned char kMov[] = {0x8B, 0xF1};
     static const unsigned char kBefore[] = {0x57, 0x6A, 0x01, 0x52, 0x50};
@@ -135,7 +135,7 @@ inline bool install() {
     if (!write_code(c, patch, 5)) return false;
     state = 1;
     log("[shn] injection point at %x (next: %x%s)", c, g_next,
-        g_next == rebase(0x00658D30u) ? " = _fread" : " = another plugin's injector");
+        g_next == rebase(kVaFread) ? " = _fread" : " = another plugin's injector");
     return true;
 }
 

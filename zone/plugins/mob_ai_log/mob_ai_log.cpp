@@ -13,6 +13,7 @@
 //     mob 5123 tgt 12000: MobActionSwingDamage -> MobActionWaitSkillEnd
 // A mob that freezes shows as its last line with no follow-up. Classes from the 2016 Zone.pdb.
 #include <zonehook.h>
+#include <zone_functions.h>
 
 #include <windows.h>
 
@@ -21,20 +22,28 @@
 namespace {
 
 struct ThinkSite {
-    unsigned va;
+    void* (*fn)();                                      // the class's mab_Think (generated symbol)
     const char* name;
     bool combat;
 };
 
 const ThinkSite kSites[] = {
-    {0x004B8C50, "MobActionNoBrain", false},     {0x004B8EC0, "MobActionBase", false},
-    {0x004B8F10, "MobActionInMove", false},      {0x004B9010, "DuringReturn2Regen", false},
-    {0x004B9140, "MobActionWaitSkillEnd", true}, {0x004B9760, "MobActionInChase", true},
-    {0x004B99E0, "MobActionTargetting", false},  {0x004B9EA0, "MobActionTurning", true},
-    {0x004BA1D0, "MobAction2Region", false},     {0x004BA390, "MobActionBackStep", false},
-    {0x004BA750, "MobActionAvoidOverlap", false}, {0x004BAAC0, "MobActionSwingDamage", true},
-    {0x004BB790, "MobActionWander", false},      {0x004BBA00, "MobActionAttack", true},
-    {0x004BC3A0, "MobActionRoaming", false},     {0x004BC950, "MobActionChase", true},
+    {[] { return (void*)zone::fn::MobTacticElement__MobActionNoBrain__mab_Think(); }, "MobActionNoBrain", false},
+    {[] { return (void*)zone::fn::MobTacticElement__MobActionBase__mab_Think(); }, "MobActionBase", false},
+    {[] { return (void*)zone::fn::MobTacticElement__MobActionInMove__mab_Think(); }, "MobActionInMove", false},
+    {[] { return (void*)zone::fn::MobTacticElement__DuringReturn2Regen__mab_Think(); }, "DuringReturn2Regen", false},
+    {[] { return (void*)zone::fn::MobTacticElement__MobActionWaitSkillEnd__mab_Think(); }, "MobActionWaitSkillEnd", true},
+    {[] { return (void*)zone::fn::MobTacticElement__MobActionInChase__mab_Think(); }, "MobActionInChase", true},
+    {[] { return (void*)zone::fn::MobTacticElement__MobActionTargetting__mab_Think(); }, "MobActionTargetting", false},
+    {[] { return (void*)zone::fn::MobTacticElement__MobActionTurning__mab_Think(); }, "MobActionTurning", true},
+    {[] { return (void*)zone::fn::MobTacticElement__MobAction2Region__mab_Think(); }, "MobAction2Region", false},
+    {[] { return (void*)zone::fn::MobTacticElement__MobActionBackStep__mab_Think(); }, "MobActionBackStep", false},
+    {[] { return (void*)zone::fn::MobTacticElement__MobActionAvoidOverlap__mab_Think(); }, "MobActionAvoidOverlap", false},
+    {[] { return (void*)zone::fn::MobTacticElement__MobActionSwingDamage__mab_Think(); }, "MobActionSwingDamage", true},
+    {[] { return (void*)zone::fn::MobTacticElement__MobActionWander__mab_Think(); }, "MobActionWander", false},
+    {[] { return (void*)zone::fn::MobTacticElement__MobActionAttack__mab_Think(); }, "MobActionAttack", true},
+    {[] { return (void*)zone::fn::MobTacticElement__MobActionRoaming__mab_Think(); }, "MobActionRoaming", false},
+    {[] { return (void*)zone::fn::MobTacticElement__MobActionChase__mab_Think(); }, "MobActionChase", true},
 };
 const int kNumSites = sizeof kSites / sizeof kSites[0];
 
@@ -128,8 +137,8 @@ ZONEHOOK_PLUGIN("mob_ai_log") {
     int n = 0;
     for (int i = 0; i < kNumSites; i++) {
         char what[96];
-        wsprintfA(what, "%s::mab_Think 0x%X", kSites[i].name, kSites[i].va);
-        if (zone::hook_function(what, zone::rebase(kSites[i].va), kImpls[i], &g_detours[i])) n++;
+        wsprintfA(what, "%s::mab_Think", kSites[i].name);
+        if (zone::hook_function(what, kSites[i].fn(), kImpls[i], &g_detours[i])) n++;
     }
     zone::log("mob_ai_log: %d of %d mab_Think detoured - logging mob AI state changes", n, kNumSites);
 }

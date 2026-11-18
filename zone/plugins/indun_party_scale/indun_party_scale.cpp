@@ -41,7 +41,7 @@ const unsigned kMapMapInfo = 0x10;           // FieldMap: MapInfo* fm_MapInfo
 const unsigned kMapInfoName = 0x2;           // MapInfo: Name3 MapName     // FieldOption::InstanceDungeonInfo.MapIDClient (after ORToken + IDNo + ZoneNumber)
 const int kMaxMembers = 5;
 const int kMaxStrength = 8;
-const unsigned kVaNowOperand = 0x0041641A;   // so_AbnormalState_Set_Simple: mov ecx,[now] - the operand = &now
+constexpr unsigned kVaNowOperand = hook::site_va(0x0041641Au);   // so_AbnormalState_Set_Simple: mov ecx,[now] - the operand = &now
 
 zone::Detour g_login, g_revive, g_leave, g_join, g_break, g_handle, g_zoneleave, g_logout;
 void* g_vt_player = nullptr;                 // a real player's vtable, learned on the first map login
@@ -106,7 +106,7 @@ bool is_instance(void* map) {
 // bigger block and rewrites every `mov ecx, 0x87aea8`, so the stock global is STALE memory - passing it is what crashed
 // zone00 on 2026-10-06 (the name walk followed garbage at stale+0xE18). Read it where the zone itself takes it:
 // MapBuffDataBox::mbdb_SetAbstate, `mov ecx, &dic_abstate` (B9 imm32) right before its as_FromName call.
-const unsigned kVaMapBuffDicMov = 0x00464620;
+constexpr unsigned kVaMapBuffDicMov = hook::site_va(0x00464620u);
 void* dictionary() {
     const unsigned char* at = (const unsigned char*)zone::rebase(kVaMapBuffDicMov);
     if (at[0] != 0xB9 || at[5] != 0xE8) {

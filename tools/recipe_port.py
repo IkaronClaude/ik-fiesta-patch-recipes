@@ -1372,10 +1372,16 @@ def cmd_where(a):
     return rc
 
 
-def map_symbol_address(mp, va):
+def map_symbol_address(mp, va, mangled=None):
     """a generated header's address (a function entry, a global, a vtable) -> ours: a function by its symbol (the
-    mangled name carries the signature), anything else as T() maps it. (our va, how) or Refuse"""
+    mangled name carries the signature), anything else as T() maps it. (our va, how) or Refuse. `mangled`: the one
+    public name the header means (an identical-code fold gives an address several)."""
     s = mp.o.containing(va)
+    if mangled and s is not None and s.va == va and ('pub', mangled) in s.names:
+        got = mp.n.by_name.get(('pub', mangled), [])
+        if len(got) != 1:
+            raise Refuse('%s is %d symbols in our build' % (mangled, len(got)))
+        return got[0].va, 'symbol %s' % mangled
     if s is not None and s.va == va and s.code:
         t, why = mp.counterpart(s)
         if t is None:
@@ -1415,7 +1421,8 @@ def cmd_headers(a):
                 va = int(g.group(3), 16)
                 name = g.group(2)
                 try:
-                    nv, _how = map_symbol_address(mp, va)
+                    tail = re.match(r'\s*//\s*(\S+)\s*$', g.group(4))
+                    nv, _how = map_symbol_address(mp, va, tail.group(1) if tail else None)
                     out.append('%s0x%08Xu%s%s' % (g.group(1), nv, ';' if m else '', g.group(4)))
                     mapped += 1
                 except Refuse as x:
@@ -1450,7 +1457,7 @@ def cmd_headers(a):
     return 0
 
 
-_SITE = re.compile(r'\bsite\(\s*(0x[0-9A-Fa-f]+)u?\s*\)')
+_SITE = re.compile(r'\bsite(?:_va)?\(\s*(0x[0-9A-Fa-f]+)u?\s*\)')
 
 
 def plugin_sources(path):
@@ -1484,12 +1491,12 @@ def write_sites(mp, oimg, nimg, sources, out):
             oimg.label, oimg.sha256, nimg.label, nimg.sha256))
         f.write('// Every hook::site(original VA) the plugins use, moved with its function (identical in our build, or '
                 'the aligned instruction) or its data symbol.\n#pragma once\nnamespace hook_sites {\n'
-                'struct Site { unsigned orig, ours; };\nstatic const Site kSites[] = {\n')
+                'struct Site { unsigned orig, ours; };\nstatic constexpr Site kSites[] = {\n')
         for va, nv, how in rows:
             f.write('    {0x%08Xu, 0x%08Xu},   // %s\n' % (va, nv, how.replace('*/', '')))
         if not rows:
             f.write('    {0u, 0u},   // (no sites)\n')
-        f.write('};\nstatic const unsigned kCount = %d;\n}  // namespace hook_sites\n' % len(rows))
+        f.write('};\nstatic constexpr unsigned kCount = %d;\n}  // namespace hook_sites\n' % len(rows))
     return True
 
 
@@ -1516,12 +1523,12 @@ def hardcoded(img, sources):
             if os.path.basename(f) in sum(GENERATED.values(), []):
                 continue
             for n, line in enumerate(open(f, encoding='utf-8', errors='replace'), 1):
-                code = line.split('//', 1)[0]
+                code = re.sub(r'"(?:[^"\\]|\\.)*"', '""', line).split('//', 1)[0]   # not in strings / comments
                 for m in _HARD.finditer(code):
                     v = int(m.group(0).rstrip('uU'), 16)
                     if not img.in_image(v) or v < img.base + 0x1000:
                         continue
-                    if re.search(r'\bsite\(\s*' + re.escape(m.group(0)), code):
+                    if re.search(r'\bsite(?:_va)?\(\s*' + re.escape(m.group(0)), code):
                         continue
                     out.append((os.path.relpath(f, HERE), n, line.strip()[:140]))
     return out

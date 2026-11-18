@@ -84,7 +84,7 @@ using zone::types::ShineObjectClass__ShinePlayer;
 using zone::types::FieldMap;
 
 const int kLinkToSlot = 384;
-const unsigned int kVaAcLinkToReturn = 0x0041AA0Au;   // AmpersandCommand::ac_LinkTo, the instruction after its call to so_LinkTo                 // ShinePlayer vtable: so_LinkTo (0x49AD30 in the stock exe)
+constexpr unsigned int kVaAcLinkToReturn = hook::site_va(0x0041AA0Au);   // AmpersandCommand::ac_LinkTo, the instruction after its call to so_LinkTo                 // ShinePlayer vtable: so_LinkTo (0x49AD30 in the stock exe)
 const unsigned char kStatusDone = 2;         // PLAYER_QUEST_STATUS::PQS_DONE
 const unsigned char kStatusRepeatDone = 4;   // PLAYER_QUEST_STATUS::PQS_REPEAT
 const char* kTablePath = "../9Data/Shine/FieldQuestCondition.shn";

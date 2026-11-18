@@ -25,7 +25,7 @@
 namespace {
 
 const char* kFile = "../9Data/Shine/QuestDoingLimit.txt";
-const unsigned kVaCmp = 0x005BE867u;
+constexpr unsigned kVaCmp = hook::site_va(0x005BE867u);
 const unsigned char kStock[3] = {0x83, 0xF8, 0x28};       // cmp eax, 40
 
 int read_limit() {

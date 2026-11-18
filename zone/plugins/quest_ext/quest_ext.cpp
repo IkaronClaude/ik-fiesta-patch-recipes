@@ -77,7 +77,7 @@ const unsigned char kStatusDoing = 6;       // PLAYER_QUEST_STATUS as the stock 
 const unsigned char kStatusReady = 8;
 const unsigned char kStatusFailed = 7;
 const unsigned char kQuestTypeParty = 8;    // IsConnectionAction's Type test
-const unsigned int kVaRandom = 0x150BA418u; // cWell512Random the stock drop rolls with (0x5BD22B)
+// the cWell512Random the stock drop rolls with (0x5BD22B): rndbox.rb_well512random
 const unsigned int kRoll = 1000000;         // ThenPersent is out of 1,000,000
 
 struct Rule { unsigned char if_type, then_type, group; unsigned long if_target, then_target, pct, cmin, cmax; };
@@ -157,7 +157,7 @@ bool in_quest_data(const QUEST_DATA* q, const Rule& x) {
 }
 
 unsigned roll() {
-    return zone::fn::cWell512Random__well512_GetRandom_3()(zone::rebase(kVaRandom), nullptr, kRoll);
+    return zone::fn::cWell512Random__well512_GetRandom_3()(&zone::global::rndbox()->rb_well512random, nullptr, kRoll);
 }
 
 // The stock drop (QuestActionMobKill's item branch) for one row. Returns whether it gave anything.

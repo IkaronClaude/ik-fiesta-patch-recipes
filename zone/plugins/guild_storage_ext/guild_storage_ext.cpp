@@ -38,10 +38,8 @@
 
 namespace {
 
-const unsigned kVaVtable = 0x0070AEFCu;          // ItemGuildAcademyRewardStorage::`vftable'
-const unsigned kVaGetCell = 0x00643000u;         // stock [0] (checked before patching)
-const unsigned kVaSizeOut = 0x00643360u;         // stock [2] (checked)
-const unsigned kVaCellCtor = 0x006447B0u;        // ItemInventoryCell::ItemInventoryCell(), thiscall
+// ItemGuildAcademyRewardStorage's vtable; its stock [0] ib_GetInventoryCell and [2] ib_BagSizeOutput (checked before
+// patching); ItemInventoryCell::ItemInventoryCell() (thiscall) - all generated symbols
 const int kStockCells = 72;
 const int kPageCells = 36;
 const int kCellSize = 0x74;
@@ -64,7 +62,7 @@ unsigned char* side_cells(unsigned guild) {
         const int n = kMaxPages * kPageCells;
         v = new unsigned char[(size_t)n * kCellSize];
         typedef void(__fastcall * Ctor)(void*, void*);
-        for (int k = 0; k < n; ++k) ((Ctor)zone::rebase(kVaCellCtor))(v + (size_t)k * kCellSize, nullptr);
+        for (int k = 0; k < n; ++k) ((Ctor)zone::fn::ItemInventoryCell__ItemInventoryCell())(v + (size_t)k * kCellSize, nullptr);
     }
     return v;
 }
@@ -128,8 +126,9 @@ ZONEHOOK_PLUGIN("guild_storage_ext") {
     g_pages = hook::config_int("pages", 0);
     if (g_pages < 0) g_pages = 0;
     if (g_pages > kMaxPages) g_pages = kMaxPages;
-    void** vt = (void**)zone::rebase(kVaVtable);
-    if (vt[0] != zone::rebase(kVaGetCell) || vt[2] != zone::rebase(kVaSizeOut)) {
+    void** vt = zone::vtable::ItemGuildAcademyRewardStorage();
+    if (vt[0] != (void*)zone::fn::ItemGuildAcademyRewardStorage__ib_GetInventoryCell() ||
+        vt[2] != (void*)zone::fn::ItemGuildAcademyRewardStorage__ib_BagSizeOutput()) {
         zone::log("guild_storage_ext: ItemGuildAcademyRewardStorage's vtable is not the expected one - stock 72 cells");
         return;
     }

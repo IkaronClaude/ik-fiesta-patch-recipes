@@ -31,6 +31,7 @@ header library generated from the game's own symbols. See [Hooks](#hooks).
 README.md        this file: recipes, the build, hooks
 apply.py         the recipe runner (one recipe, one exe)
 build.py         a whole chain from a STOCK exe: --target zone (default) | character
+tools/           recipe_port.py - recipes and plugins onto an exe rebuilt from source (see Rebuilt exes)
 build/           every output (patched exes, fiestahook.dll, plugins/) - gitignored
 
 common/          shared by every target
@@ -235,6 +236,47 @@ checks the rules on dummy plugins (order, disable, missing dependency, cycle, `[
 
 Proven under Wine in the docker stack on 2026-09-19. Zone.exe and Character.exe both run with the loader, and
 the Void Inventory works end to end through both plugins.
+
+**Plugins name addresses only through symbols.** A function, global or vtable comes from the generated headers
+(`zone::fn::X()`, `zone::global::X()`, `zone::vtable::X()`, `wm::...`, `login::...`, the `kVa...` anchors of
+zone_symbols.h). An address no header can name - a site inside a function, a return address, a string literal - is
+written as `hook::site(0x...)` (a pointer) or `constexpr unsigned kVaX = hook::site_va(0x...);` (a number), with the
+ORIGINAL exe's address. On the stock exe that is the address; on a rebuilt exe the build supplies a table that moves
+each one (next section). `tools/recipe_port.py plugins` lists any other address literal and does not build that plugin.
+
+## Rebuilt exes (fiesta-decomp's ProjectF2)
+
+The exes rebuilt from source hold the same code laid out differently. `tools/recipe_port.py` (needs capstone and
+llvm-pdbutil) ports everything here onto one, never by a guess:
+
+```bash
+# the recipes: ported, applied (build.py --recipes-dir ... --rebuilt), and the patched original compared with the
+# patched rebuild function by function, cave by cave, import by import
+python tools/recipe_port.py port --target zone --experimental \
+    --orig-exe Z:/ServerSource/Zone00/Zone.exe --orig-pdb Z:/ServerSource/Zone00/Zone.pdb \
+    --new-exe <ProjectF2>/build/Zone/Zone.exe --new-pdb <ProjectF2>/build/Zone/Zone.pdb \
+    --out-dir build/ported/Zone --build build/rebuilt/Zone.hooked.exe
+
+# the plugins: the generated headers with every address moved to the rebuild, the hook::site table, every plugin of
+# the target built into build/rebuilt/plugins/<target>/   (the stock generated headers must exist - see Building)
+python tools/recipe_port.py plugins --target zone --orig-exe ... --orig-pdb ... --new-exe ... --new-pdb ... \
+    --out-dir build/rebuilt
+
+# one address, explained
+python tools/recipe_port.py where 0x0053D025 --orig-exe ... --orig-pdb ... --new-exe ... --new-pdb ...
+```
+
+How an address moves: it is (the original PDB symbol that contains it, offset), and the symbol is found in our PDB by
+its mangled name (a static: by its object's data piece, from the section contributions - our PDB has no CodeView).
+Data moves with its symbol. Code moves with its function when the function is identical in our build - every address
+operand naming the same symbol + offset, switch tables and the compiler's symbol-less EH stubs compared by structure -
+or, when it is not, only where the patched instructions align with identical ones. A recipe with a code cave needs
+every function the cave jumps into or out of identical. Whatever cannot be mapped exactly (a missing symbol, an
+identical-code fold the two links resolved differently, an unaligned site) refuses the whole target.
+
+`--rebuilt` adds the recipes only a rebuilt exe needs (build.py REBUILT_ONLY): the shipped WorldManager carries two
+hotfixes in its own .custom section that the source does not have, so `wm-shipped-hotfixes` ("reference":
+"unpatched") goes onto the rebuild.
 
 ## Targets
 

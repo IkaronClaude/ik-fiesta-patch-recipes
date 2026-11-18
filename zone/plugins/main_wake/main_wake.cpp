@@ -27,7 +27,7 @@
 namespace {
 
 const DWORD kIdleMs = 15;                          // Windows' default tick (15.625 ms), rounded down
-const unsigned kVaIocpProcess = 0x005A6820u;       // IOCPProcessSession::IOCP_Process (virtual, not in the header)
+// IOCPProcessSession::IOCP_Process (virtual; zone_functions.h leaves it out): zone::kVaIocpProcess (zone_symbols.h)
 const unsigned kSleepManagerSkip = 4;              // SleepManager +4: the skip counter sm_Sleep resets
 
 HANDLE g_wake;
@@ -59,5 +59,5 @@ ZONEHOOK_PLUGIN("main_wake") {
     zone::hook_function("SleepManager::sm_Sleep (idle wait -> network event, max 15 ms)",
                         (void*)zone::fn::SleepManager__sm_Sleep(), (void*)sleep_thunk, &g_sleep);
     zone::hook_function("IOCPProcessSession::IOCP_Process (bytes arrived -> wake the main loop)",
-                        (void*)zone::rebase(kVaIocpProcess), (void*)iocp_thunk, &g_iocp);
+                        (void*)zone::rebase(zone::kVaIocpProcess), (void*)iocp_thunk, &g_iocp);
 }

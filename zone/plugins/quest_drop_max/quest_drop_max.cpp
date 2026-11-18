@@ -20,8 +20,8 @@
 
 namespace {
 
-const unsigned kVaSite = 0x005BD25Au;
-const unsigned kVaBack = 0x005BD25Fu;
+constexpr unsigned kVaSite = hook::site_va(0x005BD25Au);
+constexpr unsigned kVaBack = hook::site_va(0x005BD25Fu);
 const unsigned char kStock[5] = {0x2B, 0xD1, 0x0F, 0xAF, 0xD0};     // sub edx, ecx ; imul edx, eax
 
 unsigned char* g_thunk = nullptr;

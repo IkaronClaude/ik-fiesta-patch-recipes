@@ -82,9 +82,9 @@ int __fastcall can_enter(void* self, void*, void* player, FieldOption__InstanceD
 // The je (6 bytes, 0F 84 rel32) becomes a jmp to solo_type (+ nop): the flags of `cmp cx, ax` survive the jmp, so
 // a party goes on as before; no party with a solo key (>= 0x10000 - no party number is) goes on as type 0; no
 // party with any other key is refused as before.
-const unsigned kVaNoPartyJe = 0x5A93B1;
-const unsigned kVaTypeParty = 0x5A93B7;
-const unsigned kVaRefuse = 0x5A9587;
+constexpr unsigned kVaNoPartyJe = hook::site_va(0x005A93B1u);
+constexpr unsigned kVaTypeParty = hook::site_va(0x005A93B7u);
+constexpr unsigned kVaRefuse = hook::site_va(0x005A9587u);
 const unsigned char kNoPartyJe[6] = {0x0F, 0x84, 0xD0, 0x01, 0x00, 0x00};   // je 0x5A9587
 unsigned g_type_party = 0, g_refuse = 0;
 

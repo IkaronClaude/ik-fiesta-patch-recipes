@@ -49,8 +49,8 @@ using zone::types::ShineObjectClass__ShinePlayer;
 static_assert(offsetof(ShineObjectClass__ShinePlayer, sp_QuestDiary) == 0x173E8,
               "sp_NC_QUEST_GIVE_UP_REQ 0x578994 passes lea ecx, [esi + 0x173E8] as the quest object");
 
-const unsigned kVaProtocolStore = 0x004D4510u;   // protocolstore(PROTOCOLFUNCTIONTEMPLETE<ShinePlayer>*), cdecl
-const unsigned kVaPftStore = 0x004D36C0u;        // pft_Store(dept, cmd, handler), thiscall on the table, ret 0xC
+// detoured: protocolstore(PROTOCOLFUNCTIONTEMPLETE<ShinePlayer>*), cdecl - zone::fn::protocolstore_5(); called:
+// pft_Store(dept, cmd, handler), thiscall on the table, ret 0xC - zone::kVaPftStoreShinePlayer (zone_symbols.h)
 const int kDeptQuest = 0x11;
 const int kCmdTrack = 0x1F, kCmdUntrack = 0x21;
 const unsigned short kOpTrackAck = 0x4420, kOpUntrackAck = 0x4422;
@@ -148,7 +148,7 @@ int __fastcall set_done(void* quests, void*, unsigned char* rec) {
 void __cdecl store(void* table) {
     ((void(__cdecl*)(void*))g_store.trampoline)(table);
     typedef void(__fastcall * PftStore)(void* table, void* edx, int dept, int cmd, void* handler);
-    auto pft = (PftStore)zone::rebase(kVaPftStore);
+    auto pft = (PftStore)zone::rebase(zone::kVaPftStoreShinePlayer);
     pft(table, 0, kDeptQuest, kCmdTrack, (void*)on_track);
     pft(table, 0, kDeptQuest, kCmdUntrack, (void*)on_untrack);
     zone::log("quest_track: client handlers 0x%04X (track) and 0x%04X (untrack) stored",
@@ -159,7 +159,7 @@ void __cdecl store(void* table) {
 
 ZONEHOOK_PLUGIN("quest_track") {
     zone::hook_function("protocolstore(ShinePlayer table) 0x4D4510 (+ quest tracker handlers)",
-                        (void*)zone::rebase(kVaProtocolStore), (void*)store, &g_store);
+                        (void*)zone::fn::protocolstore_5(), (void*)store, &g_store);
     zone::hook_function("CQuest::SetQuestDone 0x62F610 (a tracked quest handed in leaves the tracker)",
                         (void*)zone::fn::CQuest__SetQuestDone(), (void*)set_done, &g_done);
 }

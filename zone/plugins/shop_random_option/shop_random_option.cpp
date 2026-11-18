@@ -35,9 +35,9 @@
 namespace {
 
 const char* kFlag = "../9Data/Shine/ShopRandomOption.flag";
-const unsigned kVaBuyStampReturn = 0x00523E51u;      // ii_BuyAll, the instruction after `call iti_mkregnum`
-const unsigned kVaRandomOptionTable = 0x0D6249D4u;   // mov ecx, 0xd6249d4 at every rot_FillOption call
-const unsigned kVaAttributeClasses = 0x150BA478u;    // mov ecx, 0x150ba478 at every attribute-class lookup
+constexpr unsigned kVaBuyStampReturn = hook::site_va(0x00523E51u);   // ii_BuyAll, the instruction after `call iti_mkregnum`
+// the table every rot_FillOption call uses: zone::global::itemrandomoptiontable(); the attribute classes every
+// lookup uses: zone::global::itmattcontainer() - generated symbols
 const unsigned kAttrOffset = 8;                      // ItemTotalInformation -> its attribute block
 const unsigned kOptionStorageSlot = 0x70;            // ItemAttributeClass vtable: attr -> ItemOptionStorage*
 
@@ -55,9 +55,9 @@ void roll(void* iti, unsigned short item) {
     std::strncpy(group, idx->dataserv->RandomOptionDropGroup, sizeof group - 1);
     group[sizeof group - 1] = 0;
     if (!group[0] || !std::strcmp(group, "-")) return;
-    void* table = zone::rebase(kVaRandomOptionTable);
+    void* table = zone::global::itemrandomoptiontable();
     auto* datum = zone::fn::ItemRandomOption__RandomOptionTable__operator__()(table, nullptr, group);
-    auto* cls = zone::fn::ItemAttributeClassContainer__operator__()(zone::rebase(kVaAttributeClasses), nullptr, item);
+    auto* cls = zone::fn::ItemAttributeClassContainer__operator__()(zone::global::itmattcontainer(), nullptr, item);
     if (!datum || !cls) return;
     typedef void*(__fastcall * StorageOf)(void*, void*, void*);
     void* storage = ((StorageOf)(*(void***)cls)[kOptionStorageSlot / 4])((void*)cls, nullptr, (char*)iti + kAttrOffset);
@@ -95,7 +95,7 @@ ZONEHOOK_PLUGIN("shop_random_option") {
         return;
     }
     zone::hook_function("ItemTotalInformation::iti_mkregnum 0x640710 (cen-shop goods roll random options)",
-                        zone::rebase(0x00640710u), (void*)stamp, &g_stamp);
+                        (void*)zone::fn::ItemTotalInformation__iti_mkregnum(), (void*)stamp, &g_stamp);
     zone::log("shop_random_option: %s - %s roll random options when bought", kFlag,
               g_all ? "every item that rolls when dropped" : (std::to_string(g_items.size()) + " listed item(s)").c_str());
 }

@@ -118,7 +118,8 @@ void __fastcall ctor(void* self, void*, zone::types::ShineObjectClass__ShinePlay
 // reached the constructor hook. At 0x52968E (mov ecx, [ebp-0x21b4]; 6 bytes) edi still holds the item's ItemInfo row: a
 // LISTED item jumps straight to 0x529746 with count 1 (the constructor hook then sets the product and its lot); anything
 // else runs the original instruction and goes on to the stock check.
-const unsigned kVaCountCheck = 0x0052968E, kVaCountBack = 0x00529694, kVaCountOk = 0x00529746;
+constexpr unsigned kVaCountCheck = hook::site_va(0x0052968Eu), kVaCountBack = hook::site_va(0x00529694u),
+                   kVaCountOk = hook::site_va(0x00529746u);
 const unsigned char kCountCheckBytes[6] = {0x8B, 0x8D, 0x4C, 0xDE, 0xFF, 0xFF};
 unsigned g_count_back = 0, g_count_ok = 0;
 unsigned g_skipped = 0;

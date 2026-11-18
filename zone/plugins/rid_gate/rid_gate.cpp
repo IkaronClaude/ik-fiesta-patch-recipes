@@ -33,17 +33,18 @@ namespace {
 
 using zone::types::FieldOption__InstanceDungeonInfo;
 
-const unsigned kVaInvalidRole = 0x4C6456;      // push ebx ; push "Invalid NPC Role"
-const unsigned kVaInvalidRoleNext = 0x4C645C;  // mov ecx, 0x871b00 (the assert continues)
-const unsigned kVaGateBranch = 0x4C5E5C;       // the Gate branch: new NPCRole_Portal
-const unsigned kVaInvalidRoleMsg = 0x6C5988;
+// sites inside NPCManager::nm_Load, and the assert's message literal (no generated header names either)
+constexpr unsigned kVaInvalidRole = hook::site_va(0x004C6456u);      // push ebx ; push "Invalid NPC Role"
+constexpr unsigned kVaInvalidRoleNext = hook::site_va(0x004C645Cu);  // mov ecx, 0x871b00 (the assert continues)
+constexpr unsigned kVaGateBranch = hook::site_va(0x004C5E5Cu);       // the Gate branch: new NPCRole_Portal
+constexpr unsigned kInvalidRoleMsgVa = hook::site_va(0x006C5988u);
+const unsigned kVaInvalidRoleMsg = kInvalidRoleMsgVa;                // a variable: the inline asm below pushes it
 const unsigned char kInvalidRoleBytes[6] = {0x53, 0x68, 0x88, 0x59, 0x6C, 0x00};
 // immediates inside NPCRole_ID_Portal::nrb_Role
-const unsigned kVaFieldContainerMov = 0x4C34E5;   // mov ecx, fieldcontainer
-const unsigned kVaFieldLvMov = 0x4C3515;          // mov ecx, fieldleveldatabox
-const unsigned kVaPacketMov = 0x4C354A;           // mov esi, [packet buffer pointer]
-const unsigned kVaZrpbMov = 0x4C3593;             // mov ecx, the find-instance ring packet
-const unsigned kVaMapDataBoxMov = 0x4C32A3;       // (unused - map box read below from NPCRole_Portal)
+constexpr unsigned kVaFieldContainerMov = hook::site_va(0x004C34E5u);   // mov ecx, fieldcontainer
+constexpr unsigned kVaFieldLvMov = hook::site_va(0x004C3515u);          // mov ecx, fieldleveldatabox
+constexpr unsigned kVaPacketMov = hook::site_va(0x004C354Au);           // mov esi, [packet buffer pointer]
+constexpr unsigned kVaZrpbMov = hook::site_va(0x004C3593u);             // mov ecx, the find-instance ring packet
 const unsigned kRoleOffset = 0x40, kArgOffset = 0x54;    // NPCInformTemplete: Role, RoleArg0 (ORToken)
 const unsigned kVtCharNo = 0x344;                 // player vtable: character registration number
 const unsigned short kMenuRange = 1000;
@@ -317,9 +318,12 @@ void __fastcall role(void* self, void*, zone::types::ShineObjectClass__ShinePlay
 //   call <vfunc +0x4D0> ; cmp al, 4 ; je ok          ("Invalid NPC Handle3")
 // Each site is detoured to a stub that runs the call, then also accepts an RID gate (the NPC record - NPCIndexArray, its
 // template at +0 - is in ebx at MENU_ACK / CHECK_ACK and in edi at JOIN_ACK).
-const unsigned kVaMenuCheck = 0x485973, kVaMenuOk = 0x485990, kVaMenuNo = 0x485979;
-const unsigned kVaCheckCheck = 0x485643, kVaCheckOk = 0x485652, kVaCheckNo = 0x485649;
-const unsigned kVaJoinCheck = 0x485C9C, kVaJoinOk = 0x485CAE, kVaJoinNo = 0x485CA2;
+constexpr unsigned kVaMenuCheck = hook::site_va(0x00485973u), kVaMenuOk = hook::site_va(0x00485990u),
+                   kVaMenuNo = hook::site_va(0x00485979u);
+constexpr unsigned kVaCheckCheck = hook::site_va(0x00485643u), kVaCheckOk = hook::site_va(0x00485652u),
+                   kVaCheckNo = hook::site_va(0x00485649u);
+constexpr unsigned kVaJoinCheck = hook::site_va(0x00485C9Cu), kVaJoinOk = hook::site_va(0x00485CAEu),
+                   kVaJoinNo = hook::site_va(0x00485CA2u);
 const unsigned char kMenuBytes[6] = {0xFF, 0xD0, 0x3C, 0x04, 0x74, 0x17};
 const unsigned char kCheckBytes[6] = {0xFF, 0xD2, 0x3C, 0x04, 0x74, 0x09};
 const unsigned char kJoinBytes[6] = {0xFF, 0xD0, 0x3C, 0x04, 0x74, 0x0C};

@@ -19,7 +19,7 @@
 namespace {
 
 const char* kFlag = "../9Data/Shine/EnchantAlwaysSucceeds.flag";
-const unsigned kVaJcc = 0x0053D025u;        // second byte of 0F 8F (jg rel32)
+constexpr unsigned kVaJcc = hook::site_va(0x0053D025u);        // second byte of 0F 8F (jg rel32)
 const unsigned char kJg = 0x8F, kJge = 0x8D;
 
 }  // namespace

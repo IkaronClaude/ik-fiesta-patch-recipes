@@ -21,6 +21,7 @@
 // target out of sight, the return to regen are untouched. arg+4 = the mob (MobActionSwingDamage::mab_Think 0x4BAAC0),
 // mob+0x24AE = its current target handle (ShineMob::so_mob_CurrentTarget 0x5D2790; 0xFFFF = none).
 #include <zonehook.h>
+#include <zone_functions.h>
 
 #include <windows.h>
 
@@ -28,7 +29,6 @@
 
 namespace {
 
-const unsigned kVaWaitSkillEndThink = 0x004B9140u;
 const unsigned kOffArgMob = 4, kOffArgAttack = 0x2B8, kOffTarget = 0x24AE;
 const unsigned short kNoTarget = 0xFFFF;
 
@@ -71,6 +71,6 @@ void* __fastcall think_impl(void* action, void* /*edx*/, void* arg) {
 
 ZONEHOOK_PLUGIN("mob_chase_after_swing") {
     if (zone::hook_function("MobActionWaitSkillEnd::mab_Think 0x4B9140 (keep the target after a swing)",
-                            zone::rebase(kVaWaitSkillEndThink), (void*)think_impl, &g_think))
+                            (void*)zone::fn::MobTacticElement__MobActionWaitSkillEnd__mab_Think(), (void*)think_impl, &g_think))
         zone::log("mob_chase_after_swing: installed - a mob goes back to Attack, not Targetting, after its swing");
 }

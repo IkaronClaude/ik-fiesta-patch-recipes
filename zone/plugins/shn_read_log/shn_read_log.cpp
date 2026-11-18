@@ -53,7 +53,7 @@ int __fastcall read2(void* self, void*, char* file, unsigned long a, unsigned lo
 
 ZONEHOOK_PLUGIN("shn_read_log") {
     if (GetFileAttributesA(kFlag) == INVALID_FILE_ATTRIBUTES) return;
-    zone::hook_function("CDataReader::Read 0x62A780 (log every SHN read)", zone::rebase(0x0062A780u), (void*)read, &g_read);
-    zone::hook_function("CDataReader::Read(file,a,b) 0x62A9E0", zone::rebase(0x0062A9E0u), (void*)read2, &g_read2);
+    zone::hook_function("CDataReader::Read 0x62A780 (log every SHN read)", (void*)zone::fn::CDataReader__Read(), (void*)read, &g_read);
+    zone::hook_function("CDataReader::Read(file,a,b) 0x62A9E0", (void*)zone::fn::CDataReader__Read_2(), (void*)read2, &g_read2);
     zone::log("shn_read_log: %s - logging every CDataReader::Read", kFlag);
 }

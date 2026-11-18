@@ -62,8 +62,7 @@
 
 namespace {
 
-const unsigned kVaPcbAppend = 0x004C8B20u;
-const unsigned kVaProtocolStore = 0x004D4510u;   // protocolstore(PROTOCOLFUNCTIONTEMPLETE<ShinePlayer>*), cdecl
+// detoured: PacketContainer::pcb_Append, protocolstore(PROTOCOLFUNCTIONTEMPLETE<ShinePlayer>*) (cdecl) - generated symbols
 
 using zone::types::ShineObjectClass__ShinePlayer;
 using zone::types::ShineObjectClass__ShinePlayer__SocketStream;
@@ -466,11 +465,11 @@ void logout_as_2016(hook::proto::Call& c, unsigned char type) {
 // fc_NC_GUILD_CHAT_REQ / fc_NC_GUILD_ACADEMY_CHAT_REQ; found 2026-11-04: all three dropped here): relayed the same way.
 const unsigned short kWhisperReq = 0x200C;
 const unsigned short kRelayedToWm[] = {kWhisperReq, 0x2014, 0x7473, 0x9868};
-const unsigned kVaSellInfoWorld = 0x00537C30u, kVaBuilderSize = 0x004C8CE0u, kVaBuilderSend = 0x004C89C0u,
-               kVaBundleSession = 0x004199B0u;
+// ShinePlayer::sp_SendSellItemInfo_World (its code is read), ProtocolPacket::pp_SetPacketLen / pp_SendPacket,
+// SocketBundle<WorldManagerSession>::sb_GetSocket - generated symbols
 const int kVtWmHandle = 0x340;
 bool relay_to_wm(void* player, unsigned short op, const unsigned char* p, int n) {
-    const unsigned char* f = (const unsigned char*)zone::rebase(kVaSellInfoWorld);
+    const unsigned char* f = (const unsigned char*)zone::fn::ShineObjectClass__ShinePlayer__sp_SendSellItemInfo_World();
     if (f[0] != 0xA1 || f[0x4F] != 0xB9) {
         zone::log("[bridge26] relay to the WM: sp_SendSellItemInfo_World is not the expected code - not relayed");
         return false;
@@ -483,7 +482,7 @@ bool relay_to_wm(void* player, unsigned short op, const unsigned char* p, int n)
     typedef unsigned short(__fastcall * GetU16)(void*, void*);
     unsigned short wm = ((GetU16)(*(void***)player)[kVtWmHandle / 4])(player, 0);
     typedef void*(__fastcall * GetSession)(void*, void*);
-    void* wms = ((GetSession)zone::rebase(kVaBundleSession))(bundle, 0);
+    void* wms = ((GetSession)zone::fn::SocketBundle_WorldManagerSession___sb_GetSocket())(bundle, 0);
     if (!wms) {
         zone::log("[bridge26] relay 0x%04x to the WM: no WorldManager session - not relayed", op);
         return false;
@@ -494,11 +493,11 @@ bool relay_to_wm(void* player, unsigned short op, const unsigned char* p, int n)
     memcpy(b + 4, p, n);
     typedef unsigned char(__fastcall * SetSize)(void*, void*, int);
     typedef void(__fastcall * Send)(void*, void*, void*);
-    if (!((SetSize)zone::rebase(kVaBuilderSize))(builder, 0, 4 + n)) {
+    if (!((SetSize)zone::fn::ProtocolPacket__pp_SetPacketLen())(builder, 0, 4 + n)) {
         zone::log("[bridge26] relay to the WM: %d B too long for the builder - not relayed", 4 + n);
         return false;
     }
-    ((Send)zone::rebase(kVaBuilderSend))(builder, 0, wms);
+    ((Send)zone::fn::ProtocolPacket__pp_SendPacket())(builder, 0, wms);
     return true;
 }
 
@@ -942,8 +941,8 @@ HOOK_PLUGIN("bridge26") {
     g_close_dialog = hook::config_int("close_dialog", 1) != 0;
     InitializeCriticalSection(&g_plock);
     InitializeCriticalSection(&g_ulock);
-    zone::hook_function("PacketContainer::pcb_Append", zone::rebase(kVaPcbAppend), (void*)on_append, &g_append);
-    zone::hook_function("protocolstore", zone::rebase(kVaProtocolStore), (void*)on_protocolstore, &g_store);
+    zone::hook_function("PacketContainer::pcb_Append", (void*)zone::fn::PacketContainer__pcb_Append(), (void*)on_append, &g_append);
+    zone::hook_function("protocolstore", (void*)zone::fn::protocolstore_5(), (void*)on_protocolstore, &g_store);
     zone::log("[bridge26] %s for %d packet(s)%s", g_send == kSendAuto ? "per client (send=auto: told apart at map login)"
               : g_send == kSend2026 ? "2026 shapes to every client (send=2026)" : "2016 shapes to every client (send=2016)",
               kOwnedCount, g_verify ? ", verify on" : "");

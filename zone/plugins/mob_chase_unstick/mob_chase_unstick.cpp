@@ -21,6 +21,7 @@
 // the call Chase itself makes on its normal branch. Everything else is untouched; a mob that is moving or in range is
 // left to the stock code. Logged (first 20 and every 500th) with the distances.
 #include <zonehook.h>
+#include <zone_functions.h>
 
 #include <windows.h>
 
@@ -28,9 +29,8 @@
 
 namespace {
 
-const unsigned kVaChaseThink = 0x004BC950u;     // MobActionChase::mab_Think
-const unsigned kVaRunTo = 0x004B9590u;          // MobActionBase::mab_RunTo(ShineMobileObject*, SHINE_XY_TYPE*), thiscall
-const unsigned kVaDistanceSquar = 0x004028F0u;  // ShineObject::so_DistanceSquar(ShineObject*) -> u32, thiscall
+// MobActionChase::mab_Think (detoured), MobActionBase::mab_RunTo(ShineMobileObject*, SHINE_XY_TYPE*) (thiscall),
+// ShineObject::so_DistanceSquar(ShineObject*) -> u32 (thiscall, the second overload) - generated symbols
 const unsigned kOffArgMob = 4, kOffArgAttackTarget = 0x2BC;   // the embedded Attack action is at arg+0x2B8
 const unsigned kOffPos = 0x66;                  // ShineObject -> SHINE_XY_TYPE* {x, y}
 const unsigned kOffHandle = 4;
@@ -77,7 +77,7 @@ void* __fastcall think_impl(void* action, void* /*edx*/, void* arg) {
         int* pos = *(int**)(mob + kOffPos);
         int* tpos = *(int**)(target + kOffPos);
         if (!pos || !tpos || h >= kMaxHandle) return next;
-        unsigned d2 = ((DistFn)zone::rebase(kVaDistanceSquar))(target, 0, mob);
+        unsigned d2 = ((DistFn)zone::fn::ShineObjectClass__ShineObject__so_DistanceSquar_2())(target, 0, mob);
         unsigned r = ((RangeFn)(*(void***)mob)[kSlotAttackRange])(mob, 0, target);
         Last& l = g_last[h];
         if (d2 <= r * r) {                       // in reach: Attack swings, nothing to do
@@ -92,7 +92,7 @@ void* __fastcall think_impl(void* action, void* /*edx*/, void* arg) {
         if (l.ticks < kStuckTicks) return next;
         l.ticks = 0;
         int dest[2] = {tpos[0], tpos[1]};
-        ((RunToFn)zone::rebase(kVaRunTo))(action, 0, mob, dest);
+        ((RunToFn)zone::fn::MobTacticElement__MobActionBase__mab_RunTo())(action, 0, mob, dest);
         if (++g_runs <= 20 || g_runs % 500 == 0)
             zone::log("mob_chase_unstick: mob %u stood out of reach of its target (distance^2 %u > range %u^2) - sent to (%d, %d); "
                       "%u so far", h, d2, r, dest[0], dest[1], g_runs);
@@ -105,6 +105,6 @@ void* __fastcall think_impl(void* action, void* /*edx*/, void* arg) {
 
 ZONEHOOK_PLUGIN("mob_chase_unstick") {
     if (zone::hook_function("MobActionChase::mab_Think 0x4BC950 (run the rest of the way when stalled out of reach)",
-                            zone::rebase(kVaChaseThink), (void*)think_impl, &g_think))
+                            (void*)zone::fn::MobTacticElement__MobActionChase__mab_Think(), (void*)think_impl, &g_think))
         zone::log("mob_chase_unstick: installed - a mob stalled out of reach is sent to its target");
 }
