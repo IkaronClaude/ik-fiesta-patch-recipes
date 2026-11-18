@@ -298,6 +298,12 @@ inline void* site(u32 va) { return rebase(va); }
 
 struct ArenaRegion { u8* base; u32 size; };
 
+// An exe built FROM SOURCE with the recipes in it (fiesta-decomp ProjectF2, FIESTA_2026 - docs/Zone-2026.md there) has
+// no arena: what a recipe set aside for a plugin is an exported global of the exe instead, found by its name.
+inline void* exe_export(const char* name) {
+    return (void*)GetProcAddress((HMODULE)module_base(), name);
+}
+
 inline ArenaRegion arena_region(const char* label) {
     ArenaRegion r = { NULL, 0 };
     u8* img = (u8*)module_base();

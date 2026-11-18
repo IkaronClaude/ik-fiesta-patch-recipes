@@ -42,10 +42,10 @@ inline lua_State* state_of(LuaScript* script) {
 // The lua_State belonging to a FieldMap. `map` is a FieldMap*; the lookup is the chain in the header note.
 inline lua_State* state_of_field(void* map) {
     if (!map) return NULL;
-    auto get = ::zone::fn::FieldMap__fm_GetLuaScript();
-    if (!get) return NULL;
-    ::zone::types::FieldMap__LuaField* field = get(map, 0);
-    return field ? state_of((LuaScript*)field->LuaScript) : NULL;
+    // FieldMap::fm_GetLuaScript() is `return &fm_LuaScript;` - read the member: an exe rebuilt from source (fiesta-decomp
+    // ProjectF2) inlines that accessor everywhere and has no out-of-line copy to call
+    ::zone::types::FieldMap__LuaField* field = &((::zone::types::FieldMap*)map)->fm_LuaScript;
+    return state_of((LuaScript*)field->LuaScript);
 }
 
 // ---- registering a function -----------------------------------------------------------------------

@@ -278,6 +278,18 @@ identical-code fold the two links resolved differently, an unaligned site) refus
 hotfixes in its own .custom section that the source does not have, so `wm-shipped-hotfixes` ("reference":
 "unpatched") goes onto the rebuild.
 
+### Recipes as source (fiesta-decomp branch `2026`)
+
+fiesta-decomp's branch `2026` carries every Zone recipe as SOURCE behind the CMake option `FIESTA_2026`
+(`ProjectF2/build_2026.cmd`; list and per-recipe notes in its `docs/Zone-2026.md`), so that Zone.exe needs no recipe
+here at all - not even dll-loader (it imports fiestahook.dll!ZoneHookInit itself). Its PDB has full CodeView
+(`FIESTA_DEBUGINFO`). What a recipe set aside for a plugin is an exported global of that exe instead of an arena
+region (`hook::exe_export(name)`: `g_Fiesta2026ExpGainHigh` for quest_exp, `g_Fiesta2026VoidBagOf` for void_bag; both
+plugins try it first). Plugins for it: `python tools/recipe_port.py plugins --target zone ... --new-exe
+<ProjectF2>/build_2026/Zone/Zone.exe --new-pdb <same>/Zone.pdb --out-dir build/rebuilt2026` (the stock generated
+headers remapped by mangled name - the layouts are the source's; the types the 2026 build resizes are not used by
+any plugin).
+
 ## Targets
 
 - [zone/README.md](zone/README.md) - Zone.exe: the caps (spawn groups, quests, maps, NPC table, handles), damage

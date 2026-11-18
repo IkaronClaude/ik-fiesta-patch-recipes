@@ -289,7 +289,9 @@ bool give_item(void* player, unsigned short id) {
     lock = vfn<PtrFn>(player, kVtCellLock)(player, 0);
     vfn<MarkFn>(lock, kVtLockMark)(lock, 0, *(unsigned short*)(buf + 0xC), 0, 0, 1);
     lock = vfn<PtrFn>(player, kVtCellLock)(player, 0);
-    zone::fn::InventoryLocking__InventoryCellLock__icl_IncIndex()(lock, 0);
+    // InventoryCellLock::icl_IncIndex() is `++icl_Index;` - done directly: an exe rebuilt from source (fiesta-decomp
+    // ProjectF2) inlines that accessor everywhere and has no out-of-line copy to call
+    ++((zone::types::InventoryLocking__InventoryCellLock*)lock)->icl_Index;
     zone::fn::ItemListMaker___ItemListMaker()(lm, 0);
     return sent;
 }

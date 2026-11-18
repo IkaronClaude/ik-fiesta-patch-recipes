@@ -196,6 +196,8 @@ std::mutex g_slot_lock;
 
 ExpSlot* exp_slot() {
     static ExpSlot* slot = [] {
+        // a Zone.exe built from source (FIESTA_2026): the slot is its exported g_Fiesta2026ExpGainHigh
+        if (ExpSlot* s = (ExpSlot*)zone::exe_export("g_Fiesta2026ExpGainHigh")) return s;
         zone::ArenaRegion r = zone::arena_region(".expgain64");
         return r.base && r.size >= sizeof(ExpSlot) ? (ExpSlot*)r.base : nullptr;
     }();

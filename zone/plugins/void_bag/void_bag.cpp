@@ -710,7 +710,9 @@ ZONEHOOK_PLUGIN("void_bag") {
     zone::hook_function("CItemAuthorityBase::IA_CanInvenReloc",
                         (void*)zone::fn::CItemAuthorityBase__IA_CanInvenReloc(),
                         (void*)ia_thunk, &g_ia_detour);
-    zone::ArenaRegion slot = zone::arena_region(".voidreloc");
+    // a Zone.exe built from source (FIESTA_2026): the slot is its exported g_Fiesta2026VoidBagOf, else the recipe's
+    zone::ArenaRegion slot = { (zone::u8*)zone::exe_export("g_Fiesta2026VoidBagOf"), 4 };
+    if (!slot.base) slot = zone::arena_region(".voidreloc");
     if (slot.base && slot.size >= 4) {
         *(void**)slot.base = (void*)void_bag_of;
         zone::log("void bag (id %u, %d cells) registered in the .voidreloc slot at %x",
