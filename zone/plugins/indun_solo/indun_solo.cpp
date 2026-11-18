@@ -103,7 +103,11 @@ void __declspec(naked) solo_type() {
 
 bool patch_gate_answer() {
     unsigned char* p = (unsigned char*)zone::rebase(kVaNoPartyJe);
-    if (std::memcmp(p, kNoPartyJe, sizeof kNoPartyJe) != 0) {
+    // je <refuse> - check the opcode and that it lands on the (mapped) refuse site, not the stock rel32: in a rebuilt
+    // Zone the function's layout moves and the displacement with it
+    bool je = p[0] == kNoPartyJe[0] && p[1] == kNoPartyJe[1] &&
+              (unsigned)(p + 6 + *(int*)(p + 2)) == (unsigned)zone::rebase(kVaRefuse);
+    if (!je) {
         zone::log("indun_solo: unexpected bytes at 0x5A93B1 - the gate answer is NOT patched (solo entry refused there)");
         return false;
     }
