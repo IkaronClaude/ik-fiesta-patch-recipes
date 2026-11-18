@@ -479,6 +479,14 @@ inline void init() {
         zone::log("client_tables: no %s (or no usable layout) - the zone reads its tables as they are (stock)", kLayouts);
         return;
     }
+    // a 2026-built zone (fiesta-decomp branch 2026) reads some of the client's tables in their own layout: it exports
+    // their names, and those are left alone (no re-lay; the zone registers the client's own checksum itself)
+    if (auto native = (const char* const*)hook::exe_export("g_Fiesta2026NativeTables")) {
+        for (; *native; ++native) {
+            if (g_layouts.erase(lower(*native)))
+                zone::log("client_tables: %s is read natively by this zone (2026 layout) - not converted", *native);
+        }
+    }
     if (g_layouts.count("upgradeinfo")) {
         g_wide_upgrade = widen_upgradeinfo();
         zone::log("client_tables: UpgradeInfo %s", g_wide_upgrade ? "WIDE - its 12 values read at 32 bits (16 sites patched)"
