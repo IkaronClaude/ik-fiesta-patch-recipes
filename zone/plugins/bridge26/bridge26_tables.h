@@ -284,49 +284,9 @@ void rules(const std::string& table, Row& r) {
     }
 }
 
-// ---- UpgradeInfo at 32 bits (operator 2026-09-28: "just change the column type in the shn to a 32 bit one") ------------
-//   The 2026 client widened UpgradeInfo's 12 per-enchant-level values (Updata, Undefined0-10) from u16 to u32; 72 values
-//   of 57 endgame weapons exceed 65535. The zone keeps the FILE's row layout (UpgradeDataBox::udb_Load indexes
-//   CDataReader::GetRecord rows), so a 32-bit column only needs:
-//     - BinaryDataBox<UpGradeInfo>::bdb_ReadData's expected row size (Read(file, 0xA2B, 62) at 0x596178): 62 -> 86;
-//     - the ONE reader, ShinePlayer::so_RecalcEquipParam (0x4CB2F3..0x4CB38A): Updata[level] is read as a word at
-//       +0x24 + level*2 and ADDED to 32-bit player stats - re-encoded to a dword at +0x22 + level*4 (same bytes, NOP pad).
-//   All or nothing: every site is checked first; any unexpected byte -> nothing patched, the values stay clamped to 16
-//   bits (the 2016 layout).
-struct Patch { unsigned va; unsigned char orig[5]; unsigned char neu[5]; int n; };
-constexpr Patch kWide[] = {   // sites inside two functions: hook::site_va (checked at compile time)
-    {hook::site_va(0x596178u), {0x6A, 0x3E}, {0x6A, 0x56}, 2},                                    // push 62 -> push 86 (row size)
-    {hook::site_va(0x4CB2F3u), {0x0F, 0xB7, 0x44, 0x50, 0x24}, {0x8B, 0x44, 0x90, 0x22, 0x90}, 5}, // movzx eax,w[eax+edx*2+24] -> mov eax,[eax+edx*4+22]
-    {hook::site_va(0x4CB307u), {0x0F, 0xB7, 0x54, 0x48, 0x24}, {0x8B, 0x54, 0x88, 0x22, 0x90}, 5}, // movzx edx,w[eax+ecx*2+24] -> mov edx,[eax+ecx*4+22]
-    {hook::site_va(0x4CB318u), {0x8D, 0x44, 0x48, 0x24}, {0x8D, 0x44, 0x88, 0x22}, 4},             // lea eax,[eax+ecx*2+24] -> [eax+ecx*4+22]
-    {hook::site_va(0x4CB31Cu), {0x0F, 0xB7, 0x10}, {0x8B, 0x10, 0x90}, 3},                         // movzx edx,w[eax] -> mov edx,[eax]
-    {hook::site_va(0x4CB325u), {0x0F, 0xB7, 0x00}, {0x8B, 0x00, 0x90}, 3},                         // movzx eax,w[eax] -> mov eax,[eax]
-    {hook::site_va(0x4CB334u), {0x8D, 0x44, 0x48, 0x24}, {0x8D, 0x44, 0x88, 0x22}, 4},
-    {hook::site_va(0x4CB338u), {0x0F, 0xB7, 0x10}, {0x8B, 0x10, 0x90}, 3},
-    {hook::site_va(0x4CB341u), {0x0F, 0xB7, 0x00}, {0x8B, 0x00, 0x90}, 3},
-    {hook::site_va(0x4CB350u), {0x0F, 0xB7, 0x54, 0x48, 0x24}, {0x8B, 0x54, 0x88, 0x22, 0x90}, 5},
-    {hook::site_va(0x4CB361u), {0x8D, 0x44, 0x48, 0x24}, {0x8D, 0x44, 0x88, 0x22}, 4},
-    {hook::site_va(0x4CB365u), {0x0F, 0xB7, 0x10}, {0x8B, 0x10, 0x90}, 3},
-    {hook::site_va(0x4CB36Eu), {0x0F, 0xB7, 0x08}, {0x8B, 0x08, 0x90}, 3},                         // movzx ecx,w[eax] -> mov ecx,[eax]
-    {hook::site_va(0x4CB37Du), {0x8D, 0x44, 0x48, 0x24}, {0x8D, 0x44, 0x88, 0x22}, 4},
-    {hook::site_va(0x4CB381u), {0x0F, 0xB7, 0x10}, {0x8B, 0x10, 0x90}, 3},
-    {hook::site_va(0x4CB38Au), {0x0F, 0xB7, 0x00}, {0x8B, 0x00, 0x90}, 3},
-};
+// UpgradeInfo: a 2026-built zone reads it natively (32-bit values, g_Fiesta2026NativeTables); a stock zone gets it
+// clamped to 16 bits by the re-lay below. (The 16-site widening patch of the stock exe is gone with the stock zones.)
 bool g_wide_upgrade = false;
-
-bool widen_upgradeinfo() {
-    for (auto& p : kWide)
-        if (std::memcmp(zone::rebase(p.va), p.orig, p.n)) {
-            zone::log("client_tables: UpgradeInfo stays 16-bit - unexpected bytes at 0x%X", p.va);
-            return false;
-        }
-    for (auto& p : kWide)
-        if (!zone::write_code(zone::rebase(p.va), p.neu, p.n)) {
-            zone::log("client_tables: UpgradeInfo patch at 0x%X FAILED to write - the zone may be half-patched", p.va);
-            return false;
-        }
-    return true;
-}
 
 bool upgrade_value_column(const std::string& name) {
     return name == "Updata" || (name.rfind("Undefined", 0) == 0 && name.size() <= 11);
@@ -486,11 +446,6 @@ inline void init() {
             if (g_layouts.erase(lower(*native)))
                 zone::log("client_tables: %s is read natively by this zone (2026 layout) - not converted", *native);
         }
-    }
-    if (g_layouts.count("upgradeinfo")) {
-        g_wide_upgrade = widen_upgradeinfo();
-        zone::log("client_tables: UpgradeInfo %s", g_wide_upgrade ? "WIDE - its 12 values read at 32 bits (16 sites patched)"
-                                                                : "16-bit (clamped)");
     }
     for (auto& l : g_layouts) {
         Job& j = g_jobs[l.first];

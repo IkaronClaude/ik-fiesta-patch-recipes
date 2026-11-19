@@ -522,6 +522,8 @@ hook::u32 __fastcall drop_unregistered(void* player, void*, hook::u32 cmd, hook:
     return 0;
 }
 
+bool native_op(unsigned short op);
+
 void on_client_packet(hook::proto::Call& c) {
     const unsigned char* cmd = (const unsigned char*)c.args[0];
     int n = (int)c.args[1] - 2;                      // the length covers the opcode
@@ -601,7 +603,7 @@ void on_client_packet(hook::proto::Call& c) {
                       n, g_send == kSendAuto ? "" : g_send == kSend2026 ? " - send=2026 forces 2026 shapes" : " - send=2016 forces 2016 shapes");
         }
         unsigned char* t = t_maplogin[t_maplogin_next++ & 1];
-        int m = maplogin_2026_to_2016(p, n, t + 2);
+        int m = native_op(0x1801) ? 0 : maplogin_2026_to_2016(p, n, t + 2);   // a 2026-built zone checks the 53 itself
         if (m) {
             t[0] = cmd[0]; t[1] = cmd[1];
             c.args[0] = (hook::u32)t;
@@ -629,6 +631,14 @@ void on_client_packet(hook::proto::Call& c) {
     c.original();
 }
 
+// a 2026-built zone (fiesta-decomp branch 2026) exports the client opcodes it reads in their 2026 form itself
+const unsigned short* g_native_ops = nullptr;
+bool native_op(unsigned short op) {
+    for (const unsigned short* p = g_native_ops; p && *p; ++p)
+        if (*p == op) return true;
+    return false;
+}
+
 const unsigned short kClientOps[] = { 0x4811, 0x4411, 0x441F, 0x4421, 0x182E, 0x4402, 0x200B, 0x1801, kLogout2026, kWrapped2026 };
 
 zone::Detour g_store;
@@ -638,6 +648,7 @@ void __cdecl on_protocolstore(void* table) {
     ((StoreFn)g_store.trampoline)(table);
     if (table != zone::client_protocol_table()) return;
     g_client_table = table;
+    g_native_ops = (const unsigned short*)hook::exe_export("g_Fiesta2026NativeOps");
     bool wrapped_registered = hook::proto::is_registered(table, kWrapped2026);
     int ok = 0;
     for (unsigned short op : kClientOps)
